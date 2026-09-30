@@ -58,10 +58,10 @@ def _render(app: QGuiApplication, expression: str | None = None) -> QImage:
     return image
 
 
-def _lit(image: QImage, x: int, y: int) -> bool:
+def _lit(image: QImage, x: int, y: int, threshold: int = 20) -> bool:
     color = image.pixelColor(x, y)
     return (abs(color.red() - BACKGROUND[0]) + abs(color.green() - BACKGROUND[1])
-            + abs(color.blue() - BACKGROUND[2])) > 20
+            + abs(color.blue() - BACKGROUND[2])) > threshold
 
 
 def _lit_count(image: QImage) -> int:
@@ -94,25 +94,38 @@ def test_component_works_without_injection(app: QGuiApplication) -> None:
     assert _lit_count(image) > 100, "自带 controller 的默认表达式 sin(x) 应画出曲线"
 
 
-def _lit_outside_pm1(image: QImage) -> int:
-    """中心 41 列里，点亮像素落在 |y|>1 之外的个数。
+def _solid_outside_pm1(image: QImage) -> int:
+    """中心 41 列里，落在 |y|>1 之外的**实心**像素数（阈值取高，不算抗锯齿羽化）。
 
-    sin(1/x) 的值域是 ±1，任何超出都是伪影（曾经因为"宏参数没加括号"导致 8 个
-    采样点全算错、切线外推涂满整列：实测溢出 7961 个像素）。
+    sin(1/x) 的值域是 ±1，超出即伪影：曾经因为"宏参数没加括号"导致采样点全算错、
+    切线外推把整列涂满，实测溢出 7961 个像素。
     """
     height = image.height()
     columns = range(image.width() // 2 - 20, image.width() // 2 + 21)
     rows = list(range(0, int(height * 0.25))) + list(range(int(height * 0.75), height))
-    return sum(_lit(image, x, y) for x in columns for y in rows)
+    return sum(_lit(image, x, y, threshold=150) for x in columns for y in rows)
+
+
+def _solid_band_columns(image: QImage) -> int:
+    """实心带（每列点亮 >40% 高度）的列数，用来盯住"别为了消锯齿把带撑太宽"。"""
+    height = image.height()
+    return sum(1 for x in range(image.width())
+               if sum(_lit(image, x, y, threshold=60) for y in range(height)) > 0.4 * height)
 
 
 def test_undersampled_column_fills_envelope_within_pm1(app: QGuiApplication) -> None:
-    """sin(1/x) 奇点列应填它真实的 ±1 包络（约占半列），且不得画到 ±1 之外。"""
-    band = _render(app, "sin(1/x)")
-    ratio = _center_column_ratio(band)
+    """sin(1/x) 奇点列填真实 ±1 包络（约半列），不得画到 ±1 之外，宽度也不能失控。
+
+    带区宽度实测 20 逻辑列（numpy 参考版同样是 20/900）——采样窗口放宽是为了消掉
+    梳状锯齿（相邻列上边缘差 93px → 2px），代价是填充范围略宽，是有意取舍。
+    """
+    image = _render(app, "sin(1/x)")
+    ratio = _center_column_ratio(image)
     assert 0.3 < ratio < 0.7, f"奇点列应填 ±1 包络（约半列），实际 {ratio:.2f}"
-    outside = _lit_outside_pm1(band)
-    assert outside < 50, f"sin(1/x) 值域是 ±1，中心列外侧只该有抗锯齿的零星像素，实际 {outside}"
+    outside = _solid_outside_pm1(image)
+    assert outside < 50, f"sin(1/x) 值域是 ±1，不该有实心像素在之外，实际 {outside}"
+    width = _solid_band_columns(image) / 1.5  # 抓图带 devicePixelRatio
+    assert 5 < width < 60, f"实心带宽度应在个位数~几十逻辑列，实际 {width:.0f}"
 
 
 def test_smooth_column_stays_thin(app: QGuiApplication) -> None:

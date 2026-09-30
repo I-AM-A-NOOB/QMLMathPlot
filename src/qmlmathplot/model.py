@@ -222,49 +222,48 @@ void main() {
     float cov = clamp(lineWidth * 0.5 + 0.5 - dpx, 0.0, 1.0);
 
     // ---- 2) 欠采样列 -> 画 ± 包络带（而不是随机锯齿）----
-    // 在一个像素的 x 区间里采 8 个点，用两把互补的尺子判断"这一列画不下"：
+    // 在 ±2 列的窗口里采 16 个点，用两把互补的尺子判断"这一列画不下"：
     //   a) 折返次数：列内曲线上下折返 >= 2 次 => 一列里塞进了多个振荡；
     //      （只折返 1 次 = 可分辨的极值，照常用描边画线）
     //   b) 实测跨度 spread 远小于导数预期 |f'|·dx => 深处的欠采样
-    //      （振子快到 8 个采样都抓不住规律时，a 会受相位噪声影响，b 来兜底）
+    //      （振子快到采样都抓不住规律时，a 会受相位噪声影响，b 来兜底）
     // 此时把 [min,max] 填成实心带：对 sin(1/x) 就等于填它的真实 ±1 包络。
     if (abs(d1) * dx * sy > 1.0) {
+        // 两把尺子分开用，避免"为了消锯齿而把填充范围撑太宽"：
+        //  * 窄窗口（±2 列、8 点）判"这一列画不下"——决定填哪些列。单列采样对振荡
+        //    函数是相位噪声（实测相邻列上边缘差 93px），±2 列即可消掉梳状锯齿，
+        //    又不会明显加宽填充范围。
+        //  * 宽窗口（±8 列、16 点）只用来估带的上/下边缘——窗口宽，采样点才更可能
+        //    碰到极值，带的边缘才不会因包络偏窄而出现暗缝/台阶。
         float h = 0.5 * dx;
-        float s0 = F(x - h);
-        float s1 = F(x - 0.75 * h);
-        float s2 = F(x - 0.5 * h);
-        float s3 = F(x - 0.25 * h);
-        float s4 = F(x + 0.25 * h);
-        float s5 = F(x + 0.5 * h);
-        float s6 = F(x + 0.75 * h);
-        float s7 = F(x + h);
-        s0 = (s0 != s0) ? 0.0 : s0;     // NaN 采样点当 0（不参与 min/max）
-        s1 = (s1 != s1) ? 0.0 : s1;
-        s2 = (s2 != s2) ? 0.0 : s2;
-        s3 = (s3 != s3) ? 0.0 : s3;
-        s4 = (s4 != s4) ? 0.0 : s4;
-        s5 = (s5 != s5) ? 0.0 : s5;
-        s6 = (s6 != s6) ? 0.0 : s6;
-        s7 = (s7 != s7) ? 0.0 : s7;
-
-        float yl = min(min(min(s0, s1), min(s2, s3)), min(min(s4, s5), min(s6, s7)));
-        float yh = max(max(max(s0, s1), max(s2, s3)), max(max(s4, s5), max(s6, s7)));
-        float spread = (yh - yl) * sy;                  // 实测包络跨度（像素）
-
-        float d0 = s1 - s0;
-        float d1i = s2 - s1;
-        float d2 = s3 - s2;
-        float d3 = s4 - s3;
-        float d4 = s5 - s4;
-        float d5 = s6 - s5;
-        float d6 = s7 - s6;
+        float nl = 1e30;
+        float nh = -1e30;
         float turns = 0.0;
-        if (d0 * d1i < 0.0) { turns += 1.0; }
-        if (d1i * d2 < 0.0) { turns += 1.0; }
-        if (d2 * d3 < 0.0) { turns += 1.0; }
-        if (d3 * d4 < 0.0) { turns += 1.0; }
-        if (d4 * d5 < 0.0) { turns += 1.0; }
-        if (d5 * d6 < 0.0) { turns += 1.0; }
+        float prev_s = 0.0;
+        float prev_d = 0.0;
+        for (int i = 0; i < 8; i++) {
+            float t = -4.0 + 8.0 * (float(i) + 0.5) / 8.0;    // ±2 列
+            float s = F(x + t * h);
+            s = (s != s) ? 0.0 : s;         // NaN 采样点当 0（不参与 min/max）
+            nl = min(nl, s);
+            nh = max(nh, s);
+            if (i > 0) {
+                float d = s - prev_s;
+                if (prev_d * d < 0.0) { turns += 1.0; }       // 列内折返
+                prev_d = d;
+            }
+            prev_s = s;
+        }
+        float wl = 1e30;
+        float wh = -1e30;
+        for (int i = 0; i < 16; i++) {
+            float t = -16.0 + 32.0 * (float(i) + 0.5) / 16.0;  // ±8 列
+            float s = F(x + t * h);
+            s = (s != s) ? 0.0 : s;
+            wl = min(wl, s);
+            wh = max(wh, s);
+        }
+        float spread = (nh - nl) * sy;                  // 实测包络跨度（像素，窄窗口）
 
         float pred = max(abs(d1) * dx * sy, 2.0);       // 导数预期跨度（像素）
         float w = max(step(2.0, turns),                 // a) 列内折返 >= 2 次
@@ -272,8 +271,9 @@ void main() {
         w *= step(spread, 4.0 * size.y);                // 极点/真跳变：不填（否则整列涂满）
         w *= smoothstep(1.5, 4.0, spread);              // 带不足 1.5 像素就没必要填
 
-        float band = clamp((yh - y) * sy + 0.5, 0.0, 1.0)
-                   * clamp((y - yl) * sy + 0.5, 0.0, 1.0);
+        // 带的上下边缘取宽窗口的包络（窄窗口会咬出暗缝）
+        float band = clamp((wh - y) * sy + 2.0, 0.0, 1.0)
+                   * clamp((y - wl) * sy + 2.0, 0.0, 1.0);
         // 描边在这里不可信：|f'| 极大时切线近似对任何 y 都算得极小的"水平距离"，
         // cov 会饱和成整列，而且切线外推会涂到远超真实值域的地方（实测 sin(1/x)
         // 被涂到 ±1.8，真实值域是 ±1）。所以：
