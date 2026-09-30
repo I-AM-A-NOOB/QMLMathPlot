@@ -127,6 +127,47 @@ def _domain_conditions(expr: sp.Expr) -> list[sp.Expr]:
     return out
 
 
+def unbounded_edges(expr: sp.Expr, name: str = "x") -> list[tuple[float, int]]:
+    """定义域边界上"函数趋于 ±∞"的位置：[(边界点, 方向)]，方向 +1 表示趋于 +∞。
+
+    只关心真的发散的情形：log(x) 在 x→0+ 趋于 -∞（曲线该一路画到视口外），
+    而 sqrt(x) 在 x→0+ 趋于 0（有界，照旧用采样包络钳住）。
+    """
+    sym = sp.Symbol(name)
+    out: list[tuple[float, int]] = []
+    for cond in _domain_conditions(expr):
+        lhs = cond.lhs if isinstance(cond, (sp.Gt, sp.Ge, sp.Ne)) else None
+        if lhs is None or sym not in lhs.free_symbols:
+            continue
+        try:
+            points = sp.solve(sp.Eq(lhs, 0), sym)
+        except Exception:  # noqa: BLE001 —— 解不出来就放弃，退回"两侧都钳"
+            continue
+        for point in points:
+            if not point.is_number:
+                continue
+            for side in ("+", "-"):
+                try:
+                    lim = sp.limit(expr, sym, point, side)
+                except Exception:  # noqa: BLE001
+                    continue
+                if lim is sp.oo:
+                    out.append((float(point), +1))
+                elif lim is -sp.oo:
+                    out.append((float(point), -1))
+    return sorted(set(out))
+
+
+def _open_expr(expr: sp.Expr, direction: int) -> str:
+    """GLSL 布尔表达式：本列区间是否跨过"趋于 direction*∞"的定义域边界。"""
+    pts = sorted({p for p, d in unbounded_edges(expr) if d == direction})
+    if not pts:
+        return "false"
+    return " || ".join(
+        f"((x - _hp - ({p!r})) * (x + _hp - ({p!r})) <= 0.0)" for p in pts
+    )
+
+
 def pole_glsl(expr: sp.Expr, name: str = "x") -> str | None:
     """极点分母的乘积（GLSL）。在区间两端求值、乘积 <= 0 即跨过极点。"""
     factors = _pole_factors(expr)
@@ -309,12 +350,17 @@ void main() {
         float prev_s = 0.0;
         float prev_d = 0.0;
         bool prev_ok = false;
+        float first_s = 0.0;
+        float last_s = 0.0;
+        bool any_ok = false;
         for (int i = 0; i < 8; i++) {
             float t = -1.0 + 2.0 * (float(i) + 0.5) / 8.0;    // 本列（±0.5 列）
             float s = F(x + t * h);
             // NaN/inf（域外、极点）不参与包络与折返统计。以前把 NaN 当 0，会把
             // 包络一路抬到 0：log(x) 在 x→0+ 附近因此被填成一块（曲线"消失"）。
             if (s == s && abs(s) < 1e30) {
+                if (!any_ok) { first_s = s; any_ok = true; }
+                last_s = s;
                 nl = min(nl, s);
                 nh = max(nh, s);
                 if (prev_ok) {
@@ -352,12 +398,20 @@ void main() {
 
         float pred = max(abs(d1) * dx * sy, 2.0);       // 导数预期跨度（像素）
         float w = max(step(2.0, turns),                 // a) 列内折返 >= 2 次
-                      // b) 深欠采样。阈值要收紧：陡峭的**单调凹**曲线（如 log(x) 在
-                      // x→0+）采样跨度也会小于导数预期（实测比值 0.22），按 0.15~0.5
-                      // 判会把它误填成一整块；真正"快到采样抓不住"的振荡比值 ≪0.05。
-                      1.0 - smoothstep(0.02, 0.1, spread / pred));
+                      // b) 深欠采样。阈值别收太紧：陡峭的单调曲线（log 在 x→0+）
+                      // 采样跨度也会小于导数预期（比值 ~0.2），但那种列本来就该画成
+                      // 实心竖线（曲线在本列内确实扫过整段 y）；收紧到 0.1 会让它退回
+                      // 切线近似，画出一条逐渐变细消失的渐变。
+                      1.0 - smoothstep(0.15, 0.5, spread / pred));
         w *= step(spread, 4.0 * size.y);                // 极点/真跳变：不填（否则整列涂满）
         w *= smoothstep(1.5, 4.0, spread);              // 带不足 1.5 像素就没必要填
+
+        // 局部近垂直的列：曲线在本列内就扫过一大段 y（超过半个视口高）且单调。
+        // 切线近似在这种列里只能画出一条逐渐变细的渐变（log(x) 在 x→0+ 的观感），
+        // 正确表示是实心竖线——曲线确实在本列里穿过了整段 y。
+        // 用**本列**包络填（宽包络会一路涂到邻列的极值：1/x 的陡列会被涂满整屏）。
+        float span_world = nh - nl;
+        bool near_vertical = (turns < 0.5 && span_world > 0.5 * spany);
 
         // 带的上下边缘取宽窗口的包络（窄窗口会咬出暗缝）
         float band = clamp((wh - y) * sy + 2.0, 0.0, 1.0)
@@ -367,9 +421,20 @@ void main() {
         // 钳制用**窄**包络（这一列自己采到的范围）：宽包络会把 1/x、tan 这类陡峭
         // 列一路放到 ±100 那样远，于是整列被涂满——正是"渐近线连线"的观感来源。
         // 带区仍用宽包络（外观不变），再按置信度 w 与带做平滑混合。
-        float lim = clamp((nh - y) * sy + 2.0, 0.0, 1.0)
-                  * clamp((y - nl) * sy + 2.0, 0.0, 1.0);
-        cov = mix(min(cov, lim), band, w);
+        // 钳制的下界/上界默认取采样包络；但若本列跨过"函数确实趋于 -∞/+∞"的定义域
+        // 边界（log(x) 在 x→0+ 就是），那一侧必须放开——否则曲线被包络下界切断，
+        // 表现为"逐渐变细消失"。判断来自解析（sympy 求单侧极限），不是趋势猜测：
+        // sqrt(x) 在 x→0+ 趋于 0，就不放开，照旧钳住。
+        float _nl = (@OPEN_LO@) ? -1e30 : nl;
+        float _nh = (@OPEN_HI@) ?  1e30 : nh;
+        float lim = clamp((_nh - y) * sy + 2.0, 0.0, 1.0)
+                  * clamp((y - _nl) * sy + 2.0, 0.0, 1.0);
+        if (near_vertical) {
+            cov = clamp((nh - y) * sy + 2.0, 0.0, 1.0)
+                * clamp((y - nl) * sy + 2.0, 0.0, 1.0);
+        } else {
+            cov = mix(min(cov, lim), band, w);
+        }
         }
     }
 
@@ -394,6 +459,7 @@ def shader_sources(expr: sp.Expr) -> tuple[str, str]:
         "@DOM@",
         f"#define DOM(u) ({dom})" if dom else "#define DOM(u) true",
     )
+    frag = frag.replace("@OPEN_LO@", _open_expr(expr, -1)).replace("@OPEN_HI@", _open_expr(expr, +1))
     pole = pole_glsl(expr, "u")
     frag = frag.replace(
         "@POLE@",

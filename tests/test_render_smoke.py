@@ -31,7 +31,8 @@ def app() -> QGuiApplication:
     return application
 
 
-def _render(app: QGuiApplication, expression: str | None = None) -> QImage:
+def _render(app: QGuiApplication, expression: str | None = None,
+            pan_pixels: float = 0.0) -> QImage:
     view = QQuickView()
     view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
     view.resize(WIDTH, HEIGHT)
@@ -39,12 +40,15 @@ def _render(app: QGuiApplication, expression: str | None = None) -> QImage:
     assert view.status() is QQuickView.Status.Ready, [e.toString() for e in view.errors()]
 
     root = view.rootObject()
-    if expression is not None:
+    controller = PlotController(expression) if expression is not None else None
+    if controller is not None:
         # MVVM：App 侧创建 ViewModel 并注入组件（组件也会自带一个，这里走注入路径）
-        root.setProperty("controller", PlotController(expression))
+        root.setProperty("controller", controller)
     view.show()
     if not QTest.qWaitForWindowExposed(view):
         pytest.skip("没有可用的显示/GPU 场景图")
+    if pan_pixels and controller is not None:
+        controller.panPixels(0.0, pan_pixels, float(WIDTH), float(HEIGHT))
 
     for _ in range(20):
         app.processEvents()
@@ -160,3 +164,20 @@ def test_out_of_domain_is_blank(app: QGuiApplication) -> None:
     far = sum(_lit(image, x, y) for x in range(0, int((-1.0 + 6) / 12 * image.width()))
               for y in range(0, image.height(), 5))
     assert far == 0, f"asin(x) 在 |x|>1 不该有像素，实际 {far}"
+
+
+def test_log_descent_is_not_cut(app: QGuiApplication) -> None:
+    """log(x) 在 x→0+ 要一路画到视口外，不能被采样包络下界切断（"逐渐变细消失"）。
+
+    视口下移 6 个单位（y∈[-8,-4]）：x≈0.004 那一列的曲线在本列内就从 -4.5 扫到 -∞，
+    必须有点亮像素落到视口底边附近。
+    """
+    image = _render(app, "log(x)", pan_pixels=-900.0)
+    height = image.height()
+    column = _column_lit(image, 0.004)
+    assert column > 0, "log(x) 在 x≈0.004 处应有像素"
+    # 下降段就在中心列附近（x≈0.004 处 log 已到 -7 以下，整列都该有像素）
+    center = image.width() // 2
+    bottom = sum(_lit(image, x, y) for x in range(center - 4, center + 5)
+                 for y in range(int(height * 0.97), height))
+    assert bottom > 0, "log(x) 的下降段应一直画到视口底边"
