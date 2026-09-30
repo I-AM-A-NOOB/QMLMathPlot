@@ -143,9 +143,9 @@ def domain_glsl(expr: sp.Expr, name: str = "x") -> str | None:
     return " && ".join(f"({func_glsl(c, name)})" for c in conds)
 
 
-def dfunc_glsl(expr: sp.Expr, name: str = "x") -> str:
-    """f'(x) 的 GLSL 文本（隐式绘图算屏幕空间距离要用）。"""
-    return func_glsl(sp.diff(expr, sp.Symbol("x")), name)
+def dfunc_glsl(expr: sp.Expr, name: str = "x", wrap: bool = False) -> str:
+    """f'(x) 的 GLSL 文本。wrap 语义同 func_glsl。"""
+    return func_glsl(sp.diff(expr, sp.Symbol("x")), name, wrap=wrap)
 
 
 class ViewRect:
@@ -315,10 +315,14 @@ void main() {
             nh = max(nh, s);
             if (prev_ok) {
                 float d = s - prev_s;
-                if (prev_d * d < 0.0) { turns += 1.0; }     // 列内折返
+                if (prev_d * d < 0.0) { turns += 1.0; }      // 列内折返（折线方向变化）
                 prev_d = d;
-                // 跳变（极点/间断）：落差超过 4 个视口高 => 不连线段（不画连线）
+                // 跳变（极点/间断）：落差超过 4 个视口高就不连线段。
+                // 注：Desmos 会对"相邻点提示的极值/跳变"再做二分定位。实测在
+                // 8 点/列（0.25 列间距）的密度下，二分只多出约 1 个设备像素的峰顶
+                // 高度，代价却是每像素多算 8 次导数，故不做；断口另有解析极点精确兜底。
                 if (abs(d) <= 4.0 * spany) {
+                    // 跳变（极点/间断）：落差超过 4 个视口高就不连线段
                     dmin = min(dmin, _seg_dist(p, vec2(prev_x * sx, prev_s * sy),
                                                   vec2(xi * sx, s * sy)));
                 }
@@ -355,9 +359,8 @@ void main() {
         // 真跳变：这一列跨过极点（分母变号）且函数值远超视口 => +∞/-∞ 的连线，
         // 不画（消除 1/x、tan(x) 在渐近线处的竖直连线）。sin(1/x) 这类**有界**的
         // 振荡值不会超视口，照旧由包络带表示。
-        // 窗口取采样窗口（±1 列）：采样点跨过极点时包络已被极点污染，只按"列本身"
-        // 判会漏掉这些列（它们的描边照样被填满）。
-        float _hp = dx;
+        // 只对"本列跨过极点"的列留断口（断口对齐极点，分支照常画到渐近线附近）
+        float _hp = 0.5 * dx;
         // 判据用"采样跨度 > 32 倍视口高度"而不是像素数：像素阈值会随缩放漂移
         // （深缩放时 sin(1/x) 的有界振荡也会超过 8 个视口高，从而被误切一刀）。
         if (POLE(x - _hp) * POLE(x + _hp) <= 0.0 && (nh - nl) > 32.0 * spany) {
