@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+import re
+
 import sympy as sp
 from sympy.printing.glsl import GLSLPrinter
 from sympy.printing.precedence import PRECEDENCE
@@ -30,11 +32,23 @@ DEFAULT_VIEW = (-6.0, 6.0, -2.0, 2.0)
 
 
 class _PlotGLSLPrinter(GLSLPrinter):
-    """GLSL printer 的补丁：小整数次幂不生成 pow()。
+    """GLSL printer 的补丁：
 
-    GLSL 的 pow(x, y) 在 x < 0 时未定义（不少驱动直接给 NaN），而 sympy 会把
-    x**2 印成 pow(x, 2.0)。这里改成连乘，顺带更快。
+    1. 小整数次幂不生成 pow()。GLSL 的 pow(x, y) 在 x < 0 时未定义（不少驱动直接
+       给 NaN），而 sympy 会把 x**2 印成 pow(x, 2.0)。这里改成连乘，顺带更快。
+    2. 可选把某个符号印成 ``(name)``：表达式会内联进 ``#define F(u) (...)``，
+       宏是**文本替换**，``1.0/u`` 遇到 ``F(x - h)`` 会变成 ``1.0/x - h``（少一层
+       括号就改了语义）。实测这个括号缺失让 8 个采样点全算成 ``1.0/x - h_k``，
+       包络判据因此永远拿不到有效采样。
     """
+
+    def __init__(self, wrap_symbol: str | None = None) -> None:
+        super().__init__()
+        self._wrap_symbol = wrap_symbol
+
+    def _print_Symbol(self, expr: sp.Symbol) -> str:
+        text = super()._print_Symbol(expr)
+        return f"({text})" if expr.name == self._wrap_symbol else text
 
     def _print_Pow(self, expr: sp.Expr) -> str:
         exp = expr.exp
@@ -48,14 +62,27 @@ class _PlotGLSLPrinter(GLSLPrinter):
         return super()._print_Pow(expr)
 
 
-def func_glsl(expr: sp.Expr, name: str = "x") -> str:
+# GPU 的 sin/cos 在参数很大时不可靠（实测 Intel D3D11：sin(1/x) 的 8 个采样点几乎
+# 相同、cos(1/x) 返回近 0 的垃圾），而 sin(1/x) 这类函数在奇点附近参数能到几百上千。
+# 先把实参折进 [0, 2π) 再调内置函数，小参数上各家实现都是准的。
+_SIN_COS = re.compile(r"(?<![A-Za-z0-9_])(sin|cos)\(")
+
+
+def _wrap_trig(text: str) -> str:
+    return _SIN_COS.sub(lambda m: ("SIN(" if m.group(1) == "sin" else "COS("), text)
+
+
+def func_glsl(expr: sp.Expr, name: str = "x", wrap: bool = False) -> str:
     """把 sympy 表达式印成 GLSL 表达式（返回 f(x) 的右值文本）。
 
     name 用于改名：着色器里 ``#define F(u) (...)`` 要把变量印成 u。
+    wrap=True 时把该变量印成 ``(u)``，供宏文本替换安全使用（见 _PlotGLSLPrinter）。
+    sin/cos 会被包成模板里的 SIN/COS（带参数归约，见模板注释）。
     """
     if name != "x":
         expr = expr.subs(sp.Symbol("x"), sp.Symbol(name))
-    return _PlotGLSLPrinter().doprint(expr)
+    printer = _PlotGLSLPrinter(wrap_symbol=name if wrap else None)
+    return _wrap_trig(printer.doprint(expr))
 
 
 def dfunc_glsl(expr: sp.Expr, name: str = "x") -> str:
@@ -167,6 +194,12 @@ layout(std140, binding = 0) uniform buf {
     vec4 color;       // 非预乘 rgba
 };
 
+// 参数归约：GPU 的内置 sin/cos 在大参数上不可靠，折进 [0,2π) 再调用
+#define TAU 6.283185307179586
+float _wrap(float t) { return t - TAU * floor(t * (1.0 / TAU)); }
+#define SIN(t) sin(_wrap(t))
+#define COS(t) cos(_wrap(t))
+
 #define F(u) (@FUNC@)
 #define DF @DFUNC@
 
@@ -241,7 +274,14 @@ void main() {
 
         float band = clamp((yh - y) * sy + 0.5, 0.0, 1.0)
                    * clamp((y - yl) * sy + 0.5, 0.0, 1.0);
-        cov = mix(cov, max(cov, band), w);
+        // 描边在这里不可信：|f'| 极大时切线近似对任何 y 都算得极小的"水平距离"，
+        // cov 会饱和成整列，而且切线外推会涂到远超真实值域的地方（实测 sin(1/x)
+        // 被涂到 ±1.8，真实值域是 ±1）。所以：
+        //   1) 先用采样包络钳住描边（包络是这一列里 f 实测到过的范围）；
+        //   2) 有置信度(w>0)的列整列换成包络带。硬切不产生接缝：gate 边界上
+        //      包络宽度 ≈ 描边宽度。
+        cov = min(cov, band);
+        cov = mix(cov, band, step(0.01, w));
     }
 
     float a = cov * color.a * qt_Opacity;
@@ -257,6 +297,6 @@ def shader_sources(expr: sp.Expr) -> tuple[str, str]:
     """QML 前端（隐式模型）的顶点/片元着色器源码。"""
     return (
         VERTEX_SHADER,
-        FRAGMENT_TEMPLATE.replace("@FUNC@", func_glsl(expr, "u"))
+        FRAGMENT_TEMPLATE.replace("@FUNC@", func_glsl(expr, "u", wrap=True))
         .replace("@DFUNC@", dfunc_glsl(expr)),
     )

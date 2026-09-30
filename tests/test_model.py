@@ -12,20 +12,26 @@ X = sp.Symbol("x")
     (X**2, "(x*x)"),
     (X**-2, "(1.0/(x*x))"),
     (X**9, "pow(x, 9.0)"),
-    (sp.sin(X) / X, "sin(x)/x"),
-    (sp.exp(-X * X) * sp.sin(10 * X), "exp(-(x*x))*sin(10*x)"),
+    (sp.sin(X) / X, "SIN(x)/x"),
+    (sp.exp(-X * X) * sp.sin(10 * X), "exp(-(x*x))*SIN(10*x)"),
 ])
 def test_func_glsl(expr, expected):
-    """小整数次幂必须连乘：GLSL 的 pow(x, y) 在 x<0 时未定义（驱动常给 NaN）。"""
+    """小整数次幂必须连乘（GLSL 的 pow(x, y) 在 x<0 时未定义，驱动常给 NaN）；
+    sin/cos 必须包成 SIN/COS（参数归约，见 model 里的说明）。"""
     assert model.func_glsl(expr) == expected
 
 
 def test_func_glsl_renames_variable():
-    assert model.func_glsl(sp.sin(1 / X), "u") == "sin(1.0/u)"
+    assert model.func_glsl(sp.sin(1 / X), "u") == "SIN(1.0/u)"
 
 
 def test_dfunc_glsl():
-    assert model.dfunc_glsl(sp.sin(1 / X)) == "-cos(1.0/x)/(x*x)"
+    assert model.dfunc_glsl(sp.sin(1 / X)) == "-COS(1.0/x)/(x*x)"
+
+
+def test_func_glsl_wraps_macro_parameter():
+    """wrap=True 把宏参数印成 (u)：宏是文本替换，少这层括号就改了语义。"""
+    assert model.func_glsl(sp.sin(1 / X), "u", wrap=True) == "SIN(1.0/(u))"
 
 
 def test_shader_sources_inject_expression():
@@ -33,8 +39,10 @@ def test_shader_sources_inject_expression():
     assert vert == model.VERTEX_SHADER
     assert "@FUNC@" not in frag
     assert "@DFUNC@" not in frag
-    assert "#define F(u) (sin(1.0/u))" in frag  # 宏里变量改名成 u
-    assert "#define DF -cos(1.0/x)/(x*x)" in frag  # 导数仍按 x 求值
+    # 宏是文本替换：参数必须带括号，否则 F(x - h) 会展开成 1.0/x - h
+    # （实测这个括号缺失让 8 个采样点全算错，包络判据永远拿不到有效采样）
+    assert "#define F(u) (SIN(1.0/(u)))" in frag
+    assert "#define DF -COS(1.0/x)/(x*x)" in frag  # 导数仍按 x 求值
 
 
 def test_zoom_round_trip_is_exact():

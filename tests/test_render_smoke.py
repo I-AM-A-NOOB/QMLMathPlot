@@ -94,14 +94,27 @@ def test_component_works_without_injection(app: QGuiApplication) -> None:
     assert _lit_count(image) > 100, "自带 controller 的默认表达式 sin(x) 应画出曲线"
 
 
-def test_undersampled_column_is_filled(app: QGuiApplication) -> None:
-    """sin(1/x) 在奇点列（一列里塞进无穷多个振荡）应被填满，而不是画成摩尔纹。
+def _lit_outside_pm1(image: QImage) -> int:
+    """中心 41 列里，点亮像素落在 |y|>1 之外的个数。
 
-    注：目前填满的高度比真实的 ±1 包络更高——着色器在 |1/x| 很大时 sin/cos 精度
-    不可靠，8 个采样点几乎相同，包络带权重因此接近 0，整列由描边项填满。详见
-    README 的"已知问题"。
+    sin(1/x) 的值域是 ±1，任何超出都是伪影（曾经因为"宏参数没加括号"导致 8 个
+    采样点全算错、切线外推涂满整列：实测溢出 7961 个像素）。
     """
-    band = _center_column_ratio(_render(app, "sin(1/x)"))
-    smooth = _center_column_ratio(_render(app, "sin(x)"))
-    assert band > 0.5, f"sin(1/x) 奇点列应被填满，实际 {band:.2f}"
-    assert smooth < 0.05, f"sin(x) 同列应仍是细线，实际 {smooth:.2f}"
+    height = image.height()
+    columns = range(image.width() // 2 - 20, image.width() // 2 + 21)
+    rows = list(range(0, int(height * 0.25))) + list(range(int(height * 0.75), height))
+    return sum(_lit(image, x, y) for x in columns for y in rows)
+
+
+def test_undersampled_column_fills_envelope_within_pm1(app: QGuiApplication) -> None:
+    """sin(1/x) 奇点列应填它真实的 ±1 包络（约占半列），且不得画到 ±1 之外。"""
+    band = _render(app, "sin(1/x)")
+    ratio = _center_column_ratio(band)
+    assert 0.3 < ratio < 0.7, f"奇点列应填 ±1 包络（约半列），实际 {ratio:.2f}"
+    outside = _lit_outside_pm1(band)
+    assert outside < 50, f"sin(1/x) 值域是 ±1，中心列外侧只该有抗锯齿的零星像素，实际 {outside}"
+
+
+def test_smooth_column_stays_thin(app: QGuiApplication) -> None:
+    ratio = _center_column_ratio(_render(app, "sin(x)"))
+    assert ratio < 0.05, f"sin(x) 在 x=0 处应仍是细线，实际 {ratio:.2f}"
