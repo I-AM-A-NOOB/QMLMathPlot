@@ -8,3 +8,6 @@ wheels/
 
 # Virtual environments
 .venv
+
+# 测试缓存
+.pytest_cache/
