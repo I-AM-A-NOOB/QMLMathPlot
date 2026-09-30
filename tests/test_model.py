@@ -79,3 +79,24 @@ def test_reset_restores_default_view():
     rect.zoom(240, 0.5, 0.5)
     rect.reset()
     assert rect.as_tuple() == model.DEFAULT_VIEW
+
+
+def test_pole_and_domain_analysis():
+    """极点因子（变号处 = +∞/-∞ 跳变）与定义域条件。"""
+    assert model.pole_glsl(1 / X) == "(x)"
+    assert model.domain_glsl(1 / X) == "(x != 0)"
+    assert model.pole_glsl(sp.tan(X)) == "(COS(x))"      # tan 的极点在 cos(x)=0
+    assert model.domain_glsl(sp.tan(X)) == "(COS(x) != 0)"
+    assert model.domain_glsl(sp.log(X)) == "(x > 0)"
+    assert model.domain_glsl(sp.sqrt(X)) == "(x >= 0)"
+    assert model.pole_glsl(X**2) is None                 # 处处连续，没有极点因子
+    assert model.domain_glsl(X**2) is None               # 全定义域
+
+
+def test_shader_sources_inject_domain_and_pole():
+    _, frag = model.shader_sources(1 / X)
+    assert "#define DOM(u) ((u != 0))" in frag
+    assert "#define POLE(u) ((u))" in frag
+    _, smooth = model.shader_sources(X**2)
+    assert "#define DOM(u) true" in smooth               # 无法分析 => 恒真
+    assert "#define POLE(u) 1.0" in smooth               # 无极点 => 乘积恒正，不会误判

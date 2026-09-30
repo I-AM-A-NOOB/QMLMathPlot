@@ -85,6 +85,64 @@ def func_glsl(expr: sp.Expr, name: str = "x", wrap: bool = False) -> str:
     return _wrap_trig(printer.doprint(expr))
 
 
+def _pole_factors(expr: sp.Expr) -> list[sp.Expr]:
+    """收集"极点分母"：这些因子变号的地方就是函数从 +∞ 跳到 -∞ 的地方。
+
+    只收会**变号**的因子（x、cos(x)…）：1/x² 这种不变号的极点不需要断口——
+    两侧都趋向 +∞，画出来本来就自然相连。
+    """
+    out: list[sp.Expr] = []
+    if isinstance(expr, sp.Pow) and expr.exp.is_number and expr.exp.is_negative:
+        out.append(expr.base)
+    if isinstance(expr, sp.tan | sp.sec):
+        out.append(sp.cos(expr.args[0]))
+    elif isinstance(expr, sp.cot | sp.csc):
+        out.append(sp.sin(expr.args[0]))
+    for arg in expr.args:
+        out.extend(_pole_factors(arg))
+    return out
+
+
+def _domain_conditions(expr: sp.Expr) -> list[sp.Expr]:
+    """收集定义域条件（sympy 表达式，需恒为真才算在定义域内）。
+
+    覆盖常见的域边界：分母不为 0、log 的实参 > 0、sqrt 的实参 >= 0、
+    asin/acos 的实参 ∈ [-1,1]、tan/sec 的 cos != 0、cot/csc 的 sin != 0。
+    """
+    out: list[sp.Expr] = []
+    if isinstance(expr, sp.Pow) and expr.exp.is_number and expr.exp.is_negative:
+        out.append(sp.Ne(expr.base, 0))
+    elif isinstance(expr, sp.Pow) and expr.exp == sp.Rational(1, 2):
+        out.append(sp.Ge(expr.base, 0))
+    if isinstance(expr, sp.log):
+        out.append(sp.Gt(expr.args[0], 0))
+    elif isinstance(expr, sp.asin | sp.acos):
+        out.append(sp.And(sp.Ge(expr.args[0], -1), sp.Le(expr.args[0], 1)))
+    elif isinstance(expr, sp.tan | sp.sec):
+        out.append(sp.Ne(sp.cos(expr.args[0]), 0))
+    elif isinstance(expr, sp.cot | sp.csc):
+        out.append(sp.Ne(sp.sin(expr.args[0]), 0))
+    for arg in expr.args:
+        out.extend(_domain_conditions(arg))
+    return out
+
+
+def pole_glsl(expr: sp.Expr, name: str = "x") -> str | None:
+    """极点分母的乘积（GLSL）。在区间两端求值、乘积 <= 0 即跨过极点。"""
+    factors = _pole_factors(expr)
+    if not factors:
+        return None
+    return " * ".join(f"({func_glsl(f, name)})" for f in factors)
+
+
+def domain_glsl(expr: sp.Expr, name: str = "x") -> str | None:
+    """定义域谓词（GLSL 关系表达式）。无法分析时返回 None。"""
+    conds = _domain_conditions(expr)
+    if not conds:
+        return None
+    return " && ".join(f"({func_glsl(c, name)})" for c in conds)
+
+
 def dfunc_glsl(expr: sp.Expr, name: str = "x") -> str:
     """f'(x) 的 GLSL 文本（隐式绘图算屏幕空间距离要用）。"""
     return func_glsl(sp.diff(expr, sp.Symbol("x")), name)
@@ -202,10 +260,19 @@ float _wrap(float t) { return t - TAU * floor(t * (1.0 / TAU)); }
 
 #define F(u) (@FUNC@)
 #define DF @DFUNC@
+// 定义域谓词（域外像素不画）与"极点分母"（变号 => 该区间跨过极点）
+@DOM@
+@POLE@
 
 void main() {
     float x = mix(view.x, view.y, vUV.x);
     float y = mix(view.w, view.z, vUV.y);
+
+    // 定义域：域外像素不画（log(x) 的 x<0、sqrt(x) 的 x<0、asin 的 |x|>1 …）
+    if (!DOM(x)) {
+        fragColor = vec4(0.0);
+        return;
+    }
 
     float spanx = view.y - view.x;
     float spany = view.w - view.z;
@@ -230,10 +297,9 @@ void main() {
     // 此时把 [min,max] 填成实心带：对 sin(1/x) 就等于填它的真实 ±1 包络。
     if (abs(d1) * dx * sy > 1.0) {
         // 两把尺子分开用，避免"为了消锯齿而把填充范围撑太宽"：
-        //  * 窄窗口（±1 列、8 点）判"这一列画不下"——决定填哪些列。单列采样对振荡
-        //    函数是相位噪声（实测相邻列上边缘差 93px），带上一列邻域即可消掉梳状
-        //    锯齿，又不会把填充范围撑宽（内部若出现漏判，下面的 min(cov, band)
-        //    会兜底成实心，不会留缝）。
+        //  * 窄窗口（本列、8 点）：既判"这一列画不下"，也用来钳住描边。必须只看本列——
+        //    窗口一旦比列宽，钳制就会把不在本列的曲线也放进来（实测 log(x) 在 x→0+
+        //    的列被涂满整屏，因为窗口含到更靠近 0 的点、值更负）。
         //  * 宽窗口（±8 列、16 点）只用来估带的上/下边缘——窗口宽，采样点才更可能
         //    碰到极值，带的边缘才不会因包络偏窄而出现暗缝/台阶。
         float h = 0.5 * dx;
@@ -242,33 +308,54 @@ void main() {
         float turns = 0.0;
         float prev_s = 0.0;
         float prev_d = 0.0;
+        bool prev_ok = false;
         for (int i = 0; i < 8; i++) {
-            float t = -2.0 + 4.0 * (float(i) + 0.5) / 8.0;    // ±1 列
+            float t = -1.0 + 2.0 * (float(i) + 0.5) / 8.0;    // 本列（±0.5 列）
             float s = F(x + t * h);
-            s = (s != s) ? 0.0 : s;         // NaN 采样点当 0（不参与 min/max）
-            nl = min(nl, s);
-            nh = max(nh, s);
-            if (i > 0) {
-                float d = s - prev_s;
-                if (prev_d * d < 0.0) { turns += 1.0; }       // 列内折返
-                prev_d = d;
+            // NaN/inf（域外、极点）不参与包络与折返统计。以前把 NaN 当 0，会把
+            // 包络一路抬到 0：log(x) 在 x→0+ 附近因此被填成一块（曲线"消失"）。
+            if (s == s && abs(s) < 1e30) {
+                nl = min(nl, s);
+                nh = max(nh, s);
+                if (prev_ok) {
+                    float d = s - prev_s;
+                    if (prev_d * d < 0.0) { turns += 1.0; }   // 列内折返
+                    prev_d = d;
+                }
+                prev_s = s;
+                prev_ok = true;
             }
-            prev_s = s;
         }
         float wl = 1e30;
         float wh = -1e30;
         for (int i = 0; i < 16; i++) {
             float t = -16.0 + 32.0 * (float(i) + 0.5) / 16.0;  // ±8 列
             float s = F(x + t * h);
-            s = (s != s) ? 0.0 : s;
-            wl = min(wl, s);
-            wh = max(wh, s);
+            if (s == s && abs(s) < 1e30) {   // 同样不把 NaN/inf 当 0
+                wl = min(wl, s);
+                wh = max(wh, s);
+            }
         }
         float spread = (nh - nl) * sy;                  // 实测包络跨度（像素，窄窗口）
 
+        // 真跳变：这一列跨过极点（分母变号）且函数值远超视口 => +∞/-∞ 的连线，
+        // 不画（消除 1/x、tan(x) 在渐近线处的竖直连线）。sin(1/x) 这类**有界**的
+        // 振荡值不会超视口，照旧由包络带表示。
+        // 窗口取采样窗口（±1 列）：采样点跨过极点时包络已被极点污染，只按"列本身"
+        // 判会漏掉这些列（它们的描边照样被填满）。
+        float _hp = dx;
+        // 判据用"采样跨度 > 32 倍视口高度"而不是像素数：像素阈值会随缩放漂移
+        // （深缩放时 sin(1/x) 的有界振荡也会超过 8 个视口高，从而被误切一刀）。
+        if (POLE(x - _hp) * POLE(x + _hp) <= 0.0 && (nh - nl) > 32.0 * spany) {
+            cov = 0.0;
+        } else {
+
         float pred = max(abs(d1) * dx * sy, 2.0);       // 导数预期跨度（像素）
         float w = max(step(2.0, turns),                 // a) 列内折返 >= 2 次
-                      1.0 - smoothstep(0.15, 0.5, spread / pred));  // b) 深欠采样
+                      // b) 深欠采样。阈值要收紧：陡峭的**单调凹**曲线（如 log(x) 在
+                      // x→0+）采样跨度也会小于导数预期（实测比值 0.22），按 0.15~0.5
+                      // 判会把它误填成一整块；真正"快到采样抓不住"的振荡比值 ≪0.05。
+                      1.0 - smoothstep(0.02, 0.1, spread / pred));
         w *= step(spread, 4.0 * size.y);                // 极点/真跳变：不填（否则整列涂满）
         w *= smoothstep(1.5, 4.0, spread);              // 带不足 1.5 像素就没必要填
 
@@ -276,20 +363,19 @@ void main() {
         float band = clamp((wh - y) * sy + 2.0, 0.0, 1.0)
                    * clamp((y - wl) * sy + 2.0, 0.0, 1.0);
         // 描边在这里不可信：|f'| 极大时切线近似对任何 y 都算得极小的"水平距离"，
-        // cov 会饱和成整列，而且切线外推会涂到远超真实值域的地方（实测 sin(1/x)
-        // 被涂到 ±1.8，真实值域是 ±1）。所以：
-        //   1) 先用采样包络钳住描边（包络是这一列里 f 实测到过的范围）；
-        //   2) 有置信度(w>0)的列整列换成包络带。硬切不产生接缝：gate 边界上
-        //      包络宽度 ≈ 描边宽度。
-        // 用钳制过的描边与带做**平滑**混合：硬切会让边界列忽带忽线（锯齿感），
-        // 而 w=0 的列由 min(cov, band) 兜底（深欠采样时描边在包络内本就饱和，
-        // 不会留缝）。这样边界是渐变，且不会溢出包络。
-        cov = mix(min(cov, band), band, w);
+        // cov 会饱和成整列、还会外推到远超真实值域处（实测 sin(1/x) 涂到 ±1.8）。
+        // 钳制用**窄**包络（这一列自己采到的范围）：宽包络会把 1/x、tan 这类陡峭
+        // 列一路放到 ±100 那样远，于是整列被涂满——正是"渐近线连线"的观感来源。
+        // 带区仍用宽包络（外观不变），再按置信度 w 与带做平滑混合。
+        float lim = clamp((nh - y) * sy + 2.0, 0.0, 1.0)
+                  * clamp((y - nl) * sy + 2.0, 0.0, 1.0);
+        cov = mix(min(cov, lim), band, w);
+        }
     }
 
     float a = cov * color.a * qt_Opacity;
-    if (isnan(f0)) {
-        a = 0.0;                       // sin(1/0) 之类的点直接丢弃
+    if (isnan(f0) || isinf(f0)) {
+        a = 0.0;                       // sin(1/0)、1/0 之类的点直接丢弃
     }
     fragColor = vec4(color.rgb * a, a);   // 预乘 alpha
 }
@@ -298,8 +384,19 @@ void main() {
 
 def shader_sources(expr: sp.Expr) -> tuple[str, str]:
     """QML 前端（隐式模型）的顶点/片元着色器源码。"""
-    return (
-        VERTEX_SHADER,
+    frag = (
         FRAGMENT_TEMPLATE.replace("@FUNC@", func_glsl(expr, "u", wrap=True))
-        .replace("@DFUNC@", dfunc_glsl(expr)),
+        .replace("@DFUNC@", dfunc_glsl(expr))
     )
+    # 定义域 / 极点：宏参数带括号，和 F 同理（宏是文本替换）
+    dom = domain_glsl(expr, "u")
+    frag = frag.replace(
+        "@DOM@",
+        f"#define DOM(u) ({dom})" if dom else "#define DOM(u) true",
+    )
+    pole = pole_glsl(expr, "u")
+    frag = frag.replace(
+        "@POLE@",
+        f"#define POLE(u) ({pole})" if pole else "#define POLE(u) 1.0",
+    )
+    return (VERTEX_SHADER, frag)

@@ -131,3 +131,32 @@ def test_undersampled_column_fills_envelope_within_pm1(app: QGuiApplication) -> 
 def test_smooth_column_stays_thin(app: QGuiApplication) -> None:
     ratio = _center_column_ratio(_render(app, "sin(x)"))
     assert ratio < 0.05, f"sin(x) 在 x=0 处应仍是细线，实际 {ratio:.2f}"
+
+
+def _column_lit(image: QImage, world_x: float) -> int:
+    """给定世界 x 处那一列的点亮像素数。"""
+    x = min(image.width() - 1, max(0, int((world_x + 6) / 12 * image.width())))
+    return sum(_lit(image, x, y) for y in range(image.height()))
+
+
+def test_asymptote_is_not_connected(app: QGuiApplication) -> None:
+    """1/x、tan(x) 在极点处不得画出竖直连线（值域 ±∞ 的跳变）。"""
+    for expr, poles in (("1/x", [0.0]), ("tan(x)", [1.5708])):
+        image = _render(app, expr)
+        for pole in poles:
+            lit = _column_lit(image, pole)
+            assert lit < 30, f"{expr} 在 x={pole} 处不应有连线，实际点亮 {lit} 像素"
+
+
+def test_out_of_domain_is_blank(app: QGuiApplication) -> None:
+    """log(x)、sqrt(x)、asin(x) 在定义域外不画（x<0 / |x|>1）。"""
+    for expr in ("log(x)", "sqrt(x)"):
+        image = _render(app, expr)
+        left = sum(_lit(image, x, y) for x in range(0, image.width() // 2 - 4)
+                   for y in range(0, image.height(), 5))
+        assert left == 0, f"{expr} 在 x<0 不该有像素，实际 {left}"
+    image = _render(app, "asin(x)")
+    # 左端 x ∈ [-6, -1]：|x|>1 全部落在定义域外
+    far = sum(_lit(image, x, y) for x in range(0, int((-1.0 + 6) / 12 * image.width()))
+              for y in range(0, image.height(), 5))
+    assert far == 0, f"asin(x) 在 |x|>1 不该有像素，实际 {far}"
