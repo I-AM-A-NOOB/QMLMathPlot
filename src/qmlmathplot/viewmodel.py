@@ -1,7 +1,8 @@
-"""QML 前端的模型层：把"表达式 -> GLSL -> .qsb"和视图数学包成 QObject。
+"""ViewModel 层：把 Model（表达式 -> GLSL -> .qsb、视图数学）包成 QObject。
 
-QML 侧只管画（ShaderEffect + 输入），表达式编译、着色器烘焙、视图数学都在这，
-和 QWidget 前端共用 qmlmathplot.core。
+QML 侧（View）只做画和输入：表达式、视图、着色器 URL、错误文本都由这里暴露，
+鼠标/滚轮事件转发成 zoom/panPixels 调用。嵌入到别的 App 时，由 App 创建
+PlotController 并注入组件（见 qml_component_path 与 README）。
 """
 
 from __future__ import annotations
@@ -10,9 +11,10 @@ import sympy as sp
 from PySide6.QtCore import Property, QObject, QUrl, Signal, Slot
 from PySide6.QtGui import QVector4D
 
-from . import core, qsb
+from .model import ViewRect, shader_sources
+from .qsb import bake
 
-__all__ = ["PlotController", "register_qml_types", "QML_URI"]
+__all__ = ["QML_URI", "PlotController", "qml_component_path", "register_qml_types"]
 
 QML_URI = "QmlMathPlot"
 QML_MAJOR = 1
@@ -31,7 +33,7 @@ class PlotController(QObject):
         super().__init__(parent)
         self._symbol = sp.Symbol("x")
         self._expression = expression
-        self._view = core.ViewRect()
+        self._view = ViewRect()
         self._error = ""
         self._vertex = QUrl()
         self._fragment = QUrl()
@@ -69,9 +71,9 @@ class PlotController(QObject):
         """表达式 -> GLSL -> .qsb；失败时保留上一份可用着色器并把原因写进 error。"""
         try:
             expr = sp.sympify(source, locals={"x": self._symbol})
-            vert_src, frag_src = core.qml_shader_sources(expr)
-            vertex = qsb.bake(vert_src, "vert")
-            fragment = qsb.bake(frag_src, "frag")
+            vert_src, frag_src = shader_sources(expr)
+            vertex = bake(vert_src, "vert")
+            fragment = bake(frag_src, "frag")
         except Exception as exc:  # noqa: BLE001 —— 表达式/烘焙都可能失败，都要报给 UI
             self._error = f"{type(exc).__name__}: {exc}"
             self.errorChanged.emit()
@@ -111,3 +113,10 @@ def register_qml_types() -> None:
 
     # 注意：PySide6 的签名标注写的是 bytes，但运行时只接受 str
     qmlRegisterType(PlotController, QML_URI, QML_MAJOR, QML_MINOR, "PlotController")  # type: ignore[arg-type]
+
+
+def qml_component_path() -> str:
+    """可复用 QML 组件的文件路径（嵌入到别的 App 时用它 setSource / Loader）。"""
+    from importlib.resources import files
+
+    return str(files("qmlmathplot").joinpath("qml/MathPlot.qml"))

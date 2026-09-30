@@ -1,8 +1,12 @@
-// QML 前端：片元着色器逐像素画曲线（隐式绘图），着色器由 Python 侧生成并烘成 .qsb。
+// View 层：可复用的绘图组件（隐式逐像素绘图）。
 //
-// 与 QWidget 前端的区别只在"宿主"：那边是顶点着色器算 y + GL_LINE_STRIP 折线，
-// 这边是每个像素算一次 |距离| —— 每帧代价 ∝ 像素数，与函数频率无关（振荡函数
-// 不会因为混叠把帧率拖垮），代价是每像素一次 f(x) 求值。
+// 用法（App 侧创建 ViewModel 并注入，MVVM）：
+//     MathPlot { controller: myPlotController }
+// 不注入也能单独用——组件会自带一个 PlotController。
+//
+// 曲线由片元着色器逐像素判"到曲线的一阶屏幕空间距离"画出：每帧代价 ∝ 像素数，
+// 与函数频率无关（振荡函数不会因为混叠把帧率拖垮）；一个像素里塞进多个振荡的
+// 列改填 [min, max] 包络带（见 model.FRAGMENT_TEMPLATE）。
 import QtQuick
 import QmlMathPlot 1.0
 
@@ -12,13 +16,17 @@ Item {
     implicitWidth: 800
     implicitHeight: 600
 
-    // sympy 语法的表达式；改这个属性会重新生成 GLSL 并烘焙 .qsb
-    property alias expression: backend.expression
-    // 视图：Qt.vector4d(xmin, xmax, ymin, ymax)
-    property alias view: backend.view
+    // ViewModel（App 注入；未注入时自带一个，保证组件可独立使用）
+    property PlotController controller: PlotController {}
+
+    property alias expression: root.controller.expression
+    property alias view: root.controller.view
+    property alias error: root.controller.error
+
     property real lineWidth: 1.5
     property color curveColor: "#33ccff"
     property color backgroundColor: "#14141e"
+
     Rectangle {
         anchors.fill: parent
         color: root.backgroundColor
@@ -27,17 +35,12 @@ Item {
     ShaderEffect {
         id: plot
         anchors.fill: parent
-        property vector4d view: backend.view
+        property vector4d view: root.controller.view
         property vector2d size: Qt.vector2d(width, height)
         property real lineWidth: root.lineWidth
         property color color: root.curveColor
-        vertexShader: backend.vertexShader
-        fragmentShader: backend.fragmentShader
-    }
-
-
-    PlotController {
-        id: backend
+        vertexShader: root.controller.vertexShader
+        fragmentShader: root.controller.fragmentShader
     }
 
     MouseArea {
@@ -52,7 +55,7 @@ Item {
             lastY = mouse.y;
         }
         onPositionChanged: (mouse) => {
-            backend.panPixels(mouse.x - lastX, mouse.y - lastY, width, height);
+            root.controller.panPixels(mouse.x - lastX, mouse.y - lastY, width, height);
             lastX = mouse.x;
             lastY = mouse.y;
         }
@@ -63,7 +66,7 @@ Item {
         // 注意：Qt 6 的 QML WheelEvent 没有 position，只有 x/y（相对本 item）。
         onWheel: (event) => {
             const d = event.angleDelta.y !== 0 ? event.angleDelta.y : event.pixelDelta.y;
-            backend.zoom(d, event.x / root.width, event.y / root.height);
+            root.controller.zoom(d, event.x / root.width, event.y / root.height);
             event.accepted = true;
         }
     }

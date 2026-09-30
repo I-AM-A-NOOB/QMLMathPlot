@@ -1,13 +1,12 @@
-"""前端无关的核心：表达式 -> GLSL，以及视图矩形（平移/缩放）运算。
+"""Model 层：表达式 -> GLSL、着色器源码模板、视图矩形（平移/缩放）数学。
 
-这里不 import 任何 Qt —— 两个前端（QWidget / QML）共用同一份表达式代码生成
-和同一份视图数学；差异只在于"谁来画"：
+这一层不 import 任何 Qt，可以脱离 GUI 单独测试；ViewModel（PlotController）
+和 View（QML 的 ShaderEffect）都建立在它上面。
 
-  * QWidget 前端：QOpenGLWidget + 顶点着色器里算 y，画 GL_LINE_STRIP（折线模型）
-  * QML  前端：ShaderEffect + 片元着色器里逐像素判距离（隐式模型）
-
-折线模型每帧代价 ∝ 视口内线段长度（振荡函数会出现混叠锯齿），隐式模型每帧
-代价 ∝ 像素数，与函数频率无关 —— 所以两个前端共用代码，但不共用着色器宿主。
+绘图模型是**隐式（signed-distance）**：片元着色器逐像素算"到曲线的一阶屏幕
+空间距离"，每帧代价 ∝ 像素数、与函数频率无关（振荡函数不会因为混叠把帧率拖
+垮）；一个像素里塞进多个振荡的列改填 [min,max] 包络带 —— 见 FRAGMENT_TEMPLATE
+上面的注释。
 """
 
 from __future__ import annotations
@@ -18,11 +17,12 @@ from sympy.printing.precedence import PRECEDENCE
 
 __all__ = [
     "DEFAULT_VIEW",
+    "FRAGMENT_TEMPLATE",
+    "VERTEX_SHADER",
     "ViewRect",
     "dfunc_glsl",
     "func_glsl",
-    "qml_shader_sources",
-    "widget_shader_sources",
+    "shader_sources",
 ]
 
 # 默认视图（世界坐标）
@@ -51,7 +51,7 @@ class _PlotGLSLPrinter(GLSLPrinter):
 def func_glsl(expr: sp.Expr, name: str = "x") -> str:
     """把 sympy 表达式印成 GLSL 表达式（返回 f(x) 的右值文本）。
 
-    name 用于改名：着色器里用 ``#define F(u) (...)`` 时要把变量印成 u。
+    name 用于改名：着色器里 ``#define F(u) (...)`` 要把变量印成 u。
     """
     if name != "x":
         expr = expr.subs(sp.Symbol("x"), sp.Symbol(name))
@@ -64,7 +64,7 @@ def dfunc_glsl(expr: sp.Expr, name: str = "x") -> str:
 
 
 class ViewRect:
-    """视图矩形（世界坐标）+ 平移/缩放运算，两个前端共用。"""
+    """视图矩形（世界坐标）+ 平移/缩放运算，由 ViewModel 持有。"""
 
     ZOOM_PER_STEP = 0.9  # 上滚一档：跨度 ×0.9（放大 10%）
     MIN_SPAN = 1e-9  # 跨度上下限，避免缩到 0（再也滚不回来）或 inf
@@ -125,57 +125,10 @@ class ViewRect:
 
 
 # --------------------------------------------------------------------------
-# 着色器宿主：QWidget（顶点着色器 + 折线）
+# 着色器源码（片元着色器 + 逐像素隐式绘图）
 # --------------------------------------------------------------------------
 
-WIDGET_VERTEX_TEMPLATE = """#version 330 core
-uniform float u_xMin;
-uniform float u_xMax;
-uniform float u_yMin;
-uniform float u_yMax;
-uniform int u_count;
-
-// 表达式直接内联在 main 里（理由见 QML_FRAGMENT_TEMPLATE 上的注释）
-void main() {
-    float t = float(gl_VertexID) / float(u_count);
-    float x = u_xMin + (u_xMax - u_xMin) * t;
-    float y = @FUNC@;
-
-    // 无穷/非数/超大值：丢到裁剪空间外，断开折线（不要用 0.0/0.0，NaN 顶点
-    // 在部分驱动上是未定义行为，用有限坐标更稳）
-    if (isinf(y) || isnan(y) || abs(y) > 1e8) {
-        gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
-        return;
-    }
-
-    float cx = (u_xMin + u_xMax) * 0.5;
-    float cy = (u_yMin + u_yMax) * 0.5;
-    float sx = max((u_xMax - u_xMin) * 0.5, 1e-12);
-    float sy = max((u_yMax - u_yMin) * 0.5, 1e-12);
-
-    gl_Position = vec4((x - cx) / sx, (y - cy) / sy, 0.0, 1.0);
-}
-"""
-
-WIDGET_FRAGMENT = """#version 330 core
-out vec4 FragColor;
-uniform vec3 u_color;
-void main() {
-    FragColor = vec4(u_color, 1.0);
-}
-"""
-
-
-def widget_shader_sources(expr: sp.Expr) -> tuple[str, str]:
-    """QWidget 前端（折线模型）的顶点/片元着色器源码。"""
-    return WIDGET_VERTEX_TEMPLATE.replace("@FUNC@", func_glsl(expr)), WIDGET_FRAGMENT
-
-
-# --------------------------------------------------------------------------
-# 着色器宿主：QML（片元着色器 + 逐像素隐式绘图）
-# --------------------------------------------------------------------------
-
-QML_VERTEX = """#version 440
+VERTEX_SHADER = """#version 440
 layout(location = 0) in vec4 qt_Vertex;
 layout(location = 1) in vec2 qt_MultiTexCoord0;
 layout(location = 0) out vec2 vUV;
@@ -202,7 +155,7 @@ void main() {
 # 判据 8 次），宏是预处理展开、没有函数调用语义，正好合适。
 # （曾经把"带用户函数的版本在 Intel D3D11 上挂死"记在这里——那是误诊：真因是
 #  qsb 把片元源码按 .glsl 后缀烘成了顶点着色器，见 qsb.bake 的注释。）
-QML_FRAGMENT_TEMPLATE = """#version 440
+FRAGMENT_TEMPLATE = """#version 440
 layout(location = 0) in vec2 vUV;
 layout(location = 0) out vec4 fragColor;
 layout(std140, binding = 0) uniform buf {
@@ -300,10 +253,10 @@ void main() {
 """
 
 
-def qml_shader_sources(expr: sp.Expr) -> tuple[str, str]:
+def shader_sources(expr: sp.Expr) -> tuple[str, str]:
     """QML 前端（隐式模型）的顶点/片元着色器源码。"""
     return (
-        QML_VERTEX,
-        QML_FRAGMENT_TEMPLATE.replace("@FUNC@", func_glsl(expr, "u"))
+        VERTEX_SHADER,
+        FRAGMENT_TEMPLATE.replace("@FUNC@", func_glsl(expr, "u"))
         .replace("@DFUNC@", dfunc_glsl(expr)),
     )

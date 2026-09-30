@@ -1,7 +1,7 @@
 [project]
 name = "qmlmathplot"
 version = "0.1.0"
-description = "Add your description here"
+description = "可嵌入 Qt Quick App 的函数绘图组件（隐式逐像素绘制，MVVM）"
 readme = "README.md"
 authors = [
     { name = "I-AM-A-NOOB", email = "suzc08@outlook.com" }
@@ -13,8 +13,19 @@ dependencies = [
 ]
 
 [project.scripts]
-qmlmathplot = "qmlmathplot:main"
+qmlmathplot = "qmlmathplot.app:main"
 
 [build-system]
 requires = ["uv_build>=0.12.18,<0.13.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "gui: 需要真实 GPU 场景图（会开窗渲染）",
+]
