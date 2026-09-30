@@ -63,14 +63,17 @@ def bake(source: str, stage: str, cache_dir: Path | str | None = None) -> Path:
     if stage not in ("vert", "frag"):
         raise ValueError(f"stage 必须是 'vert' 或 'frag'，收到 {stage!r}")
 
-    key = hashlib.sha256(f"{stage}\0{source}".encode()).hexdigest()[:16]
+    # v2: 源文件必须用 .vert/.frag 后缀——qsb 靠后缀判 stage，.glsl 会被当成 vertex，
+    #     导致片元着色器烘出来是"顶点着色器"（D3D 的像素阶段拿到非法 HLSL）。
+    #     版本号进 hash，旧缓存自动失效。
+    key = hashlib.sha256(f"v2\0{stage}\0{source}".encode()).hexdigest()[:16]
     out_dir = Path(cache_dir) if cache_dir else Path(tempfile.gettempdir()) / "qmlmathplot-qsb"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{stage}-{key}.qsb"
     if out_path.exists():
         return out_path
 
-    src_path = out_dir / f"{stage}-{key}.glsl"
+    src_path = out_dir / f"{stage}-{key}.{stage}"
     src_path.write_text(source, encoding="utf-8")
     tmp_out = out_path.with_suffix(".qsb.tmp")
     # --qt6 == --glsl "100 es,120,150" --hlsl 50 --msl 12，即 Qt Quick 材质的标准目标集

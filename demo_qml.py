@@ -16,7 +16,7 @@ from PySide6.QtCore import QUrl
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQuick import QQuickView
 
-from qmlmathplot.qml_backend import prefer_opengl_backend, register_qml_types
+from qmlmathplot.qml_backend import register_qml_types
 
 DEFAULT_EXPRESSION = "sin(x)"
 
@@ -29,9 +29,6 @@ def main(argv: list[str] | None = None) -> int:
     argv = sys.argv if argv is None else argv
     expression = argv[1] if len(argv) > 1 else DEFAULT_EXPRESSION
 
-    # D3D11 后端在本机画 ShaderEffect 会偶发挂死，demo 默认走 OpenGL。
-    # 必须在 QGuiApplication 之前调用（它靠环境变量生效）；已有 QSG_RHI_BACKEND 时不覆盖。
-    prefer_opengl_backend()
     app = QGuiApplication(argv[:1])
     register_qml_types()
 

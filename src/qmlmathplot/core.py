@@ -198,9 +198,10 @@ void main() {
 #      [min,max] 区间填成实心带 —— 对 sin(1/x) 就等价于填它的真实 ±1 包络。
 #      判据是"列内全变差 tv >> 包络跨度 spread"（曲线在列内折返了）。
 #
-# 表达式用宏而不是用户函数：Qt Quick 的 RHI 会重写/转译着色器，带用户函数的
-# 版本在 Intel D3D11 驱动上会让第一帧直接挂死（实测），宏是预处理展开，安全；
-# 而且一个像素里要对多个 x 求值，宏正好合适。
+# 表达式用宏而不是用户函数：一个像素里要对同一个 x 求值 9 次（描边 1 次 + 包络
+# 判据 8 次），宏是预处理展开、没有函数调用语义，正好合适。
+# （曾经把"带用户函数的版本在 Intel D3D11 上挂死"记在这里——那是误诊：真因是
+#  qsb 把片元源码按 .glsl 后缀烘成了顶点着色器，见 qsb.bake 的注释。）
 QML_FRAGMENT_TEMPLATE = """#version 440
 layout(location = 0) in vec2 vUV;
 layout(location = 0) out vec4 fragColor;

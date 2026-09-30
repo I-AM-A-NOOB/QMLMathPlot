@@ -1,0 +1,29 @@
+表达式: sin(1/x)
+
+=== 第 1 层: D3DCompile（Microsoft HLSL 编译器，纯 CPU，与显卡无关）===
+  V0-对照(平凡HLSL)      [OK ]     1.7 ms  hr=0x00000000  1076 B
+  V4-全量              [OK ]    11.8 ms  hr=0x00000000  4008 B
+  V1-去包络块            [OK ]     3.0 ms  hr=0x00000000  1672 B
+  V2-去动态分支           [OK ]    11.1 ms  hr=0x00000000  3928 B
+  V3-去NaN三元          [OK ]    10.7 ms  hr=0x00000000  3856 B
+  Vx-顶点              [OK ]     1.5 ms  hr=0x00000000  1012 B
+
+=== 第 2 层: 硬件(Intel/AMD/NV) 设备创建 + 着色器创建（驱动二次编译）===
+  设备 OK: featureLevel=0xB000  (0.06 s)
+  V0-对照(平凡HLSL)      [OK ]     0.7 ms  hr=0x00000000  (frag)
+  V4-全量              [OK ]     0.3 ms  hr=0x00000000  (frag)
+  V1-去包络块            [OK ]     0.1 ms  hr=0x00000000  (frag)
+  V2-去动态分支           [OK ]     0.3 ms  hr=0x00000000  (frag)
+  V3-去NaN三元          [OK ]     0.3 ms  hr=0x00000000  (frag)
+  Vx-顶点              [OK ]     0.1 ms  hr=0x00000000  (vert)
+
+=== 第 2(对照) 层: WARP(软件光栅器) 设备创建 + 着色器创建（驱动二次编译）===
+  设备 OK: featureLevel=0xB000  (0.00 s)
+  V0-对照(平凡HLSL)      [OK ]     0.1 ms  hr=0x00000000  (frag)
+  V4-全量              [OK ]     0.2 ms  hr=0x00000000  (frag)
+  V1-去包络块            [OK ]     0.0 ms  hr=0x00000000  (frag)
+  V2-去动态分支           [OK ]     0.1 ms  hr=0x00000000  (frag)
+  V3-去NaN三元          [OK ]     0.1 ms  hr=0x00000000  (frag)
+  Vx-顶点              [OK ]     0.0 ms  hr=0x00000000  (vert)
+
+完成

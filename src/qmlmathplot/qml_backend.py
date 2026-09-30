@@ -6,8 +6,6 @@ QML 侧只管画（ShaderEffect + 输入），表达式编译、着色器烘焙�
 
 from __future__ import annotations
 
-import os
-
 import sympy as sp
 from PySide6.QtCore import Property, QObject, QUrl, Signal, Slot
 from PySide6.QtGui import QVector4D
@@ -113,19 +111,3 @@ def register_qml_types() -> None:
 
     # 注意：PySide6 的签名标注写的是 bytes，但运行时只接受 str
     qmlRegisterType(PlotController, QML_URI, QML_MAJOR, QML_MINOR, "PlotController")  # type: ignore[arg-type]
-
-
-def prefer_opengl_backend() -> None:
-    """让 Qt Quick 用 OpenGL 的 RHI 后端。**必须在 QGuiApplication 之前调用。**
-
-    起因是实测：在同一台机器（Intel 驱动 32.0.101.8826）上，默认的 D3D11 后端
-    画 ShaderEffect 会出现"第一帧挂死"（同一份 .qsb、同一份 QML，8 次挂死 /
-    4 次成功），而 ``QSG_RHI_BACKEND=opengl`` 3/3 正常。.qsb 是用 ``qsb --qt6``
-    烘的，GLSL/HLSL/MSL 都在里面，换后端不需要重新烘焙。
-
-    注意 QQuickWindow.setGraphicsApi() 在 QGuiApplication 之后调用**不生效**
-    （窗口的 surface 已经按默认后端建好了，实测报 "QRhiGles2: Failed to make
-    context current" / "Failed to create RHI (backend 2)"），所以这里先设环境
-    变量——Qt 在平台初始化时读它。已经设过 QSG_RHI_BACKEND 就不覆盖。
-    """
-    os.environ.setdefault("QSG_RHI_BACKEND", "opengl")
