@@ -102,9 +102,3 @@ def test_shader_sources_inject_domain_and_pole():
     assert "#define POLE(u) 1.0" in smooth               # 无极点 => 乘积恒正，不会误判
 
 
-def test_unbounded_edges():
-    """只在函数确实发散到 ±∞ 的定义域边界放开钳制（log→-∞ 放开；sqrt→0 不放开）。"""
-    assert model.unbounded_edges(sp.log(X)) == [(0.0, -1)]
-    assert model.unbounded_edges(sp.sqrt(X)) == []          # 有界，照旧钳住
-    assert model.unbounded_edges(sp.sin(1 / X)) == []       # 振荡极限不是 ±∞
-    assert sorted(model.unbounded_edges(1 / X)) == [(0.0, -1), (0.0, 1)]

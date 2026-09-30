@@ -127,47 +127,6 @@ def _domain_conditions(expr: sp.Expr) -> list[sp.Expr]:
     return out
 
 
-def unbounded_edges(expr: sp.Expr, name: str = "x") -> list[tuple[float, int]]:
-    """定义域边界上"函数趋于 ±∞"的位置：[(边界点, 方向)]，方向 +1 表示趋于 +∞。
-
-    只关心真的发散的情形：log(x) 在 x→0+ 趋于 -∞（曲线该一路画到视口外），
-    而 sqrt(x) 在 x→0+ 趋于 0（有界，照旧用采样包络钳住）。
-    """
-    sym = sp.Symbol(name)
-    out: list[tuple[float, int]] = []
-    for cond in _domain_conditions(expr):
-        lhs = cond.lhs if isinstance(cond, (sp.Gt, sp.Ge, sp.Ne)) else None
-        if lhs is None or sym not in lhs.free_symbols:
-            continue
-        try:
-            points = sp.solve(sp.Eq(lhs, 0), sym)
-        except Exception:  # noqa: BLE001 —— 解不出来就放弃，退回"两侧都钳"
-            continue
-        for point in points:
-            if not point.is_number:
-                continue
-            for side in ("+", "-"):
-                try:
-                    lim = sp.limit(expr, sym, point, side)
-                except Exception:  # noqa: BLE001
-                    continue
-                if lim is sp.oo:
-                    out.append((float(point), +1))
-                elif lim is -sp.oo:
-                    out.append((float(point), -1))
-    return sorted(set(out))
-
-
-def _open_expr(expr: sp.Expr, direction: int) -> str:
-    """GLSL 布尔表达式：本列区间是否跨过"趋于 direction*∞"的定义域边界。"""
-    pts = sorted({p for p, d in unbounded_edges(expr) if d == direction})
-    if not pts:
-        return "false"
-    return " || ".join(
-        f"((x - _hp - ({p!r})) * (x + _hp - ({p!r})) <= 0.0)" for p in pts
-    )
-
-
 def pole_glsl(expr: sp.Expr, name: str = "x") -> str | None:
     """极点分母的乘积（GLSL）。在区间两端求值、乘积 <= 0 即跨过极点。"""
     factors = _pole_factors(expr)
@@ -299,6 +258,13 @@ float _wrap(float t) { return t - TAU * floor(t * (1.0 / TAU)); }
 #define SIN(t) sin(_wrap(t))
 #define COS(t) cos(_wrap(t))
 
+// 点到线段的距离（屏幕空间）。按线段描边 => 笔触处处等宽。
+float _seg_dist(vec2 p, vec2 a, vec2 b) {
+    vec2 ab = b - a;
+    float t = clamp(dot(p - a, ab) / max(dot(ab, ab), 1e-12), 0.0, 1.0);
+    return length(p - (a + t * ab));
+}
+
 #define F(u) (@FUNC@)
 #define DF @DFUNC@
 // 定义域谓词（域外像素不画）与"极点分母"（变号 => 该区间跨过极点）
@@ -324,10 +290,45 @@ void main() {
     float f0 = F(x);
     float d1 = DF;
 
-    // ---- 1) 平滑描边：屏幕空间的一阶距离（陡峭段等宽 + 抗锯齿）----
-    float slope = d1 * sy / sx;
-    float dpx = abs(f0 - y) * sy / sqrt(1.0 + slope * slope);
-    float cov = clamp(lineWidth * 0.5 + 0.5 - dpx, 0.0, 1.0);
+    // ---- 1) 采样 + 折线描边 ----
+    // Desmos 的做法（engineering.desmos.com）：把采样点连成**线段**、按线段描边，
+    // 相邻点提示跳变就断开。这样笔触处处等宽；而"算到切线的距离"在陡峭/强弯曲处
+    // 会高估距离，线会变细甚至渐变消失（log(x) 在 x→0+、sin(1/x) 的陡段）。
+    float h = 0.5 * dx;
+    float nl = 1e30;
+    float nh = -1e30;
+    float turns = 0.0;
+    float prev_s = 0.0;
+    float prev_x = 0.0;
+    float prev_d = 0.0;
+    bool prev_ok = false;
+    vec2 p = vec2(x * sx, y * sy);          // 屏幕空间（平移不影响距离）
+    float dmin = 1e30;
+    for (int i = 0; i < 8; i++) {
+        float t = -1.0 + 2.0 * (float(i) + 0.5) / 8.0;      // ±1 列
+        float xi = x + t * h;
+        float s = F(xi);
+        // NaN/inf（域外、极点）跳过：既不参与包络，也不连线段
+        bool ok = (s == s) && (abs(s) < 1e30);
+        if (ok) {
+            nl = min(nl, s);
+            nh = max(nh, s);
+            if (prev_ok) {
+                float d = s - prev_s;
+                if (prev_d * d < 0.0) { turns += 1.0; }     // 列内折返
+                prev_d = d;
+                // 跳变（极点/间断）：落差超过 4 个视口高 => 不连线段（不画连线）
+                if (abs(d) <= 4.0 * spany) {
+                    dmin = min(dmin, _seg_dist(p, vec2(prev_x * sx, prev_s * sy),
+                                                  vec2(xi * sx, s * sy)));
+                }
+            }
+            prev_x = xi;
+            prev_s = s;
+        }
+        prev_ok = ok;
+    }
+    float cov = clamp(lineWidth * 0.5 + 0.5 - dmin, 0.0, 1.0);
 
     // ---- 2) 欠采样列 -> 画 ± 包络带（而不是随机锯齿）----
     // 在 ±2 列的窗口里采 16 个点，用两把互补的尺子判断"这一列画不下"：
@@ -337,47 +338,14 @@ void main() {
     //      （振子快到采样都抓不住规律时，a 会受相位噪声影响，b 来兜底）
     // 此时把 [min,max] 填成实心带：对 sin(1/x) 就等于填它的真实 ±1 包络。
     if (abs(d1) * dx * sy > 1.0) {
-        // 两把尺子分开用，避免"为了消锯齿而把填充范围撑太宽"：
-        //  * 窄窗口（本列、8 点）：既判"这一列画不下"，也用来钳住描边。必须只看本列——
-        //    窗口一旦比列宽，钳制就会把不在本列的曲线也放进来（实测 log(x) 在 x→0+
-        //    的列被涂满整屏，因为窗口含到更靠近 0 的点、值更负）。
-        //  * 宽窗口（±8 列、16 点）只用来估带的上/下边缘——窗口宽，采样点才更可能
-        //    碰到极值，带的边缘才不会因包络偏窄而出现暗缝/台阶。
-        float h = 0.5 * dx;
-        float nl = 1e30;
-        float nh = -1e30;
-        float turns = 0.0;
-        float prev_s = 0.0;
-        float prev_d = 0.0;
-        bool prev_ok = false;
-        float first_s = 0.0;
-        float last_s = 0.0;
-        bool any_ok = false;
-        for (int i = 0; i < 8; i++) {
-            float t = -1.0 + 2.0 * (float(i) + 0.5) / 8.0;    // 本列（±0.5 列）
-            float s = F(x + t * h);
-            // NaN/inf（域外、极点）不参与包络与折返统计。以前把 NaN 当 0，会把
-            // 包络一路抬到 0：log(x) 在 x→0+ 附近因此被填成一块（曲线"消失"）。
-            if (s == s && abs(s) < 1e30) {
-                if (!any_ok) { first_s = s; any_ok = true; }
-                last_s = s;
-                nl = min(nl, s);
-                nh = max(nh, s);
-                if (prev_ok) {
-                    float d = s - prev_s;
-                    if (prev_d * d < 0.0) { turns += 1.0; }   // 列内折返
-                    prev_d = d;
-                }
-                prev_s = s;
-                prev_ok = true;
-            }
-        }
+        // 宽窗口（±8 列、16 点）只用来估带的上/下边缘——窗口宽，采样点才更可能
+        // 碰到极值，带的边缘才不会因包络偏窄而出现暗缝/台阶。
         float wl = 1e30;
         float wh = -1e30;
         for (int i = 0; i < 16; i++) {
             float t = -16.0 + 32.0 * (float(i) + 0.5) / 16.0;  // ±8 列
             float s = F(x + t * h);
-            if (s == s && abs(s) < 1e30) {   // 同样不把 NaN/inf 当 0
+            if (s == s && abs(s) < 1e30) {
                 wl = min(wl, s);
                 wh = max(wh, s);
             }
@@ -416,25 +384,9 @@ void main() {
         // 带的上下边缘取宽窗口的包络（窄窗口会咬出暗缝）
         float band = clamp((wh - y) * sy + 2.0, 0.0, 1.0)
                    * clamp((y - wl) * sy + 2.0, 0.0, 1.0);
-        // 描边在这里不可信：|f'| 极大时切线近似对任何 y 都算得极小的"水平距离"，
-        // cov 会饱和成整列、还会外推到远超真实值域处（实测 sin(1/x) 涂到 ±1.8）。
-        // 钳制用**窄**包络（这一列自己采到的范围）：宽包络会把 1/x、tan 这类陡峭
-        // 列一路放到 ±100 那样远，于是整列被涂满——正是"渐近线连线"的观感来源。
-        // 带区仍用宽包络（外观不变），再按置信度 w 与带做平滑混合。
-        // 钳制的下界/上界默认取采样包络；但若本列跨过"函数确实趋于 -∞/+∞"的定义域
-        // 边界（log(x) 在 x→0+ 就是），那一侧必须放开——否则曲线被包络下界切断，
-        // 表现为"逐渐变细消失"。判断来自解析（sympy 求单侧极限），不是趋势猜测：
-        // sqrt(x) 在 x→0+ 趋于 0，就不放开，照旧钳住。
-        float _nl = (@OPEN_LO@) ? -1e30 : nl;
-        float _nh = (@OPEN_HI@) ?  1e30 : nh;
-        float lim = clamp((_nh - y) * sy + 2.0, 0.0, 1.0)
-                  * clamp((y - _nl) * sy + 2.0, 0.0, 1.0);
-        if (near_vertical) {
-            cov = clamp((nh - y) * sy + 2.0, 0.0, 1.0)
-                * clamp((y - nl) * sy + 2.0, 0.0, 1.0);
-        } else {
-            cov = mix(min(cov, lim), band, w);
-        }
+        // 触发列（一列里塞进多个振荡）整列换成包络带：折线在那种列里是随机锯齿，
+        // 包络带才是它真实的取值范围。w=0 的列保持折线描边（等宽）。
+        cov = mix(cov, band, w);
         }
     }
 
@@ -459,7 +411,6 @@ def shader_sources(expr: sp.Expr) -> tuple[str, str]:
         "@DOM@",
         f"#define DOM(u) ({dom})" if dom else "#define DOM(u) true",
     )
-    frag = frag.replace("@OPEN_LO@", _open_expr(expr, -1)).replace("@OPEN_HI@", _open_expr(expr, +1))
     pole = pole_glsl(expr, "u")
     frag = frag.replace(
         "@POLE@",
