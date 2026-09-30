@@ -31,7 +31,7 @@ def app() -> QGuiApplication:
     return application
 
 
-def _render(app: QGuiApplication, expression: str) -> QImage:
+def _render(app: QGuiApplication, expression: str | None = None) -> QImage:
     view = QQuickView()
     view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
     view.resize(WIDTH, HEIGHT)
@@ -39,8 +39,9 @@ def _render(app: QGuiApplication, expression: str) -> QImage:
     assert view.status() is QQuickView.Status.Ready, [e.toString() for e in view.errors()]
 
     root = view.rootObject()
-    # MVVM：App 侧创建 ViewModel 并注入组件（组件也会自带一个，这里走注入路径）
-    root.setProperty("controller", PlotController(expression))
+    if expression is not None:
+        # MVVM：App 侧创建 ViewModel 并注入组件（组件也会自带一个，这里走注入路径）
+        root.setProperty("controller", PlotController(expression))
     view.show()
     if not QTest.qWaitForWindowExposed(view):
         pytest.skip("没有可用的显示/GPU 场景图")
@@ -85,6 +86,12 @@ def test_smooth_curve_is_a_thin_stroke(app: QGuiApplication) -> None:
     assert not _lit(image, width // 2, height // 10), "曲线上方应是背景"
     ratio = _center_column_ratio(image)
     assert ratio < 0.05, f"中心列应只有一条细线，实际点亮 {ratio:.3f}"
+
+
+def test_component_works_without_injection(app: QGuiApplication) -> None:
+    """不注入 ViewModel 时组件自带一个（README 承诺的独立可用）。"""
+    image = _render(app)
+    assert _lit_count(image) > 100, "自带 controller 的默认表达式 sin(x) 应画出曲线"
 
 
 def test_undersampled_column_is_filled(app: QGuiApplication) -> None:
