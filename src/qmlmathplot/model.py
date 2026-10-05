@@ -267,6 +267,7 @@ float _seg_dist(vec2 p, vec2 a, vec2 b) {
 
 #define F(u) (@FUNC@)
 #define DF @DFUNC@
+#define DFP_(u) (@DFUNC_U@)
 // 定义域谓词（域外像素不画）与"极点分母"（变号 => 该区间跨过极点）
 @DOM@
 @POLE@
@@ -318,11 +319,31 @@ void main() {
                 if (prev_d * d < 0.0) { turns += 1.0; }      // 列内折返（折线方向变化）
                 prev_d = d;
                 // 跳变（极点/间断）：落差超过 4 个视口高就不连线段。
-                // 注：Desmos 会对"相邻点提示的极值/跳变"再做二分定位。实测在
-                // 8 点/列（0.25 列间距）的密度下，二分只多出约 1 个设备像素的峰顶
-                // 高度，代价却是每像素多算 8 次导数，故不做；断口另有解析极点精确兜底。
                 if (abs(d) <= 4.0 * spany) {
-                    // 跳变（极点/间断）：落差超过 4 个视口高就不连线段
+                    // 折返段（本列含一个极值）：采样点不一定落在峰顶，折线会把峰/谷
+                    // 削平（sin(150*x) 每周期仅 ~12 个采样点、sin(1/x) 亦然）。这里对
+                    // 该段做两步二分把驻点逼近到 1/4 段内，插入真正的极值顶点。
+                    // Desmos 同法："相邻点提示极值就二分"。（全段都二分太贵，实测收益
+                    // ~1px；只在折返段做，成本可控。）
+                    float da = DFP_(prev_x);
+                    float db = DFP_(xi);
+                    if (da == da && db == db && da * db < 0.0) {
+                        float lo = prev_x, hi = xi, dlo = da;
+                        for (int k = 0; k < 2; k++) {
+                            float mid = 0.5 * (lo + hi);
+                            float dm = DFP_(mid);
+                            if (dm == dm && dlo * dm <= 0.0) { hi = mid; }
+                            else { lo = mid; dlo = dm; }
+                        }
+                        float xs_ = 0.5 * (lo + hi);
+                        float ys_ = F(xs_);
+                        if (ys_ == ys_ && abs(ys_) < 1e30) {
+                            vec2 apex = vec2(xs_ * sx, ys_ * sy);
+                            dmin = min(dmin, _seg_dist(p, vec2(prev_x * sx, prev_s * sy), apex));
+                            dmin = min(dmin, _seg_dist(p, apex, vec2(xi * sx, s * sy)));
+                            continue;   // 已用带极值的两段，跳过下文的单段
+                        }
+                    }
                     dmin = min(dmin, _seg_dist(p, vec2(prev_x * sx, prev_s * sy),
                                                   vec2(xi * sx, s * sy)));
                 }
@@ -367,13 +388,12 @@ void main() {
             cov = 0.0;
         } else {
 
-        float pred = max(abs(d1) * dx * sy, 2.0);       // 导数预期跨度（像素）
-        float w = max(step(2.0, turns),                 // a) 列内折返 >= 2 次
-                      // b) 深欠采样。阈值别收太紧：陡峭的单调曲线（log 在 x→0+）
-                      // 采样跨度也会小于导数预期（比值 ~0.2），但那种列本来就该画成
-                      // 实心竖线（曲线在本列内确实扫过整段 y）；收紧到 0.1 会让它退回
-                      // 切线近似，画出一条逐渐变细消失的渐变。
-                      1.0 - smoothstep(0.15, 0.5, spread / pred));
+        float w = step(2.0, turns);                     // 只有"一列塞进多个振荡"才填带
+        // 注：曾经还有判据 (b)"实测跨度 ≪ 导数预期"。它会误伤陡峭的单调曲线
+        // （log(x) 在 x→0+：采样跨度 ~0.2×导数预期，被判成欠采样而整块填充，曲线
+        // 看着"消失"）和可分辨的极值（sin(x) 峰顶被填成色块）。多振荡已有 (a)
+        // turns>=2 兜底，(b) 删掉。深欠采样的振荡（turns 也抓不准时）由宽窗口
+        // 包络与"采样跨度<导数预期"在视觉上仍接近实心，可接受。
         w *= step(spread, 4.0 * size.y);                // 极点/真跳变：不填（否则整列涂满）
         w *= smoothstep(1.5, 4.0, spread);              // 带不足 1.5 像素就没必要填
 
@@ -401,6 +421,7 @@ def shader_sources(expr: sp.Expr) -> tuple[str, str]:
     frag = (
         FRAGMENT_TEMPLATE.replace("@FUNC@", func_glsl(expr, "u", wrap=True))
         .replace("@DFUNC@", dfunc_glsl(expr))
+        .replace("@DFUNC_U@", dfunc_glsl(expr, "u", wrap=True))
     )
     # 定义域 / 极点：宏参数带括号，和 F 同理（宏是文本替换）
     dom = domain_glsl(expr, "u")
