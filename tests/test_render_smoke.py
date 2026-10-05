@@ -181,3 +181,18 @@ def test_log_descent_is_not_cut(app: QGuiApplication) -> None:
     bottom = sum(_lit(image, x, y) for x in range(center - 4, center + 5)
                  for y in range(int(height * 0.97), height))
     assert bottom > 0, "log(x) 的下降段应一直画到视口底边"
+
+
+def test_log_descends_into_deep_views(app: QGuiApplication) -> None:
+    """log(x) 的下降段在深视口里也必须可见（x→0+ 慢发散，采样窗口够不到）。
+
+    视口下移到 y∈[-16,-12] 时，可见的曲线全落在 x∈[1e-7,6e-6]，即紧贴定义域边界
+    x=0；固定宽度的采样窗口最左只能采到 log≈-7，整段会消失。修复后由"无界边界
+    射线"沿 x=0 画出，表现为贴着 y 轴的一整列竖直下降线。
+    """
+    image = _render(app, "log(x)", pan_pixels=-2100.0)
+    height = image.height()
+    center = image.width() // 2
+    col = sum(_lit(image, x, y) for x in range(center - 3, center + 4)
+              for y in range(height))
+    assert col > 0.5 * height, f"深视口里 log(x) 应贴着 x=0 有一整列下降线，实际 {col} 像素"

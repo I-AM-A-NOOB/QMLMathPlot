@@ -127,6 +127,59 @@ def _domain_conditions(expr: sp.Expr) -> list[sp.Expr]:
     return out
 
 
+def unbounded_edges(expr: sp.Expr, name: str = "x") -> list[tuple[float, bool, bool]]:
+    """定义域边界上"函数确实趋于 ±∞"的点：[(边界x, 趋于-∞?, 趋于+∞?)]。
+
+    只有**慢发散**才需要它：log(x) 在 x→0+ 趋于 -∞，但固定宽度的采样窗口永远
+    采不到足够深的值（最左有效采样只给到 log≈-7），深视口里曲线会整段消失。
+    1/x、tan 发散快，采样值天然超出任何视口，不需要（而且 tan 的极点集是无限的，
+    解析上也枚举不完）。
+    """
+    sym = sp.Symbol(name)
+    out: list[tuple[float, bool, bool]] = []
+    for cond in _domain_conditions(expr):
+        lhs = cond.lhs if isinstance(cond, (sp.Gt, sp.Ge, sp.Ne)) else None
+        if lhs is None or sym not in lhs.free_symbols:
+            continue
+        try:
+            points = sp.solve(sp.Eq(lhs, 0), sym)
+        except Exception:  # noqa: BLE001 —— 解不出边界就放弃（退回纯采样）
+            continue
+        for point in points:
+            if not point.is_number:
+                continue
+            down = up = False
+            for side in ("+", "-"):
+                try:
+                    lim = sp.limit(expr, sym, point, side)
+                except Exception:  # noqa: BLE001
+                    continue
+                if lim is sp.oo:
+                    up = True
+                elif lim is -sp.oo:
+                    down = True
+            if down or up:
+                out.append((float(point), down, up))
+    return sorted(set(out))
+
+
+def _edge_glsl(expr: sp.Expr) -> tuple[str, str]:
+    """生成两个 GLSL 片段：边界命中查询、边界方向查询（无边界时都为空）。"""
+    edges = unbounded_edges(expr)
+    if not edges:
+        return "", ""
+    hit = "\n".join(
+        f"    if ((xa <= {x!r}) && ({x!r} <= xb)"
+        f" && abs({x!r} - 0.5 * (xa + xb)) < abs(best - 0.5 * (xa + xb))) best = {x!r};"
+        for x, _d, _u in edges
+    )
+    du = "\n".join(
+        f"    if (abs(ex - {x!r}) < 1e-9) return vec2({-1.0 if d else 0.0}, {1.0 if u else 0.0});"
+        for x, d, u in edges
+    )
+    return hit, du
+
+
 def pole_glsl(expr: sp.Expr, name: str = "x") -> str | None:
     """极点分母的乘积（GLSL）。在区间两端求值、乘积 <= 0 即跨过极点。"""
     factors = _pole_factors(expr)
@@ -265,6 +318,19 @@ float _seg_dist(vec2 p, vec2 a, vec2 b) {
     return length(p - (a + t * ab));
 }
 
+// 无界定义域边界（sympy 单侧极限注入）：log(x) 在 x→0+ 这类慢发散边界。
+// 固定宽度采样窗口采不到足够深的值，深视口里曲线会整段消失；这里把折线沿边界
+// 延伸成竖直射线到 ±1e12，任意深度都能画到，且射线严格落在边界 x 上。
+float _edge_hit(float xa, float xb) {
+    float best = 1e30;
+@EDGEHIT@
+    return best;
+}
+vec2 _edge_du(float ex) {
+@EDGEDU@
+    return vec2(0.0, 0.0);
+}
+
 #define F(u) (@FUNC@)
 #define DF @DFUNC@
 #define DFP_(u) (@DFUNC_U@)
@@ -309,8 +375,9 @@ void main() {
         float t = -1.0 + 2.0 * (float(i) + 0.5) / 8.0;      // ±1 列
         float xi = x + t * h;
         float s = F(xi);
-        // NaN/inf（域外、极点）跳过：既不参与包络，也不连线段
-        bool ok = (s == s) && (abs(s) < 1e30);
+        // 域外/NaN/inf（极点）跳过：既不参与包络，也不连线段。带 DOM 是因为
+        // GLSL 的 log(负) 等是 undefined，个别驱动会返回有限垃圾值。
+        bool ok = DOM(xi) && (s == s) && (abs(s) < 1e30);
         if (ok) {
             nl = min(nl, s);
             nh = max(nh, s);
@@ -352,6 +419,20 @@ void main() {
             prev_s = s;
         }
         prev_ok = ok;
+    }
+    // ---- 1b) 无界边界上的无穷延伸 ----
+    // 窗口跨过"函数趋于 ±∞"的定义域边界时，把折线从最近的有效采样沿边界拉一条
+    // 竖直射线到 ±1e12：慢发散函数（log(x) 在 x→0+）的下降段因此能画到任意深度。
+    // 射线落在边界 x 上（不是各列自己的采样 x），所以线宽仍然恒定、各列对齐。
+    float ex_ = _edge_hit(x - h, x + h);
+    if (ex_ < 1e29 && nl < 1e29) {
+        vec2 du_ = _edge_du(ex_);
+        if (du_.x != 0.0) {
+            dmin = min(dmin, _seg_dist(p, vec2(ex_ * sx, nl * sy), vec2(ex_ * sx, -1e12)));
+        }
+        if (du_.y != 0.0) {
+            dmin = min(dmin, _seg_dist(p, vec2(ex_ * sx, nh * sy), vec2(ex_ * sx, 1e12)));
+        }
     }
     float cov = clamp(lineWidth * 0.5 + 0.5 - dmin, 0.0, 1.0);
 
@@ -423,6 +504,8 @@ def shader_sources(expr: sp.Expr) -> tuple[str, str]:
         .replace("@DFUNC@", dfunc_glsl(expr))
         .replace("@DFUNC_U@", dfunc_glsl(expr, "u", wrap=True))
     )
+    edge_hit, edge_du = _edge_glsl(expr)
+    frag = frag.replace("@EDGEHIT@", edge_hit).replace("@EDGEDU@", edge_du)
     # 定义域 / 极点：宏参数带括号，和 F 同理（宏是文本替换）
     dom = domain_glsl(expr, "u")
     frag = frag.replace(

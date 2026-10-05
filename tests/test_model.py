@@ -102,3 +102,18 @@ def test_shader_sources_inject_domain_and_pole():
     assert "#define POLE(u) 1.0" in smooth               # 无极点 => 乘积恒正，不会误判
 
 
+
+
+def test_unbounded_edges():
+    """哪些定义域边界需要"无穷延伸"：只有慢发散的那些。
+
+    log(x) 在 x→0+ 趋于 -∞，但采样窗口固定宽度、采不到那么深 → 深视口里曲线会整段
+    消失，必须靠解析出的边界射线补上。sqrt(x) 在 0 有界（0），sin(1/x) 在 0 无极限，
+    都不需要；1/x 快发散，采样天然够深，但解析上标出双方向也无害。
+    """
+    assert model.unbounded_edges(sp.log(X)) == [(0.0, True, False)]
+    assert model.unbounded_edges(sp.sqrt(X)) == []
+    assert model.unbounded_edges(sp.sin(1 / X)) == []
+    assert model.unbounded_edges(X**2) == []
+    assert sorted(model.unbounded_edges(1 / X)) == [(0.0, True, True)]
+    assert model.unbounded_edges(1 / X**2) == [(0.0, False, True)]
