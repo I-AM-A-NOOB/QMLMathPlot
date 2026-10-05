@@ -141,6 +141,10 @@ def unbounded_edges(expr: sp.Expr, name: str = "x") -> list[tuple[float, bool, b
         lhs = cond.lhs if isinstance(cond, (sp.Gt, sp.Ge, sp.Ne)) else None
         if lhs is None or sym not in lhs.free_symbols:
             continue
+        # 只分析多项式边界（x=0、x-1=0 这类）。非多项式的（tan 的 cos(x)=0）用
+        # solve+limit 要 ~94ms，而且那些函数发散快、采样天然够深，不需要这条射线。
+        if not lhs.is_polynomial(sym):
+            continue
         try:
             points = sp.solve(sp.Eq(lhs, 0), sym)
         except Exception:  # noqa: BLE001 —— 解不出边界就放弃（退回纯采样）
@@ -196,9 +200,9 @@ def domain_glsl(expr: sp.Expr, name: str = "x") -> str | None:
     return " && ".join(f"({func_glsl(c, name)})" for c in conds)
 
 
-def dfunc_glsl(expr: sp.Expr, name: str = "x", wrap: bool = False) -> str:
-    """f'(x) 的 GLSL 文本。wrap 语义同 func_glsl。"""
-    return func_glsl(sp.diff(expr, sp.Symbol("x")), name, wrap=wrap)
+def dfunc_glsl(expr: sp.Expr, name: str = "x") -> str:
+    """f'(x) 的 GLSL 文本（描边判据与极点判据要用）。"""
+    return func_glsl(sp.diff(expr, sp.Symbol("x")), name)
 
 
 class ViewRect:
@@ -280,17 +284,26 @@ void main() {
 }
 """
 
-# 隐式（signed-distance）绘图 + 欠采样包络带 —— 视觉上"完美"的两块拼图：
+# 隐式（signed-distance）绘图 —— 两块拼图：
 #
-#   1) 描边：每像素算它到曲线的一阶屏幕空间距离（用 f 和 f'），
-#      得到等宽、抗锯齿的线；陡峭段也不会变粗或断裂。
-#   2) 包络带：当一个像素的 x 区间里塞进了多个振荡（局部周期 < 1 像素）时，
-#      逐像素距离已经没有意义（画出来是摩尔纹/随机锯齿）。此时改为把
-#      [min,max] 区间填成实心带 —— 对 sin(1/x) 就等价于填它的真实 ±1 包络。
-#      判据是"列内全变差 tv >> 包络跨度 spread"（曲线在列内折返了）。
+#   1) 描边：每像素算它到折线（相邻采样点连成的线段）的屏幕空间距离，得到等宽、
+#      抗锯齿的线；陡峭段也不会变粗或断裂。用"到线段的距离"而不是"到切线的距离"，
+#      后者在强弯曲处会高估距离，线会变细甚至消失（Desmos 的做法）。
+#   2) 包络带：一个像素的 x 区间里塞进多个振荡（局部周期 < 1 像素）时，逐像素
+#      距离已经没有意义（画出来是摩尔纹/随机锯齿）。此时改把 [min,max] 填成实心带
+#      —— 对 sin(1/x) 就等于填它真实的 ±1 包络。
 #
-# 表达式用宏而不是用户函数：一个像素里要对同一个 x 求值 9 次（描边 1 次 + 包络
-# 判据 8 次），宏是预处理展开、没有函数调用语义，正好合适。
+# 何时算"塞进了多个振荡"（都在 ±1 列窄窗口内；普通像素采 8 点，带区补到 16 点）：
+#   a) 列内折返 >= 2 次：一列里曲线上下折返多次 => 有多个振荡（只折返 1 次是
+#      可分辨的极值，照常画线）；
+#   d) 导数预期 |f'|·dx 远超实测跨度 spread（硬阈值 16 倍且 pred >= 4px）：
+#      振荡周期远小于一列时采样会漏判（8 点可能恰好呈单调），这条不依赖采样
+#      随机性，兜住它。
+# 带的上/下边缘另用 ±8 列、16 点的宽窗口估包络，避免边缘咬出暗缝/台阶。
+# 极点（分母变号且值远超视口）单独留断口，不画 +∞/-∞ 的竖直连线。
+#
+# 表达式用宏而不是用户函数：一个像素里对同一个 x 要算 1 + 8 + 16 = 25 次（描边
+# 采样 + 窄窗口 + 宽窗口），宏是预处理展开、没有函数调用语义，正好合适。
 # （曾经把"带用户函数的版本在 Intel D3D11 上挂死"记在这里——那是误诊：真因是
 #  qsb 把片元源码按 .glsl 后缀烘成了顶点着色器，见 qsb.bake 的注释。）
 FRAGMENT_TEMPLATE = """#version 440
@@ -333,7 +346,6 @@ vec2 _edge_du(float ex) {
 
 #define F(u) (@FUNC@)
 #define DF @DFUNC@
-#define DFP_(u) (@DFUNC_U@)
 // 定义域谓词（域外像素不画）与"极点分母"（变号 => 该区间跨过极点）
 @DOM@
 @POLE@
@@ -371,15 +383,20 @@ void main() {
     bool prev_ok = false;
     vec2 p = vec2(x * sx, y * sy);          // 屏幕空间（平移不影响距离）
     float dmin = 1e30;
-    // 16 个点（±1 列，间距 0.125 列）：折返次数要用来判"亚像素振荡"，8 个点时
-    // 随机采样有 ~11% 的列会数出 <2 次（漏判），残留竖条；16 点降到 ~0.05%。
-    for (int i = 0; i < 16; i++) {
-        float t = -1.0 + 2.0 * (float(i) + 0.5) / 16.0;     // ±1 列
+    // 8 个点，取 16 点栅格（±1 列，间距 0.125 列）的**偶数位**：普通像素只算这 8 个，
+    // 带区里再补奇数位合成 16 点来数折返。8 点时随机采样约 11% 的列会漏判折返 ->
+    // 残留竖条；而全局算 16 点是每像素多 8 次 F 求值，没必要为少数列付。
+    float smp[8];
+    bool smp_ok[8];
+    for (int i = 0; i < 8; i++) {
+        float t = -1.0 + (float(i) + 0.25) / 4.0;           // 16 点栅格的偶数位
         float xi = x + t * h;
         float s = F(xi);
         // 域外/NaN/inf（极点）跳过：既不参与包络，也不连线段。带 DOM 是因为
         // GLSL 的 log(负) 等是 undefined，个别驱动会返回有限垃圾值。
         bool ok = DOM(xi) && (s == s) && (abs(s) < 1e30);
+        smp[i] = s;
+        smp_ok[i] = ok;
         if (ok) {
             nl = min(nl, s);
             nh = max(nh, s);
@@ -387,38 +404,14 @@ void main() {
                 float d = s - prev_s;
                 if (prev_d * d < 0.0) { turns += 1.0; }      // 列内折返（折线方向变化）
                 prev_d = d;
-                {
-                    // 说明：这里不再用"落差 > 4 个视口高就断线"的跳变判据。它是**像素/
-                    // 视口相对量**，放大后会把合法的陡峭段也切断（实测中等放大档的
-                    // 竖条因此断续）；而极点已由解析断口（分母变号、世界单位）单独
-                    // 负责，域外采样也已被 ok 过滤掉，不需要再猜。
-                    // 折返段（本列含一个极值）：采样点不一定落在峰顶，折线会把峰/谷
-                    // 削平（sin(150*x) 每周期仅 ~12 个采样点、sin(1/x) 亦然）。这里对
-                    // 该段做两步二分把驻点逼近到 1/4 段内，插入真正的极值顶点。
-                    // Desmos 同法："相邻点提示极值就二分"。（全段都二分太贵，实测收益
-                    // ~1px；只在折返段做，成本可控。）
-                    float da = DFP_(prev_x);
-                    float db = DFP_(xi);
-                    if (da == da && db == db && da * db < 0.0) {
-                        float lo = prev_x, hi = xi, dlo = da;
-                        for (int k = 0; k < 2; k++) {
-                            float mid = 0.5 * (lo + hi);
-                            float dm = DFP_(mid);
-                            if (dm == dm && dlo * dm <= 0.0) { hi = mid; }
-                            else { lo = mid; dlo = dm; }
-                        }
-                        float xs_ = 0.5 * (lo + hi);
-                        float ys_ = F(xs_);
-                        if (ys_ == ys_ && abs(ys_) < 1e30) {
-                            vec2 apex = vec2(xs_ * sx, ys_ * sy);
-                            dmin = min(dmin, _seg_dist(p, vec2(prev_x * sx, prev_s * sy), apex));
-                            dmin = min(dmin, _seg_dist(p, apex, vec2(xi * sx, s * sy)));
-                            continue;   // 已用带极值的两段，跳过下文的单段
-                        }
-                    }
-                    dmin = min(dmin, _seg_dist(p, vec2(prev_x * sx, prev_s * sy),
-                                                  vec2(xi * sx, s * sy)));
-                }
+                // 折线段：直接连相邻采样点。两点历史坑记在这里：
+                //  * 不再用"落差 > 4 个视口高就断线"的跳变判据——那是像素/视口相对量，
+                //    放大后会把合法陡峭段也切断（竖条断续）。极点已由解析断口（分母
+                //    变号、世界单位）负责，域外采样也被 ok 过滤掉了。
+                //  * 不再对折返段做"二分求极值"：实测峰顶只多 ~1 个设备像素，而它在
+                //    展开的采样循环里内联 3 次导数表达式，明显拖慢着色器编译（首帧）。
+                dmin = min(dmin, _seg_dist(p, vec2(prev_x * sx, prev_s * sy),
+                                              vec2(xi * sx, s * sy)));
             }
             prev_x = xi;
             prev_s = s;
@@ -474,21 +467,45 @@ void main() {
             cov = 0.0;
         } else {
 
+        // 折返计数补采样：补上 16 点栅格的奇数位，与窄窗口的偶数位交错合成 16 点。
+        // 只在这里算——需要它准的正是带区，其余像素省下这 8 次 F 求值。
+        float turns16 = 0.0;
+        {
+            bool have = false;
+            float ps = 0.0;
+            float pd = 0.0;
+            for (int k = 0; k < 16; k++) {
+                float s;
+                bool ok;
+                if (k - (k / 2) * 2 == 0) {             // 偶数位：复用窄窗口的采样
+                    s = smp[k / 2];
+                    ok = smp_ok[k / 2];
+                } else {                                 // 奇数位：补采
+                    float xi = x + (-1.0 + (float(k) + 0.5) / 8.0) * h;
+                    s = F(xi);
+                    ok = DOM(xi) && (s == s) && (abs(s) < 1e30);
+                }
+                if (ok) {
+                    if (have) {
+                        float d = s - ps;
+                        if (pd * d < 0.0) { turns16 += 1.0; }
+                        pd = d;
+                    }
+                    ps = s;
+                    have = true;
+                }
+            }
+        }
         float pred = max(abs(d1) * dx * sy, 2.0);       // 导数预期跨度（像素）
-        float w = step(2.0, turns);                     // a) 列内折返 >= 2 次
-        // d) 亚像素振荡（不依赖采样的随机性）：一列内曲线按导数要走的距离 pred 远超它
-        //    实测的值域跨度 spread —— 振荡周期远小于一列，采样必然漏判（16 点也可能
-        //    恰好呈单调）。阈值 16 是量出来的：log 这类单调凹曲线该比值 ~3.6、tan/1/x
-        //    的分支 <1，真正亚像素的 sin(1/x) 到 ~58。pred >= 4px 的附加约束排除
-        //    "可分辨极值"（峰顶 pred≈0、spread≈0，比值会误判）。
+        float w = step(2.0, turns16);                   // a) 列内折返 >= 2 次（16 点）
+        // d) 阈值 16 是量出来的：log 这类单调凹曲线该比值 ~3.6、tan/1/x 的分支 <1，
+        //    真正亚像素的 sin(1/x) 到 ~58；pred >= 4px 排除"可分辨极值"（峰顶
+        //    pred≈0、spread≈0，比值会误判）。
         w = max(w, step(16.0 * spread + 1e-6, pred) * step(4.0, pred));
-        // 两个历史坑：
-        //  * 判据 (b)"实测跨度 ≪ 导数预期"曾用 smoothstep(0.15,0.5,…) 软阈值，误伤
-        //    单调陡段（log 比值 ~0.28 → 被整块填充）与可分辨极值。(d) 改用硬阈值
-        //    1/16 且要求 pred>=4px，才把两者分开。
-        //  * 闸门 step(spread, 4*size.y) 是**像素单位**：放大到视口跨度 < 0.5 时
-        //    sin(1/x) 的值域 ±1 换算成像素就超过 4 个视口高，带被整个关掉 → 满屏
-        //    竖条。极点改由解析断口（世界单位、分母变号）负责，不再用像素跨度猜。
+        // 历史坑：曾用判据 (b)"实测跨度 ≪ 导数预期"的软阈值 smoothstep(0.15,0.5,…)，
+        // 误伤单调陡段（log 比值 ~0.28 → 整块填充）与可分辨极值；(d) 的硬阈值 1/16
+        // 才把两者分开。另一处是像素单位的闸门 step(spread, 4*size.y)：视口跨度 < 0.5
+        // 时 sin(1/x) 的 ±1 换算成像素超过 4 个视口高，带被整个关掉 → 满屏竖条。
         w *= smoothstep(1.5, 4.0, spread);              // 带不足 1.5 像素就没必要填
 
 
@@ -515,7 +532,6 @@ def shader_sources(expr: sp.Expr) -> tuple[str, str]:
     frag = (
         FRAGMENT_TEMPLATE.replace("@FUNC@", func_glsl(expr, "u", wrap=True))
         .replace("@DFUNC@", dfunc_glsl(expr))
-        .replace("@DFUNC_U@", dfunc_glsl(expr, "u", wrap=True))
     )
     edge_hit, edge_du = _edge_glsl(expr)
     frag = frag.replace("@EDGEHIT@", edge_hit).replace("@EDGEDU@", edge_du)
