@@ -214,3 +214,24 @@ def test_extreme_zoom_of_oscillation_fills_solid(app: QGuiApplication) -> None:
     counts = [sum(_lit(image, x, y) for y in range(height)) for x in range(image.width())]
     filled = sum(1 for c in counts if c > 0.5 * height) / len(counts)
     assert filled > 0.5, f"极限放大应填成实心（亚像素振荡），实际填满列比例 {filled:.1%}"
+
+
+def test_steep_segments_are_not_fragmented(app: QGuiApplication) -> None:
+    """陡峭段不能被"落差阈值"当成跳变切断（放大后竖条必须是连续的一整条）。
+
+    跳变断线曾经用"相邻采样落差 > 4 个视口高"——那是像素/视口相对量，放大后合法的
+    陡峭段也会被切断，表现为断续的竖条。极点已由解析断口负责，这条判据已移除。
+    """
+    image = _render(app, "sin(1/x)", zoom_steps=30)
+    height = image.height()
+    worst = 1.0
+    for x in range(image.width()):
+        ys = [y for y in range(height) if _lit(image, x, y)]
+        if not ys:
+            continue
+        best = cur = 1
+        for i in range(1, len(ys)):
+            cur = cur + 1 if ys[i] == ys[i - 1] + 1 else 1
+            best = max(best, cur)
+        worst = min(worst, best / len(ys))
+    assert worst > 0.9, f"竖条应连续（最长连续段/点亮行数），最差列只有 {worst:.2f}"
