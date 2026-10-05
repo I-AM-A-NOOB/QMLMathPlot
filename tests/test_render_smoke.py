@@ -8,27 +8,18 @@
 
 from __future__ import annotations
 
-import sys
-
 import pytest
 from PySide6.QtCore import QEventLoop, QTimer, QUrl
 from PySide6.QtGui import QGuiApplication, QImage
 from PySide6.QtQuick import QQuickView
 from PySide6.QtTest import QTest
 
-from qmlmathplot import PlotController, qml_component_path, register_qml_types
+from qmlmathplot import PlotController, qml_component_path
 
 pytestmark = pytest.mark.gui
 
 WIDTH, HEIGHT = 900, 600
 BACKGROUND = (0x14, 0x14, 0x1E)  # MathPlot.qml 的 backgroundColor
-
-
-@pytest.fixture(scope="module")
-def app() -> QGuiApplication:
-    application = QGuiApplication.instance() or QGuiApplication(sys.argv[:1])
-    register_qml_types()
-    return application
 
 
 def _render(app: QGuiApplication, expression: str | None = None,

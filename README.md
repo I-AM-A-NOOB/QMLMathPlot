@@ -4,12 +4,42 @@
 signed-distance 模型）：每帧代价 ∝ 像素数、与函数频率无关，振荡函数（如
 `sin(1/x)`）不会因为折线混叠把帧率拖垮，也不需要在 CPU 上采样。
 
-```
-python main.py --backend d3d11 "sin(1/x)"     # 最小验证窗口（拖拽平移 / 滚轮缩放）
-python main.py "exp(-x*x)*sin(10*x)"          # 不指定后端 = Qt 默认后端
+## 快速开始
+
+QtWidgets 布局里一行（最省事）：
+
+```python
+from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget
+from qmlmathplot import MathPlotWidget
+
+app = QApplication([])
+window = QWidget()
+box = QVBoxLayout(window)
+plot = MathPlotWidget("sin(1/x)")        # 拖拽平移 / 滚轮以光标为锚点缩放
+box.addWidget(plot)
+window.show()
+app.exec()
 ```
 
+独立窗口 / 命令行：
+
+```
+uv run qmlmathplot --backend d3d11 "sin(1/x)"   # 等价于 python examples/minimal.py …
+python examples/explorer.py                     # 输入框 + 其他控件共存验证
+```
+
+示例都在 `examples/`：`minimal.py` 是最小窗口；`explorer.py` 刻意把绘图控件放进
+"会抢事件"的环境（输入框、QScrollArea、QSplitter、覆盖层），用来验证控件不打架。
+
 ## 嵌入到 App
+
+**QtWidgets**：`MathPlotWidget` 是普通 `QWidget`（内部用 `QQuickWidget` 把 QML 组件
+桥进 widgets 世界，渲染到自己的 FBO，因此能和兄弟控件叠放/共处）。属性与方法：
+`expression` / `error` / `line_width` / `curve_color` / `background_color`、
+`view_bounds()` / `reset_view()` / `zoom(delta, u, v)` / `pan_pixels(dx, dy)`，
+信号 `expressionChanged` / `errorChanged`，底层 ViewModel 由 `.controller` 暴露。
+
+**纯 QML（Qt Quick）**：注入 ViewModel 即可（MVVM，见下）。
 
 ```python
 from PySide6.QtCore import QUrl
@@ -60,7 +90,9 @@ MathPlot {                       // 组件：Inject ViewModel，或让它自带�
 | ViewModel | `src/qmlmathplot/viewmodel.py` | `PlotController`：expression / view / 着色器 URL / error；`qml_component_path()` 给出组件路径 |
 | View | `src/qmlmathplot/qml/MathPlot.qml` | 纯 QML：`ShaderEffect` + 鼠标平移/滚轮缩放 |
 | 烘焙 | `src/qmlmathplot/qsb.py` | GLSL → `.qsb`（PySide6 自带 `qsb.exe`），按源码 hash 缓存 |
-| 入口 | `main.py` / `src/qmlmathplot/app.py` | 组件封装的最小验证窗口 |
+| 控件 | `src/qmlmathplot/widget.py` | `MathPlotWidget`：QQuickWidget 桥接，直接进 QtWidgets 布局 |
+| 入口 | `src/qmlmathplot/app.py` | 命令行/独立窗口（`qmlmathplot` 脚本、`examples/minimal.py`） |
+| 示例 | `examples/` | `minimal.py`（最小）、`explorer.py`（输入框 + 控件共存验证） |
 
 ## 算法（视觉上"完美"的两块拼图）
 
@@ -90,6 +122,10 @@ QSG_RHI_BACKEND=opengl uv run pytest -m gui
   GLSL/HLSL/MSL/SPIR-V 四个后端目标。
 - `test_render_smoke.py`：开窗渲染后取像素，验证细线形态、`sin(1/x)` 填 ±1 包络、
   中心列外侧不得出现 |y|>1 的伪影、极点不连线、定义域外不画。
+- `test_widget.py`：`MathPlotWidget` 与邻居控件的共存——布局里出图、换表达式/非法
+  表达式保留上一份图形、**滚动区里的滚轮被绘图区吃掉（缩放而不是滚动父级）**、
+  绘图区不进 Tab 焦点链。`conftest.py` 提供会话级 `QApplication`（QtWidgets 需要，
+  且一个进程只能有一个）。
 
 ## sin(1/x) 奇点附近的三个坑（已修，别再犯）
 

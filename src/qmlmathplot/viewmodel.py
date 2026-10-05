@@ -50,7 +50,9 @@ class PlotController(QObject):
         self.expressionChanged.emit()
         self._compile(source)
 
-    expression = Property(str, _get_expression, _set_expression, notify=expressionChanged)
+    # 注解写值类型（PySide6 的惯用法）：Property 是描述符，不注解的话类型检查器
+    # 只看到 Property 对象，Python 侧读写都会被判成类型错误。
+    expression: str = Property(str, _get_expression, _set_expression, notify=expressionChanged)
 
     # ------------------------------------------------------------ 着色器 URL
     def _get_vertex_shader(self) -> QUrl:
@@ -59,13 +61,13 @@ class PlotController(QObject):
     def _get_fragment_shader(self) -> QUrl:
         return self._fragment
 
-    vertexShader = Property(QUrl, _get_vertex_shader, notify=shadersChanged)
-    fragmentShader = Property(QUrl, _get_fragment_shader, notify=shadersChanged)
+    vertexShader: QUrl = Property(QUrl, _get_vertex_shader, notify=shadersChanged)
+    fragmentShader: QUrl = Property(QUrl, _get_fragment_shader, notify=shadersChanged)
 
     def _get_error(self) -> str:
         return self._error
 
-    error = Property(str, _get_error, notify=errorChanged)
+    error: str = Property(str, _get_error, notify=errorChanged)
 
     def _compile(self, source: str) -> None:
         """表达式 -> GLSL -> .qsb；失败时保留上一份可用着色器并把原因写进 error。"""
@@ -88,7 +90,7 @@ class PlotController(QObject):
     def _get_view(self) -> QVector4D:
         return QVector4D(*self._view.as_tuple())
 
-    view = Property(QVector4D, _get_view, notify=viewChanged)
+    view: QVector4D = Property(QVector4D, _get_view, notify=viewChanged)
 
     @Slot(float, float, float)
     def zoom(self, delta: float, u: float, v: float) -> None:
