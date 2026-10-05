@@ -32,7 +32,7 @@ def app() -> QGuiApplication:
 
 
 def _render(app: QGuiApplication, expression: str | None = None,
-            pan_pixels: float = 0.0) -> QImage:
+            pan_pixels: float = 0.0, zoom_steps: int = 0) -> QImage:
     view = QQuickView()
     view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
     view.resize(WIDTH, HEIGHT)
@@ -49,6 +49,9 @@ def _render(app: QGuiApplication, expression: str | None = None,
         pytest.skip("没有可用的显示/GPU 场景图")
     if pan_pixels and controller is not None:
         controller.panPixels(0.0, pan_pixels, float(WIDTH), float(HEIGHT))
+    if zoom_steps and controller is not None:
+        for _ in range(zoom_steps):
+            controller.zoom(120.0, 0.5, 0.5)   # 每档跨度 ×0.9
 
     for _ in range(20):
         app.processEvents()
@@ -196,3 +199,18 @@ def test_log_descends_into_deep_views(app: QGuiApplication) -> None:
     col = sum(_lit(image, x, y) for x in range(center - 3, center + 4)
               for y in range(height))
     assert col > 0.5 * height, f"深视口里 log(x) 应贴着 x=0 有一整列下降线，实际 {col} 像素"
+
+
+def test_extreme_zoom_of_oscillation_fills_solid(app: QGuiApplication) -> None:
+    """极限放大 sin(1/x)：振荡远快于采样时该整屏实心，而不是满屏竖条。
+
+    带区触发判据曾经用"像素跨度 > 4 个视口高"当闸门防极点涂满——但它是像素单位，
+    放大到视口跨度 < 0.5 时 sin(1/x) 的值域 ±1 换算成像素就超过闸门，带被整个关掉，
+    只剩折线锯齿。实测（放大档 = 跨度 ×0.9^档）：修复前 90 档只有 0.15% 列有亮、
+    120 档完全空白；修复后 90/120 档约 95% 列填满。
+    """
+    image = _render(app, "sin(1/x)", zoom_steps=90)
+    height = image.height()
+    counts = [sum(_lit(image, x, y) for y in range(height)) for x in range(image.width())]
+    filled = sum(1 for c in counts if c > 0.5 * height) / len(counts)
+    assert filled > 0.5, f"极限放大应填成实心（亚像素振荡），实际填满列比例 {filled:.1%}"
