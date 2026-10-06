@@ -1,9 +1,10 @@
-"""最小示例：开一个独立窗口。
+"""Minimal example: open a standalone window.
 
     python examples/minimal.py --backend d3d11 "sin(1/x)"
-    uv run qmlmathplot "tan(x)"          # 等价（命令行入口）
+    uv run qmlmathplot "tan(x)"          # equivalent (command-line entry point)
 
-左键拖拽平移；滚轮以光标为锚点缩放。实现见 ``qmlmathplot.app``。
+Left-drag to pan; the wheel zooms anchored at the cursor. See ``qmlmathplot.app``
+for the implementation.
 """
 
 import sys

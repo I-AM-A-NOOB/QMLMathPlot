@@ -1,12 +1,14 @@
-"""Model 层：表达式 -> GLSL、着色器源码模板、视图矩形（平移/缩放）数学。
+"""Model layer: expression -> GLSL, shader source templates, view-rect (pan/zoom) math.
 
-这一层不 import 任何 Qt，可以脱离 GUI 单独测试；ViewModel（PlotController）
-和 View（QML 的 ShaderEffect）都建立在它上面。
+This layer imports no Qt and can be tested standalone without a GUI; both the ViewModel
+(PlotController) and the View (the QML ShaderEffect) build on it.
 
-绘图模型是**隐式（signed-distance）**：片元着色器逐像素算"到曲线的一阶屏幕
-空间距离"，每帧代价 ∝ 像素数、与函数频率无关（振荡函数不会因为混叠把帧率拖
-垮）；一个像素里塞进多个振荡的列改填 [min,max] 包络带 —— 见 FRAGMENT_TEMPLATE
-上面的注释。
+The drawing model is **implicit (signed-distance)**: the fragment shader computes, per
+pixel, the first-order screen-space distance "to the curve". Cost per frame is
+proportional to the pixel count and independent of function frequency (oscillatory
+functions cannot drag the frame rate down through aliasing); a column that packs several
+oscillations into one pixel is filled as a [min,max] envelope band instead — see the
+comment above FRAGMENT_TEMPLATE.
 """
 
 from __future__ import annotations
@@ -27,19 +29,20 @@ __all__ = [
     "shader_sources",
 ]
 
-# 默认视图（世界坐标）
+# Default view (world coordinates)
 DEFAULT_VIEW = (-6.0, 6.0, -2.0, 2.0)
 
 
 class _PlotGLSLPrinter(GLSLPrinter):
-    """GLSL printer 的补丁：
+    """Patch for the GLSL printer:
 
-    1. 小整数次幂不生成 pow()。GLSL 的 pow(x, y) 在 x < 0 时未定义（不少驱动直接
-       给 NaN），而 sympy 会把 x**2 印成 pow(x, 2.0)。这里改成连乘，顺带更快。
-    2. 可选把某个符号印成 ``(name)``：表达式会内联进 ``#define F(u) (...)``，
-       宏是**文本替换**，``1.0/u`` 遇到 ``F(x - h)`` 会变成 ``1.0/x - h``（少一层
-       括号就改了语义）。实测这个括号缺失让 8 个采样点全算成 ``1.0/x - h_k``，
-       包络判据因此永远拿不到有效采样。
+    1. Small integer powers do not emit pow(). GLSL's pow(x, y) is undefined for x < 0
+       (many drivers simply return NaN), yet sympy prints x**2 as pow(x, 2.0). Emit
+       repeated multiplication here instead; it is also faster.
+    2. Optionally print a symbol as ``(name)``: expressions are inlined into
+       ``#define F(u) (...)``, and the macro is **text substitution**, so ``1.0/u``
+       with ``F(x - h)`` would become ``1.0/x - h`` — one missing pair of parentheses
+       changes the semantics.
     """
 
     def __init__(self, wrap_symbol: str | None = None) -> None:
@@ -56,15 +59,17 @@ class _PlotGLSLPrinter(GLSLPrinter):
             n = int(exp)
             base = self.parenthesize(expr.base, PRECEDENCE["Mul"])
             product = "*".join([base] * abs(n))
-            # 一律加括号：产物可能落在分母里（sympy 会把 x**-2 拆成 1/x**2），
-            # 不加括号会印出 "a/x*x" 这种被解析成 (a/x)*x 的错式子
+            # Always parenthesize: the product may end up inside a denominator (sympy
+            # splits x**-2 into 1/x**2), and without parentheses it prints "a/x*x", which
+            # parses as (a/x)*x.
             return f"(1.0/({product}))" if n < 0 else f"({product})"
         return super()._print_Pow(expr)
 
 
-# GPU 的 sin/cos 在参数很大时不可靠（实测 Intel D3D11：sin(1/x) 的 8 个采样点几乎
-# 相同、cos(1/x) 返回近 0 的垃圾），而 sin(1/x) 这类函数在奇点附近参数能到几百上千。
-# 先把实参折进 [0, 2π) 再调内置函数，小参数上各家实现都是准的。
+# The GPU's built-in sin/cos are unreliable for large arguments (measured on Intel D3D11),
+# while functions like sin(1/x) can reach arguments in the hundreds near a singularity.
+# Fold the argument into [0, 2π) before calling the built-in; all implementations are
+# accurate for small arguments.
 _SIN_COS = re.compile(r"(?<![A-Za-z0-9_])(sin|cos)\(")
 
 
@@ -73,11 +78,12 @@ def _wrap_trig(text: str) -> str:
 
 
 def func_glsl(expr: sp.Expr, name: str = "x", wrap: bool = False) -> str:
-    """把 sympy 表达式印成 GLSL 表达式（返回 f(x) 的右值文本）。
+    """Print a sympy expression as a GLSL expression (returns the right-hand side of f(x)).
 
-    name 用于改名：着色器里 ``#define F(u) (...)`` 要把变量印成 u。
-    wrap=True 时把该变量印成 ``(u)``，供宏文本替换安全使用（见 _PlotGLSLPrinter）。
-    sin/cos 会被包成模板里的 SIN/COS（带参数归约，见模板注释）。
+    name renames the variable: in the shader ``#define F(u) (...)`` needs it printed as u.
+    wrap=True prints that variable as ``(u)``, making it safe for macro text substitution
+    (see _PlotGLSLPrinter). sin/cos are wrapped as the template's SIN/COS (with argument
+    reduction; see the template comment).
     """
     if name != "x":
         expr = expr.subs(sp.Symbol("x"), sp.Symbol(name))
@@ -86,10 +92,12 @@ def func_glsl(expr: sp.Expr, name: str = "x", wrap: bool = False) -> str:
 
 
 def _pole_factors(expr: sp.Expr) -> list[sp.Expr]:
-    """收集"极点分母"：这些因子变号的地方就是函数从 +∞ 跳到 -∞ 的地方。
+    """Collect "pole denominators": where such a factor changes sign, the function jumps
+    from +∞ to -∞.
 
-    只收会**变号**的因子（x、cos(x)…）：1/x² 这种不变号的极点不需要断口——
-    两侧都趋向 +∞，画出来本来就自然相连。
+    Only **sign-changing** factors (x, cos(x), …) are collected: a pole like 1/x² does not
+    change sign and needs no gap — both sides tend to +∞, so drawing connects them
+    naturally.
     """
     out: list[sp.Expr] = []
     if isinstance(expr, sp.Pow) and expr.exp.is_number and expr.exp.is_negative:
@@ -104,10 +112,11 @@ def _pole_factors(expr: sp.Expr) -> list[sp.Expr]:
 
 
 def _domain_conditions(expr: sp.Expr) -> list[sp.Expr]:
-    """收集定义域条件（sympy 表达式，需恒为真才算在定义域内）。
+    """Collect domain conditions (sympy expressions; each must hold identically to be
+    inside the domain).
 
-    覆盖常见的域边界：分母不为 0、log 的实参 > 0、sqrt 的实参 >= 0、
-    asin/acos 的实参 ∈ [-1,1]、tan/sec 的 cos != 0、cot/csc 的 sin != 0。
+    Covers the common domain boundaries: denominator != 0, log argument > 0, sqrt argument
+    >= 0, asin/acos argument ∈ [-1,1], cos != 0 for tan/sec, sin != 0 for cot/csc.
     """
     out: list[sp.Expr] = []
     if isinstance(expr, sp.Pow) and expr.exp.is_number and expr.exp.is_negative:
@@ -128,12 +137,14 @@ def _domain_conditions(expr: sp.Expr) -> list[sp.Expr]:
 
 
 def unbounded_edges(expr: sp.Expr, name: str = "x") -> list[tuple[float, bool, bool]]:
-    """定义域边界上"函数确实趋于 ±∞"的点：[(边界x, 趋于-∞?, 趋于+∞?)]。
+    """Points on a domain boundary where the function genuinely tends to ±∞:
+    [(boundary x, tends to -∞?, tends to +∞?)].
 
-    只有**慢发散**才需要它：log(x) 在 x→0+ 趋于 -∞，但固定宽度的采样窗口永远
-    采不到足够深的值（最左有效采样只给到 log≈-7），深视口里曲线会整段消失。
-    1/x、tan 发散快，采样值天然超出任何视口，不需要（而且 tan 的极点集是无限的，
-    解析上也枚举不完）。
+    Only **slow divergence** needs this: log(x) tends to -∞ as x→0+, but a fixed-width
+    sampling window can never sample deep enough, so the curve vanishes entirely in a deep
+    viewport. 1/x and tan diverge fast; their sampled values naturally exceed any viewport,
+    so they need no ray (and tan's pole set is infinite, hence not enumerable analytically
+    either).
     """
     sym = sp.Symbol(name)
     out: list[tuple[float, bool, bool]] = []
@@ -141,13 +152,14 @@ def unbounded_edges(expr: sp.Expr, name: str = "x") -> list[tuple[float, bool, b
         lhs = cond.lhs if isinstance(cond, (sp.Gt, sp.Ge, sp.Ne)) else None
         if lhs is None or sym not in lhs.free_symbols:
             continue
-        # 只分析多项式边界（x=0、x-1=0 这类）。非多项式的（tan 的 cos(x)=0）用
-        # solve+limit 要 ~94ms，而且那些函数发散快、采样天然够深，不需要这条射线。
+        # Only polynomial boundaries (x=0, x-1=0, …) are analysed. Non-polynomial ones
+        # (cos(x)=0 for tan) cost ~94ms with solve+limit, and those functions diverge fast
+        # so sampling is naturally deep enough without this ray.
         if not lhs.is_polynomial(sym):
             continue
         try:
             points = sp.solve(sp.Eq(lhs, 0), sym)
-        except Exception:  # noqa: BLE001 —— 解不出边界就放弃（退回纯采样）
+        except Exception:  # noqa: BLE001 — give up if it can't be solved
             continue
         for point in points:
             if not point.is_number:
@@ -168,7 +180,8 @@ def unbounded_edges(expr: sp.Expr, name: str = "x") -> list[tuple[float, bool, b
 
 
 def _edge_glsl(expr: sp.Expr) -> tuple[str, str]:
-    """生成两个 GLSL 片段：边界命中查询、边界方向查询（无边界时都为空）。"""
+    """Generate two GLSL fragments: the boundary-hit query and the boundary-direction query
+    (both empty when there is no boundary)."""
     edges = unbounded_edges(expr)
     if not edges:
         return "", ""
@@ -185,7 +198,8 @@ def _edge_glsl(expr: sp.Expr) -> tuple[str, str]:
 
 
 def pole_glsl(expr: sp.Expr, name: str = "x") -> str | None:
-    """极点分母的乘积（GLSL）。在区间两端求值、乘积 <= 0 即跨过极点。"""
+    """Product of the pole denominators (GLSL). Evaluated at both interval ends; a product
+    <= 0 means the interval crosses a pole."""
     factors = _pole_factors(expr)
     if not factors:
         return None
@@ -193,7 +207,8 @@ def pole_glsl(expr: sp.Expr, name: str = "x") -> str | None:
 
 
 def domain_glsl(expr: sp.Expr, name: str = "x") -> str | None:
-    """定义域谓词（GLSL 关系表达式）。无法分析时返回 None。"""
+    """Domain predicate (a GLSL relational expression). Returns None when it cannot be
+    analysed."""
     conds = _domain_conditions(expr)
     if not conds:
         return None
@@ -201,15 +216,15 @@ def domain_glsl(expr: sp.Expr, name: str = "x") -> str | None:
 
 
 def dfunc_glsl(expr: sp.Expr, name: str = "x") -> str:
-    """f'(x) 的 GLSL 文本（描边判据与极点判据要用）。"""
+    """GLSL text for f'(x) (used by the stroke criterion and the pole criterion)."""
     return func_glsl(sp.diff(expr, sp.Symbol("x")), name)
 
 
 class ViewRect:
-    """视图矩形（世界坐标）+ 平移/缩放运算，由 ViewModel 持有。"""
+    """View rectangle (world coordinates) plus pan/zoom operations; owned by the ViewModel."""
 
-    ZOOM_PER_STEP = 0.9  # 上滚一档：跨度 ×0.9（放大 10%）
-    MIN_SPAN = 1e-9  # 跨度上下限，避免缩到 0（再也滚不回来）或 inf
+    ZOOM_PER_STEP = 0.9  # one step up on the wheel: span ×0.9 (10% zoom in)
+    MIN_SPAN = 1e-9  # span limits, to avoid zooming to 0 (can never scroll back) or to inf
     MAX_SPAN = 1e9
 
     __slots__ = ("xmin", "xmax", "ymin", "ymax")
@@ -218,7 +233,7 @@ class ViewRect:
                  ymin: float = -2.0, ymax: float = 2.0) -> None:
         self.xmin, self.xmax, self.ymin, self.ymax = xmin, xmax, ymin, ymax
 
-    # ---- 只读视图 ----
+    # ---- read-only view ----
     def as_tuple(self) -> tuple[float, float, float, float]:
         return (self.xmin, self.xmax, self.ymin, self.ymax)
 
@@ -226,13 +241,13 @@ class ViewRect:
         self.xmin, self.xmax, self.ymin, self.ymax = DEFAULT_VIEW
 
     def world_at(self, u: float, v: float) -> tuple[float, float]:
-        """归一化屏幕位置 (0~1, 左上原点) 对应的世界坐标。"""
+        """World coordinates for a normalized screen position (0~1, top-left origin)."""
         return (self.xmin + (self.xmax - self.xmin) * u,
                 self.ymax - (self.ymax - self.ymin) * v)
 
-    # ---- 平移 ----
+    # ---- pan ----
     def pan_pixels(self, dx: float, dy: float, width: float, height: float) -> None:
-        """按像素位移平移（屏幕 y 向下，世界 y 向上）。"""
+        """Pan by a pixel displacement (screen y points down, world y points up)."""
         if width <= 0 or height <= 0:
             return
         world_dx = (self.xmax - self.xmin) * dx / width
@@ -242,12 +257,14 @@ class ViewRect:
         self.ymin += world_dy
         self.ymax += world_dy
 
-    # ---- 缩放 ----
+    # ---- zoom ----
     def zoom(self, delta: float, u: float, v: float) -> None:
-        """以归一化位置 (u, v) 为锚点缩放；delta 为滚轮增量（120 = 一档）。
+        """Zoom anchored at the normalized position (u, v); delta is the wheel increment
+        (120 = one step).
 
-        缩放比例只由 delta 决定，因此同一位置的上下滚严格互逆；锚点按"到锚点
-        的距离"缩放，所以光标下的世界点不会被平移走。
+        The scale factor depends only on delta, so scrolling up and down at the same
+        position are exact inverses; the anchor scales by "distance to the anchor", so the
+        world point under the cursor is not panned away.
         """
         if delta == 0:
             return
@@ -267,7 +284,7 @@ class ViewRect:
 
 
 # --------------------------------------------------------------------------
-# 着色器源码（片元着色器 + 逐像素隐式绘图）
+# Shader sources (fragment shader + per-pixel implicit drawing)
 # --------------------------------------------------------------------------
 
 VERTEX_SHADER = """#version 440
@@ -284,28 +301,35 @@ void main() {
 }
 """
 
-# 隐式（signed-distance）绘图 —— 两块拼图：
+# Implicit (signed-distance) drawing — a puzzle in two pieces:
 #
-#   1) 描边：每像素算它到折线（相邻采样点连成的线段）的屏幕空间距离，得到等宽、
-#      抗锯齿的线；陡峭段也不会变粗或断裂。用"到线段的距离"而不是"到切线的距离"，
-#      后者在强弯曲处会高估距离，线会变细甚至消失（Desmos 的做法）。
-#   2) 包络带：一个像素的 x 区间里塞进多个振荡（局部周期 < 1 像素）时，逐像素
-#      距离已经没有意义（画出来是摩尔纹/随机锯齿）。此时改把 [min,max] 填成实心带
-#      —— 对 sin(1/x) 就等于填它真实的 ±1 包络。
+#   1) Stroke: per pixel, compute its screen-space distance to the polyline (segments
+#      joining adjacent samples), yielding a constant-width, anti-aliased line; steep
+#      segments neither thicken nor break. Uses "distance to the segment" rather than
+#      "distance to the tangent", which overestimates at strong curvature and makes the
+#      line thin out or vanish (Desmos' approach).
+#   2) Envelope band: when one pixel's x interval packs several oscillations (local period
+#      < 1 pixel), the per-pixel distance is meaningless (it draws as moiré/random
+#      aliasing). Fill [min,max] as a solid band instead — for sin(1/x) this is exactly
+#      its true ±1 envelope.
 #
-# 何时算"塞进了多个振荡"（都在 ±1 列窄窗口内；普通像素采 8 点，带区补到 16 点）：
-#   a) 列内折返 >= 2 次：一列里曲线上下折返多次 => 有多个振荡（只折返 1 次是
-#      可分辨的极值，照常画线）；
-#   d) 导数预期 |f'|·dx 远超实测跨度 spread（硬阈值 16 倍且 pred >= 4px）：
-#      振荡周期远小于一列时采样会漏判（8 点可能恰好呈单调），这条不依赖采样
-#      随机性，兜住它。
-# 带的上/下边缘另用 ±8 列、16 点的宽窗口估包络，避免边缘咬出暗缝/台阶。
-# 极点（分母变号且值远超视口）单独留断口，不画 +∞/-∞ 的竖直连线。
+# When does a column count as "packing several oscillations" (all within the ±1-column
+# narrow window; ordinary pixels sample 8 points, banded columns add up to 16):
+#   a) >= 2 direction turns within the column: the curve reverses up/down several times
+#      => several oscillations (a single turn is a resolvable extremum and is stroked
+#      normally);
+#   d) the derivative prediction |f'|·dx far exceeds the measured spread (hard threshold
+#      16×, with pred >= 4px): when the oscillation period is far below one column,
+#      sampling can miss it (8 points may happen to look monotone), and this criterion is
+#      independent of sampling luck, so it catches that case.
+# The band's top/bottom edges use a wider ±8-column, 16-point window to estimate the
+# envelope, so the edges do not bite out dark seams/steps. A pole (denominator changes
+# sign and values far exceed the viewport) gets its own gap; no vertical +∞/-∞ connector
+# is drawn.
 #
-# 表达式用宏而不是用户函数：一个像素里对同一个 x 要算 1 + 8 + 16 = 25 次（描边
-# 采样 + 窄窗口 + 宽窗口），宏是预处理展开、没有函数调用语义，正好合适。
-# （曾经把"带用户函数的版本在 Intel D3D11 上挂死"记在这里——那是误诊：真因是
-#  qsb 把片元源码按 .glsl 后缀烘成了顶点着色器，见 qsb.bake 的注释。）
+# The expression is a macro rather than a user function: one pixel evaluates the same x
+# 1 + 8 + 16 = 25 times (stroke samples + narrow window + wide window), and a macro is
+# preprocessor expansion with no function-call semantics — exactly what is needed.
 FRAGMENT_TEMPLATE = """#version 440
 layout(location = 0) in vec2 vUV;
 layout(location = 0) out vec4 fragColor;
@@ -313,27 +337,31 @@ layout(std140, binding = 0) uniform buf {
     mat4 qt_Matrix;
     float qt_Opacity;
     vec4 view;        // xmin, xmax, ymin, ymax
-    vec2 size;        // 视口尺寸（逻辑像素）
-    float lineWidth;  // 线宽（逻辑像素）
-    vec4 color;       // 非预乘 rgba
+    vec2 size;        // viewport size (logical pixels)
+    float lineWidth;  // line width (logical pixels)
+    vec4 color;       // non-premultiplied rgba
 };
 
-// 参数归约：GPU 的内置 sin/cos 在大参数上不可靠，折进 [0,2π) 再调用
+// Argument reduction: the GPU's built-in sin/cos are unreliable for large arguments;
+// fold into [0,2π) before calling
 #define TAU 6.283185307179586
 float _wrap(float t) { return t - TAU * floor(t * (1.0 / TAU)); }
 #define SIN(t) sin(_wrap(t))
 #define COS(t) cos(_wrap(t))
 
-// 点到线段的距离（屏幕空间）。按线段描边 => 笔触处处等宽。
+// Point-to-segment distance (screen space). Stroking by segment => constant width
+// throughout.
 float _seg_dist(vec2 p, vec2 a, vec2 b) {
     vec2 ab = b - a;
     float t = clamp(dot(p - a, ab) / max(dot(ab, ab), 1e-12), 0.0, 1.0);
     return length(p - (a + t * ab));
 }
 
-// 无界定义域边界（sympy 单侧极限注入）：log(x) 在 x→0+ 这类慢发散边界。
-// 固定宽度采样窗口采不到足够深的值，深视口里曲线会整段消失；这里把折线沿边界
-// 延伸成竖直射线到 ±1e12，任意深度都能画到，且射线严格落在边界 x 上。
+// Unbounded domain boundaries (injected from sympy one-sided limits): slowly diverging
+// boundaries such as log(x) as x→0+. A fixed-width sampling window cannot sample deep
+// enough, so the curve would vanish entirely in a deep viewport; here the polyline is
+// extended along the boundary as a vertical ray to ±1e12, which reaches any depth and
+// lies exactly on the boundary x.
 float _edge_hit(float xa, float xb) {
     float best = 1e30;
 @EDGEHIT@
@@ -346,7 +374,8 @@ vec2 _edge_du(float ex) {
 
 #define F(u) (@FUNC@)
 #define DF @DFUNC@
-// 定义域谓词（域外像素不画）与"极点分母"（变号 => 该区间跨过极点）
+// Domain predicate (pixels outside the domain are not drawn) and "pole denominators"
+// (sign change => the interval crosses a pole)
 @DOM@
 @POLE@
 
@@ -354,7 +383,8 @@ void main() {
     float x = mix(view.x, view.y, vUV.x);
     float y = mix(view.w, view.z, vUV.y);
 
-    // 定义域：域外像素不画（log(x) 的 x<0、sqrt(x) 的 x<0、asin 的 |x|>1 …）
+    // Domain: pixels outside are not drawn (x<0 for log(x), x<0 for sqrt(x), |x|>1 for
+    // asin, …)
     if (!DOM(x)) {
         fragColor = vec4(0.0);
         return;
@@ -362,17 +392,18 @@ void main() {
 
     float spanx = view.y - view.x;
     float spany = view.w - view.z;
-    float dx = spanx / size.x;      // 一个像素对应多少世界 x
-    float sx = size.x / spanx;      // 像素/世界x
-    float sy = size.y / spany;      // 像素/世界y
+    float dx = spanx / size.x;      // world x per pixel
+    float sx = size.x / spanx;      // pixels per world x
+    float sy = size.y / spany;      // pixels per world y
 
     float f0 = F(x);
     float d1 = DF;
 
-    // ---- 1) 采样 + 折线描边 ----
-    // Desmos 的做法（engineering.desmos.com）：把采样点连成**线段**、按线段描边，
-    // 相邻点提示跳变就断开。这样笔触处处等宽；而"算到切线的距离"在陡峭/强弯曲处
-    // 会高估距离，线会变细甚至渐变消失（log(x) 在 x→0+、sin(1/x) 的陡段）。
+    // ---- 1) sampling + polyline stroke ----
+    // Desmos' approach (engineering.desmos.com): join the sample points into **segments**
+    // and stroke by segment. The width stays constant everywhere, whereas "distance to the
+    // tangent" overestimates on steep/strongly curved parts and makes the line thin out and
+    // eventually vanish (log(x) as x→0+, steep parts of sin(1/x)).
     float h = 0.5 * dx;
     float nl = 1e30;
     float nh = -1e30;
@@ -381,19 +412,22 @@ void main() {
     float prev_x = 0.0;
     float prev_d = 0.0;
     bool prev_ok = false;
-    vec2 p = vec2(x * sx, y * sy);          // 屏幕空间（平移不影响距离）
+    vec2 p = vec2(x * sx, y * sy);          // screen space (pan does not affect distance)
     float dmin = 1e30;
-    // 8 个点，取 16 点栅格（±1 列，间距 0.125 列）的**偶数位**：普通像素只算这 8 个，
-    // 带区里再补奇数位合成 16 点来数折返。8 点时随机采样约 11% 的列会漏判折返 ->
-    // 残留竖条；而全局算 16 点是每像素多 8 次 F 求值，没必要为少数列付。
+    // 8 points: the **even slots** of a 16-point grid (±1 column, 0.125-column spacing).
+    // Ordinary pixels evaluate only these 8; banded columns add the odd slots to make 16
+    // and count turns. With 8 points, random sampling misses the reversal in roughly 11%
+    // of columns -> leftover vertical stripes, while evaluating 16 globally costs 8 extra F
+    // evaluations per pixel, not worth paying for a few columns.
     float smp[8];
     bool smp_ok[8];
     for (int i = 0; i < 8; i++) {
-        float t = -1.0 + (float(i) + 0.25) / 4.0;           // 16 点栅格的偶数位
+        float t = -1.0 + (float(i) + 0.25) / 4.0;           // even slot of the 16-point grid
         float xi = x + t * h;
         float s = F(xi);
-        // 域外/NaN/inf（极点）跳过：既不参与包络，也不连线段。带 DOM 是因为
-        // GLSL 的 log(负) 等是 undefined，个别驱动会返回有限垃圾值。
+        // Skip out-of-domain/NaN/inf (pole) samples: they join neither the envelope nor the
+        // segments. DOM is included because GLSL's log(negative) etc. are undefined and
+        // some drivers return finite garbage.
         bool ok = DOM(xi) && (s == s) && (abs(s) < 1e30);
         smp[i] = s;
         smp_ok[i] = ok;
@@ -402,14 +436,11 @@ void main() {
             nh = max(nh, s);
             if (prev_ok) {
                 float d = s - prev_s;
-                if (prev_d * d < 0.0) { turns += 1.0; }      // 列内折返（折线方向变化）
+                if (prev_d * d < 0.0) { turns += 1.0; }      // turn within the column
                 prev_d = d;
-                // 折线段：直接连相邻采样点。两点历史坑记在这里：
-                //  * 不再用"落差 > 4 个视口高就断线"的跳变判据——那是像素/视口相对量，
-                //    放大后会把合法陡峭段也切断（竖条断续）。极点已由解析断口（分母
-                //    变号、世界单位）负责，域外采样也被 ok 过滤掉了。
-                //  * 不再对折返段做"二分求极值"：实测峰顶只多 ~1 个设备像素，而它在
-                //    展开的采样循环里内联 3 次导数表达式，明显拖慢着色器编译（首帧）。
+                // Polyline segment: join adjacent samples directly. Poles are handled by
+                // the analytic gap (denominator sign change, world units) and out-of-domain
+                // samples are filtered out by `ok`.
                 dmin = min(dmin, _seg_dist(p, vec2(prev_x * sx, prev_s * sy),
                                               vec2(xi * sx, s * sy)));
             }
@@ -418,10 +449,12 @@ void main() {
         }
         prev_ok = ok;
     }
-    // ---- 1b) 无界边界上的无穷延伸 ----
-    // 窗口跨过"函数趋于 ±∞"的定义域边界时，把折线从最近的有效采样沿边界拉一条
-    // 竖直射线到 ±1e12：慢发散函数（log(x) 在 x→0+）的下降段因此能画到任意深度。
-    // 射线落在边界 x 上（不是各列自己的采样 x），所以线宽仍然恒定、各列对齐。
+    // ---- 1b) infinite extension at unbounded boundaries ----
+    // When the window crosses a domain boundary where the function tends to ±∞, pull a
+    // vertical ray from the nearest valid sample along the boundary to ±1e12: the falling
+    // branch of a slowly diverging function (log(x) as x→0+) can thus be drawn to any
+    // depth. The ray lies on the boundary x (not each column's own sample x), so the width
+    // stays constant and the columns align.
     float ex_ = _edge_hit(x - h, x + h);
     if (ex_ < 1e29 && nl < 1e29) {
         vec2 du_ = _edge_du(ex_);
@@ -434,41 +467,51 @@ void main() {
     }
     float cov = clamp(lineWidth * 0.5 + 0.5 - dmin, 0.0, 1.0);
 
-    // ---- 2) 欠采样列 -> 画 ± 包络带（而不是随机锯齿）----
-    // 在 ±2 列的窗口里采 16 个点，用两把互补的尺子判断"这一列画不下"：
-    //   a) 折返次数：列内曲线上下折返 >= 2 次 => 一列里塞进了多个振荡；
-    //      （只折返 1 次 = 可分辨的极值，照常用描边画线）
-    //   b) 实测跨度 spread 远小于导数预期 |f'|·dx => 深处的欠采样
-    //      （振子快到采样都抓不住规律时，a 会受相位噪声影响，b 来兜底）
-    // 此时把 [min,max] 填成实心带：对 sin(1/x) 就等于填它的真实 ±1 包络。
+    // ---- 2) undersampled columns -> draw the ± envelope band (instead of random aliasing) ----
+    // Sample 16 points in a ±2-column window and use two complementary criteria to decide
+    // "this column cannot be drawn":
+    //   a) turn count: the curve reverses up/down >= 2 times within the column => several
+    //      oscillations are packed into one column (a single turn = a resolvable extremum,
+    //      stroked normally)
+    //   d) the measured spread is far below the derivative prediction |f'|·dx => deep
+    //      undersampling (when the oscillator is too fast for sampling to see any pattern,
+    //      a) suffers from phase noise and d) catches it)
+    // Here [min,max] is filled as a solid band: for sin(1/x) this is exactly its true ±1
+    // envelope.
     if (abs(d1) * dx * sy > 1.0) {
-        // 宽窗口（±8 列、16 点）只用来估带的上/下边缘——窗口宽，采样点才更可能
-        // 碰到极值，带的边缘才不会因包络偏窄而出现暗缝/台阶。
+        // The wide window (±8 columns, 16 points) only estimates the band's top/bottom
+        // edges — a wide window is more likely to hit the extrema, so the band edges do not
+        // develop dark seams/steps from a too-narrow envelope.
         float wl = 1e30;
         float wh = -1e30;
         for (int i = 0; i < 16; i++) {
-            float t = -16.0 + 32.0 * (float(i) + 0.5) / 16.0;  // ±8 列
+            float t = -16.0 + 32.0 * (float(i) + 0.5) / 16.0;  // ±8 columns
             float s = F(x + t * h);
             if (s == s && abs(s) < 1e30) {
                 wl = min(wl, s);
                 wh = max(wh, s);
             }
         }
-        float spread = (nh - nl) * sy;                  // 实测包络跨度（像素，窄窗口）
+        float spread = (nh - nl) * sy;                  // measured spread (px, narrow window)
 
-        // 真跳变：这一列跨过极点（分母变号）且函数值远超视口 => +∞/-∞ 的连线，
-        // 不画（消除 1/x、tan(x) 在渐近线处的竖直连线）。sin(1/x) 这类**有界**的
-        // 振荡值不会超视口，照旧由包络带表示。
-        // 只对"本列跨过极点"的列留断口（断口对齐极点，分支照常画到渐近线附近）
+        // A true jump: this column crosses a pole (denominator sign change) and the values
+        // far exceed the viewport => the +∞/-∞ connector is not drawn (removes the vertical
+        // connector of 1/x, tan(x) at asymptotes). A **bounded** oscillation such as
+        // sin(1/x) never exceeds the viewport and is still represented by the envelope band.
+        // Only columns that cross a pole get a gap (the gap aligns with the pole, and the
+        // branches are still drawn up to near the asymptote).
         float _hp = 0.5 * dx;
-        // 判据用"采样跨度 > 32 倍视口高度"而不是像素数：像素阈值会随缩放漂移
-        // （深缩放时 sin(1/x) 的有界振荡也会超过 8 个视口高，从而被误切一刀）。
+        // The criterion uses "sample spread > 32× the viewport height" rather than pixels:
+        // a pixel threshold drifts with zoom (when zoomed deep, the bounded oscillation of
+        // sin(1/x) can exceed many viewport heights and would be cut spuriously).
         if (POLE(x - _hp) * POLE(x + _hp) <= 0.0 && (nh - nl) > 32.0 * spany) {
             cov = 0.0;
         } else {
 
-        // 折返计数补采样：补上 16 点栅格的奇数位，与窄窗口的偶数位交错合成 16 点。
-        // 只在这里算——需要它准的正是带区，其余像素省下这 8 次 F 求值。
+        // Extra sampling for turn counting: fill in the odd slots of the 16-point grid,
+        // interleaved with the narrow window's even slots to form 16 points. Computed only
+        // here — the banded region is exactly where accuracy matters, and other pixels save
+        // these 8 F evaluations.
         float turns16 = 0.0;
         {
             bool have = false;
@@ -477,10 +520,10 @@ void main() {
             for (int k = 0; k < 16; k++) {
                 float s;
                 bool ok;
-                if (k - (k / 2) * 2 == 0) {             // 偶数位：复用窄窗口的采样
+                if (k - (k / 2) * 2 == 0) {             // even slot: reuse a narrow-window sample
                     s = smp[k / 2];
                     ok = smp_ok[k / 2];
-                } else {                                 // 奇数位：补采
+                } else {                                 // odd slot: sample additionally
                     float xi = x + (-1.0 + (float(k) + 0.5) / 8.0) * h;
                     s = F(xi);
                     ok = DOM(xi) && (s == s) && (abs(s) < 1e30);
@@ -496,46 +539,47 @@ void main() {
                 }
             }
         }
-        float pred = max(abs(d1) * dx * sy, 2.0);       // 导数预期跨度（像素）
-        float w = step(2.0, turns16);                   // a) 列内折返 >= 2 次（16 点）
-        // d) 阈值 16 是量出来的：log 这类单调凹曲线该比值 ~3.6、tan/1/x 的分支 <1，
-        //    真正亚像素的 sin(1/x) 到 ~58；pred >= 4px 排除"可分辨极值"（峰顶
-        //    pred≈0、spread≈0，比值会误判）。
+        float pred = max(abs(d1) * dx * sy, 2.0);       // derivative-predicted spread (pixels)
+        float w = step(2.0, turns16);                   // a) >= 2 turns in the column (16 points)
+        // d) The threshold 16 is measured: a monotone concave curve such as log gives a
+        //    ratio ~3.6, branches of tan/1/x <1, and a truly sub-pixel sin(1/x) ~58;
+        //    pred >= 4px excludes "resolvable extrema" (at a peak pred≈0, spread≈0, and the
+        //    ratio would misjudge).
         w = max(w, step(16.0 * spread + 1e-6, pred) * step(4.0, pred));
-        // 历史坑：曾用判据 (b)"实测跨度 ≪ 导数预期"的软阈值 smoothstep(0.15,0.5,…)，
-        // 误伤单调陡段（log 比值 ~0.28 → 整块填充）与可分辨极值；(d) 的硬阈值 1/16
-        // 才把两者分开。另一处是像素单位的闸门 step(spread, 4*size.y)：视口跨度 < 0.5
-        // 时 sin(1/x) 的 ±1 换算成像素超过 4 个视口高，带被整个关掉 → 满屏竖条。
-        w *= smoothstep(1.5, 4.0, spread);              // 带不足 1.5 像素就没必要填
+        w *= smoothstep(1.5, 4.0, spread);              // no point filling a band < 1.5 pixels
 
 
-        // 带的上下边缘取宽窗口的包络（窄窗口会咬出暗缝）
+        // The band's top/bottom edges take the wide window's envelope (the narrow one bites
+        // out dark seams)
         float band = clamp((wh - y) * sy + 2.0, 0.0, 1.0)
                    * clamp((y - wl) * sy + 2.0, 0.0, 1.0);
-        // 触发列（一列里塞进多个振荡）整列换成包络带：折线在那种列里是随机锯齿，
-        // 包络带才是它真实的取值范围。w=0 的列保持折线描边（等宽）。
+        // A triggering column (several oscillations packed into one column) is replaced
+        // wholesale by the envelope band: the polyline is random aliasing in such a column,
+        // while the band is its true value range. Columns with w=0 keep the polyline stroke
+        // (constant width).
         cov = mix(cov, band, w);
         }
     }
 
     float a = cov * color.a * qt_Opacity;
     if (isnan(f0) || isinf(f0)) {
-        a = 0.0;                       // sin(1/0)、1/0 之类的点直接丢弃
+        a = 0.0;                       // discard points like sin(1/0), 1/0 outright
     }
-    fragColor = vec4(color.rgb * a, a);   // 预乘 alpha
+    fragColor = vec4(color.rgb * a, a);   // premultiplied alpha
 }
 """
 
 
 def shader_sources(expr: sp.Expr) -> tuple[str, str]:
-    """QML 前端（隐式模型）的顶点/片元着色器源码。"""
+    """Vertex/fragment shader sources for the QML front end (implicit model)."""
     frag = (
         FRAGMENT_TEMPLATE.replace("@FUNC@", func_glsl(expr, "u", wrap=True))
         .replace("@DFUNC@", dfunc_glsl(expr))
     )
     edge_hit, edge_du = _edge_glsl(expr)
     frag = frag.replace("@EDGEHIT@", edge_hit).replace("@EDGEDU@", edge_du)
-    # 定义域 / 极点：宏参数带括号，和 F 同理（宏是文本替换）
+    # Domain / pole: the macro argument is parenthesized, same reasoning as F (macros are
+    # text substitution)
     dom = domain_glsl(expr, "u")
     frag = frag.replace(
         "@DOM@",

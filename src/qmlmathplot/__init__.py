@@ -1,6 +1,6 @@
-"""QMLMathPlot —— 可嵌入的函数绘图组件（Qt Quick / QtWidgets 都能用）。
+"""QMLMathPlot — an embeddable function plotting widget (works with Qt Quick and QtWidgets).
 
-最省事的用法（QtWidgets 布局里一行）：
+Quickest usage (one line in a QtWidgets layout):
 
     from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget
     from qmlmathplot import MathPlotWidget
@@ -13,17 +13,18 @@
     window.show()
     app.exec()
 
-独立窗口 / 命令行：
+Standalone window / command line:
 
-    uv run qmlmathplot "sin(1/x)"          # 见 qmlmathplot.app
-    python examples/minimal.py "tan(x)"    # 同上
-    python examples/explorer.py            # 输入框 + 其他控件共存验证
+    uv run qmlmathplot "sin(1/x)"            # see qmlmathplot.app
+    python examples/minimal.py "tan(x)"      # same
+    python examples/explorer_qtwidgets.py    # input field coexisting with other widgets
 
-纯 QML（Qt Quick）App 里用组件 + ViewModel（MVVM，分三层各自可测）：
+Pure QML (Qt Quick) apps use the component plus the ViewModel (MVVM, three layers,
+each testable on its own):
 
-    Model       model.py       表达式 -> GLSL、着色器源码、视图矩形数学（不依赖 Qt）
-    ViewModel   viewmodel.py   PlotController：expression / view / 着色器 URL / error
-    View        qml/MathPlot.qml   纯 QML 组件，注入 ViewModel 即可用
+    Model       model.py        expression -> GLSL, shader sources, view rectangle math (no Qt)
+    ViewModel   viewmodel.py    PlotController: expression / view / shader URLs / error
+    View        qml/MathPlot.qml    pure QML component; inject the ViewModel to use it
 
     from PySide6.QtCore import QUrl
     from PySide6.QtGui import QGuiApplication
@@ -38,7 +39,7 @@
     view.show()
     app.exec()
 
-``MathPlotWidget`` 走**延迟导入**：纯 QML 的用法不会为此多加载 QtWidgets。
+``MathPlotWidget`` is imported **lazily**: pure QML usage does not pull in QtWidgets for it.
 """
 
 from typing import TYPE_CHECKING
@@ -54,7 +55,7 @@ from .model import (
 )
 from .viewmodel import QML_URI, PlotController, qml_component_path, register_qml_types
 
-if TYPE_CHECKING:  # 只给类型检查器看；运行时由模块级 __getattr__ 延迟导入
+if TYPE_CHECKING:  # type checkers only; at runtime the lazy import happens via module __getattr__
     from .widget import MathPlotWidget
 
 __all__ = [
@@ -74,7 +75,7 @@ __all__ = [
 
 
 def __getattr__(name: str) -> object:
-    """``MathPlotWidget`` 延迟导入（省掉纯 QML 用法不需要的 QtWidgets 开销）。"""
+    """Lazily import ``MathPlotWidget`` (avoids the QtWidgets cost pure QML usage doesn't need)."""
     if name == "MathPlotWidget":
         from .widget import MathPlotWidget
 

@@ -1,15 +1,19 @@
-"""``MathPlotWidget`` 与邻居控件的共存验证（真开窗、真发事件）。
+"""Verification that ``MathPlotWidget`` coexists with neighbouring widgets (really opens a
+window, really sends events).
 
-要排除的"打架"点：
+The "conflicts" being ruled out:
 
-1. 放进 QtWidgets 布局能正常渲染（QQuickWidget 渲染到自己的 FBO，不遮挡兄弟控件）。
-2. 输入框换表达式后图形更新；非法表达式保留上一份可用图形，``error`` 非空。
-3. 绘图控件放进 ``QScrollArea``：滚轮落在**绘图区**应当缩放，而不是滚动父级
-   —— widgets 世界里最容易打架的一处。
-4. 绘图区是 ``ClickFocus``，不进 Tab 焦点链，输入框的焦点不会被抢。
+1. In a QtWidgets layout it renders normally (QQuickWidget renders into its own FBO and does
+   not occlude sibling widgets).
+2. After the line edit changes the expression the plot updates; an invalid expression keeps
+   the last usable curve and sets a non-empty ``error``.
+3. With the plot inside a ``QScrollArea``, a wheel event over the **plot area** should zoom
+   rather than scroll the parent -- the most contention-prone spot in the widgets world.
+4. The plot area is ``ClickFocus`` and does not join the Tab focus chain, so the line edit
+   keeps its focus.
 
-取图必须用异步的 ``QQuickItem.grabToImage()``：同步取图（``QQuickWindow.grabWindow``）
-会和 Python 侧的场景图对象死锁。
+Grabbing the image must use the asynchronous ``QQuickItem.grabToImage()``: the synchronous
+``QQuickWindow.grabWindow`` deadlocks with the Python-side scene-graph objects.
 """
 
 from __future__ import annotations
@@ -25,18 +29,18 @@ from qmlmathplot import MathPlotWidget
 
 pytestmark = pytest.mark.gui
 
-BACKGROUND = (0x14, 0x14, 0x1E)  # MathPlot.qml 的 backgroundColor
+BACKGROUND = (0x14, 0x14, 0x1E)  # backgroundColor of MathPlot.qml
 
 
 def _quick(plot: MathPlotWidget) -> QQuickWidget:
-    """MathPlotWidget 内部那个 QQuickWidget（findChild 的返回类型是可空的）。"""
+    """The QQuickWidget inside MathPlotWidget (findChild's return type is nullable)."""
     quick = plot.findChild(QQuickWidget)
     assert quick is not None
     return quick
 
 
 def _grab(plot: MathPlotWidget) -> QImage:
-    """取绘图控件的当前帧。"""
+    """Grab the current frame of the plot widget."""
     item = _quick(plot).rootObject()
     result = item.grabToImage()
     loop = QEventLoop()
@@ -47,7 +51,8 @@ def _grab(plot: MathPlotWidget) -> QImage:
 
 
 def _lit_rows(image: QImage) -> int:
-    """有多少行画上了东西（隔点采样，够判断"有没有曲线"）。"""
+    """How many rows have something drawn on them (sampled every other pixel, enough to
+    tell whether a curve is there)."""
     rows = 0
     for y in range(0, image.height(), 2):
         for x in range(0, image.width(), 2):
@@ -68,7 +73,7 @@ def _settle(app: QApplication, rounds: int = 25) -> None:
 
 
 def test_widget_renders_in_layout_with_siblings(app: QApplication) -> None:
-    """和输入框、按钮同处一个布局：绘图控件照常出图。"""
+    """In the same layout as a line edit and a button: the plot widget draws as usual."""
     window = QWidget()
     box = QVBoxLayout(window)
     box.addWidget(QLineEdit("sin(x)"))
@@ -76,14 +81,15 @@ def test_widget_renders_in_layout_with_siblings(app: QApplication) -> None:
     box.addWidget(plot)
     window.resize(640, 480)
     window.show()
-    assert QTest.qWaitForWindowExposed(window), "没有可用的显示/GPU 场景图"
+    assert QTest.qWaitForWindowExposed(window), "no usable display/GPU scenegraph"
     _settle(app)
 
-    assert _lit_rows(_grab(plot)) > 20, "布局里的绘图控件没有画出曲线"
+    assert _lit_rows(_grab(plot)) > 20, "the plot widget in the layout did not draw a curve"
 
 
 def test_expression_switch_and_error_keeps_last_curve(app: QApplication) -> None:
-    """换表达式出图；非法表达式保留上一份可用图形并给出 error。"""
+    """Switching the expression redraws; an invalid expression keeps the last usable curve
+    and reports an error."""
     plot = MathPlotWidget("sin(x)")
     plot.resize(480, 360)
     plot.show()
@@ -94,25 +100,26 @@ def test_expression_switch_and_error_keeps_last_curve(app: QApplication) -> None
     plot.expression = "sin(1/x)"
     _settle(app)
     after = _grab(plot)
-    assert after != before, "换表达式后画面没变"
+    assert after != before, "the picture did not change after switching the expression"
     assert _lit_rows(after) > 20
     assert plot.error == ""
 
-    plot.expression = "sin("          # 解析不了
+    plot.expression = "sin("          # cannot be parsed
     _settle(app)
-    assert plot.error, "非法表达式没有报错"
-    assert _lit_rows(_grab(plot)) > 20, "非法表达式把上一份图形弄丢了"
+    assert plot.error, "the invalid expression reported no error"
+    assert _lit_rows(_grab(plot)) > 20, "the invalid expression lost the previous curve"
 
 
 def test_wheel_over_plot_zooms_and_does_not_scroll_parent(app: QApplication) -> None:
-    """滚动区里的绘图控件：滚轮应当被 QML 吃掉（缩放），不漏给父级滚动。"""
+    """A plot widget inside a scroll area: the wheel should be swallowed by QML (zoom) and
+    not leak to the parent scroll."""
     window = QWidget()
     box = QVBoxLayout(window)
     box.setContentsMargins(0, 0, 0, 0)
     area = QScrollArea()
     area.setWidgetResizable(False)
     plot = MathPlotWidget("sin(x)")
-    plot.setMinimumSize(1200, 800)          # 比视口大 -> 滚动区真的能滚
+    plot.setMinimumSize(1200, 800)          # larger than the viewport -> the scroll area can really scroll
     area.setWidget(plot)
     box.addWidget(area)
     window.resize(420, 320)
@@ -121,7 +128,7 @@ def test_wheel_over_plot_zooms_and_does_not_scroll_parent(app: QApplication) -> 
     _settle(app)
 
     bar = area.verticalScrollBar()
-    assert bar.maximum() > 0, "滚动区不可滚，这个冲突测不出来"
+    assert bar.maximum() > 0, "the scroll area cannot scroll, so this conflict cannot be tested"
 
     quick = _quick(plot)
     xmin, xmax, _, _ = plot.view_bounds()
@@ -130,7 +137,7 @@ def test_wheel_over_plot_zooms_and_does_not_scroll_parent(app: QApplication) -> 
         center,
         QPointF(quick.mapToGlobal(center.toPoint())),
         QPoint(0, 0),
-        QPoint(0, 120),                     # 一档，正 = 放大
+        QPoint(0, 120),                     # one step, positive = zoom in
         Qt.MouseButton.NoButton,
         Qt.KeyboardModifier.NoModifier,
         Qt.ScrollPhase.NoScrollPhase,
@@ -140,12 +147,12 @@ def test_wheel_over_plot_zooms_and_does_not_scroll_parent(app: QApplication) -> 
     _settle(app)
 
     nxmin, nxmax, _, _ = plot.view_bounds()
-    assert nxmax - nxmin < xmax - xmin, "滚轮没有落到绘图区（没有缩放）"
-    assert bar.value() == 0, "滚轮漏给了父级滚动区"
+    assert nxmax - nxmin < xmax - xmin, "the wheel did not reach the plot area (no zoom)"
+    assert bar.value() == 0, "the wheel event leaked to the parent scroll area"
 
 
 def test_plot_does_not_join_tab_focus_chain(app: QApplication) -> None:
-    """绘图区不进 Tab 焦点链，输入框的焦点不会被抢。"""
+    """The plot area does not join the Tab focus chain, so the line edit keeps its focus."""
     window = QWidget()
     box = QVBoxLayout(window)
     edit = QLineEdit()

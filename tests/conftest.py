@@ -1,8 +1,9 @@
-"""共享 fixture：整个测试会话只建一个 ``QApplication``。
+"""Shared fixtures: a single ``QApplication`` for the whole test session.
 
-用 ``QApplication`` 而不是 ``QGuiApplication``：前者是后者的子类，QML 侧测试照常
-工作，而 QtWidgets 侧（``MathPlotWidget``）需要它。一个进程只能有一个
-``QCoreApplication`` 实例，所以必须在会话级共享。
+Using ``QApplication`` instead of ``QGuiApplication``: the former is a subclass of
+the latter, so the QML-side tests work as usual, while the QtWidgets side
+(``MathPlotWidget``) needs it. A process may only hold one ``QCoreApplication``
+instance, so it must be shared at session scope.
 """
 
 from __future__ import annotations

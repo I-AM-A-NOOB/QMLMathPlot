@@ -1,12 +1,14 @@
-// View 层：可复用的绘图组件（隐式逐像素绘图）。
+// View layer: the reusable plotting component (implicit per-pixel drawing).
 //
-// 用法（App 侧创建 ViewModel 并注入，MVVM）：
+// Usage (the app side creates the ViewModel and injects it; MVVM):
 //     MathPlot { controller: myPlotController }
-// 不注入也能单独用——组件会自带一个 PlotController。
+// It also works standalone without injection — the component brings its own PlotController.
 //
-// 曲线由片元着色器逐像素判"到曲线的一阶屏幕空间距离"画出：每帧代价 ∝ 像素数，
-// 与函数频率无关（振荡函数不会因为混叠把帧率拖垮）；一个像素里塞进多个振荡的
-// 列改填 [min, max] 包络带（见 model.FRAGMENT_TEMPLATE）。
+// The curve is drawn by a fragment shader that decides per pixel the first-order screen-space
+// distance to the curve: the per-frame cost is proportional to the pixel count and independent
+// of the function's frequency (an oscillating function cannot drag the frame rate down through
+// aliasing); a column whose pixel packs several oscillations instead fills the [min, max]
+// envelope band (see model.FRAGMENT_TEMPLATE).
 import QtQuick
 import QmlMathPlot 1.0
 
@@ -16,7 +18,8 @@ Item {
     implicitWidth: 800
     implicitHeight: 600
 
-    // ViewModel（App 注入；未注入时自带一个，保证组件可独立使用）
+    // ViewModel (injected by the app; the component brings its own so it stays usable
+    // standalone)
     property PlotController controller: PlotController {}
 
     property alias expression: root.controller.expression
@@ -62,8 +65,8 @@ Item {
     }
 
     WheelHandler {
-        // 光标位置为锚点；delta 传原始滚轮增量，120 = 一档。
-        // 注意：Qt 6 的 QML WheelEvent 没有 position，只有 x/y（相对本 item）。
+        // The cursor position is the anchor; delta is the raw wheel delta, 120 = one notch.
+        // Note: Qt 6's QML WheelEvent has no position, only x/y (relative to this item).
         onWheel: (event) => {
             const d = event.angleDelta.y !== 0 ? event.angleDelta.y : event.pixelDelta.y;
             root.controller.zoom(d, event.x / root.width, event.y / root.height);

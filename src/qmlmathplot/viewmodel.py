@@ -1,8 +1,9 @@
-"""ViewModel 层：把 Model（表达式 -> GLSL -> .qsb、视图数学）包成 QObject。
+"""ViewModel layer: wraps the Model (expression -> GLSL -> .qsb, view math) as a QObject.
 
-QML 侧（View）只做画和输入：表达式、视图、着色器 URL、错误文本都由这里暴露，
-鼠标/滚轮事件转发成 zoom/panPixels 调用。嵌入到别的 App 时，由 App 创建
-PlotController 并注入组件（见 qml_component_path 与 README）。
+The QML side (View) only draws and handles input: expression, view, shader URLs and error text
+are all exposed here, and mouse/wheel events are forwarded as zoom/panPixels calls. When
+embedding into another app, the app creates the PlotController and injects it into the component
+(see qml_component_path and the README).
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ QML_MINOR = 0
 
 
 class PlotController(QObject):
-    """表达式 + 视图 + 着色器 URL，给 QML 绑定用。"""
+    """Expression + view + shader URLs, for QML bindings."""
 
     expressionChanged = Signal()
     viewChanged = Signal()
@@ -39,7 +40,7 @@ class PlotController(QObject):
         self._fragment = QUrl()
         self._compile(expression)
 
-    # ---------------------------------------------------------------- 表达式
+    # ---------------------------------------------------------------- Expression
     def _get_expression(self) -> str:
         return self._expression
 
@@ -50,11 +51,12 @@ class PlotController(QObject):
         self.expressionChanged.emit()
         self._compile(source)
 
-    # 注解写值类型（PySide6 的惯用法）：Property 是描述符，不注解的话类型检查器
-    # 只看到 Property 对象，Python 侧读写都会被判成类型错误。
+    # Annotate the value type (PySide6 idiom): Property is a descriptor, so without the
+    # annotation a type checker only sees the Property object and flags every Python-side read
+    # and write as a type error.
     expression: str = Property(str, _get_expression, _set_expression, notify=expressionChanged)
 
-    # ------------------------------------------------------------ 着色器 URL
+    # ------------------------------------------------------------- Shader URLs
     def _get_vertex_shader(self) -> QUrl:
         return self._vertex
 
@@ -70,13 +72,14 @@ class PlotController(QObject):
     error: str = Property(str, _get_error, notify=errorChanged)
 
     def _compile(self, source: str) -> None:
-        """表达式 -> GLSL -> .qsb；失败时保留上一份可用着色器并把原因写进 error。"""
+        """expression -> GLSL -> .qsb; on failure keep the last working shaders and write the
+        reason into error."""
         try:
             expr = sp.sympify(source, locals={"x": self._symbol})
             vert_src, frag_src = shader_sources(expr)
             vertex = bake(vert_src, "vert")
             fragment = bake(frag_src, "frag")
-        except Exception as exc:  # noqa: BLE001 —— 表达式/烘焙都可能失败，都要报给 UI
+        except Exception as exc:  # noqa: BLE001 — expression or bake can fail; both reach the UI
             self._error = f"{type(exc).__name__}: {exc}"
             self.errorChanged.emit()
             return
@@ -86,7 +89,7 @@ class PlotController(QObject):
         self.errorChanged.emit()
         self.shadersChanged.emit()
 
-    # ------------------------------------------------------------------ 视图
+    # ------------------------------------------------------------------ View
     def _get_view(self) -> QVector4D:
         return QVector4D(*self._view.as_tuple())
 
@@ -94,7 +97,8 @@ class PlotController(QObject):
 
     @Slot(float, float, float)
     def zoom(self, delta: float, u: float, v: float) -> None:
-        """以归一化位置 (u, v) 为锚点缩放，delta 为滚轮增量（120 = 一档）。"""
+        """Zoom anchored at the normalized position (u, v); delta is the wheel step (120 = one
+        notch)."""
         self._view.zoom(delta, u, v)
         self.viewChanged.emit()
 
@@ -109,16 +113,35 @@ class PlotController(QObject):
         self.viewChanged.emit()
 
 
+_registered = False
+
+
 def register_qml_types() -> None:
-    """把 PlotController 注册成 QML 类型（引擎 load 之前调用）。"""
+    """Register the QML types of this package (call before the engine loads).
+
+    Registers both ``PlotController`` (the ViewModel) and ``MathPlot`` (the View, i.e. the
+    ``qml/MathPlot.qml`` component), so a Qt Quick app can simply write::
+
+        import QmlMathPlot 1.0
+        MathPlot { anchors.fill: parent }
+
+    Idempotent: repeated calls are a no-op (Qt complains about duplicate registrations).
+    """
+    global _registered
+    if _registered:
+        return
+
     from PySide6.QtQml import qmlRegisterType
 
-    # 注意：PySide6 的签名标注写的是 bytes，但运行时只接受 str
+    # Note: PySide6's signature annotation says bytes, but at runtime it only accepts str
     qmlRegisterType(PlotController, QML_URI, QML_MAJOR, QML_MINOR, "PlotController")  # type: ignore[arg-type]
+    qmlRegisterType(QUrl.fromLocalFile(qml_component_path()), QML_URI, QML_MAJOR, QML_MINOR, "MathPlot")
+    _registered = True
 
 
 def qml_component_path() -> str:
-    """可复用 QML 组件的文件路径（嵌入到别的 App 时用它 setSource / Loader）。"""
+    """File path of the reusable QML component (for setSource / Loader when embedding it into
+    another app)."""
     from importlib.resources import files
 
     return str(files("qmlmathplot").joinpath("qml/MathPlot.qml"))

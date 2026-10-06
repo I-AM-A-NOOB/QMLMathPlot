@@ -1,12 +1,14 @@
 # QMLMathPlot
 
-可嵌入 Qt Quick App 的函数绘图组件。曲线由**片元着色器逐像素**绘制（隐式
-signed-distance 模型）：每帧代价 ∝ 像素数、与函数频率无关，振荡函数（如
-`sin(1/x)`）不会因为折线混叠把帧率拖垮，也不需要在 CPU 上采样。
+An embeddable function-plotting component for Qt Quick apps. The curve is drawn
+**per pixel by a fragment shader** (implicit signed-distance model): the per-frame
+cost is ∝ the pixel count and independent of the function's frequency, so
+oscillating functions (e.g. `sin(1/x)`) cannot drag the frame rate down through
+polyline aliasing, and no CPU-side sampling is needed.
 
-## 快速开始
+## Quick start
 
-QtWidgets 布局里一行（最省事）：
+One line in a QtWidgets layout (least effort):
 
 ```python
 from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget
@@ -15,31 +17,37 @@ from qmlmathplot import MathPlotWidget
 app = QApplication([])
 window = QWidget()
 box = QVBoxLayout(window)
-plot = MathPlotWidget("sin(1/x)")        # 拖拽平移 / 滚轮以光标为锚点缩放
+plot = MathPlotWidget("sin(1/x)")        # drag to pan / wheel zooms anchored at the cursor
 box.addWidget(plot)
 window.show()
 app.exec()
 ```
 
-独立窗口 / 命令行：
+Standalone window / command line:
 
 ```
-uv run qmlmathplot --backend d3d11 "sin(1/x)"   # 等价于 python examples/minimal.py …
-python examples/explorer.py                     # 输入框 + 其他控件共存验证
+uv run qmlmathplot "sin(1/x)"                    # equivalent to python examples/minimal.py …
+uv run qmlmathplot --backend d3d11 "sin(1/x)"    # force a specific backend
+python examples/explorer_qtwidgets.py            # function input box + sibling widgets
 ```
 
-示例都在 `examples/`：`minimal.py` 是最小窗口；`explorer.py` 刻意把绘图控件放进
-"会抢事件"的环境（输入框、QScrollArea、QSplitter、覆盖层），用来验证控件不打架。
+The examples live in `examples/`: `minimal.py` is the smallest window;
+`explorer_qtwidgets.py` deliberately puts the plot widget into a "grabby"
+environment (input box, `QScrollArea`, `QSplitter`, overlay) to verify the widgets
+do not fight each other; `explorer_qtquick.py` (plus `explorer_qtquick.qml`) is
+the pure Qt Quick demo.
 
-## 嵌入到 App
+## Embedding into an app
 
-**QtWidgets**：`MathPlotWidget` 是普通 `QWidget`（内部用 `QQuickWidget` 把 QML 组件
-桥进 widgets 世界，渲染到自己的 FBO，因此能和兄弟控件叠放/共处）。属性与方法：
-`expression` / `error` / `line_width` / `curve_color` / `background_color`、
-`view_bounds()` / `reset_view()` / `zoom(delta, u, v)` / `pan_pixels(dx, dy)`，
-信号 `expressionChanged` / `errorChanged`，底层 ViewModel 由 `.controller` 暴露。
+**QtWidgets**: `MathPlotWidget` is an ordinary `QWidget` (internally it bridges the
+QML component into the widgets world with a `QQuickWidget` and renders into its own
+FBO, so it can be stacked on top of / coexist with sibling widgets). Properties and
+methods: `expression` / `error` / `line_width` / `curve_color` / `background_color`,
+`view_bounds()` / `reset_view()` / `zoom(delta, u, v)` / `pan_pixels(dx, dy)`, the
+signals `expressionChanged` / `errorChanged`, and the underlying ViewModel exposed
+as `.controller`.
 
-**纯 QML（Qt Quick）**：注入 ViewModel 即可（MVVM，见下）。
+**Pure QML (Qt Quick)**: just inject a ViewModel (MVVM, see below).
 
 ```python
 from PySide6.QtCore import QUrl
@@ -48,9 +56,9 @@ from PySide6.QtQuick import QQuickView
 from qmlmathplot import PlotController, qml_component_path, register_qml_types
 
 app = QGuiApplication([])
-register_qml_types()                                  # 注册 PlotController 到 QML
+register_qml_types()                       # registers PlotController + MathPlot as QML types
 
-controller = PlotController("sin(1/x)")               # ViewModel（App 侧持有）
+controller = PlotController("sin(1/x)")               # ViewModel (owned by the app)
 view = QQuickView()
 view.setSource(QUrl.fromLocalFile(qml_component_path()))
 view.rootObject().setProperty("controller", controller)
@@ -61,7 +69,7 @@ app.exec()
 ```qml
 import QmlMathPlot 1.0
 
-MathPlot {                       // 组件：Inject ViewModel，或让它自带一个
+MathPlot {                       // component: inject a ViewModel, or let it create its own
     anchors.fill: parent
     controller: myPlotController
     lineWidth: 1.5
@@ -70,145 +78,162 @@ MathPlot {                       // 组件：Inject ViewModel，或让它自带�
 }
 ```
 
-组件属性：`expression`（sympy 语法，改它会重新生成 GLSL 并烘焙 .qsb）、`view`
-（`Qt.vector4d(xmin, xmax, ymin, ymax)`）、`error`（表达式/烘焙失败的原因，成功时为空）、
-`lineWidth`、`curveColor`、`backgroundColor`。`controller` 是 ViewModel，暴露
-`zoom(delta, u, v)` / `panPixels(dx, dy, w, h)` / `resetView()` 给输入层调用。
+Component properties: `expression` (sympy syntax; changing it regenerates the GLSL
+and bakes a `.qsb`), `view` (`Qt.vector4d(xmin, xmax, ymin, ymax)`), `error` (why
+the expression/bake failed, empty on success), `lineWidth`, `curveColor`,
+`backgroundColor`. `controller` is the ViewModel, exposing `zoom(delta, u, v)` /
+`panPixels(dx, dy, w, h)` / `resetView()` for the input layer to call.
 
-## RHI 后端
+## RHI backends
 
-`--backend {d3d11,d3d12,vulkan,metal,opengl,null}`；**不指定就用 Qt 的默认后端**。
-实现是在 `QGuiApplication` 之前设置 `QSG_RHI_BACKEND`（Qt 在平台初始化时读它，
-之后再 `setGraphicsApi()` 不生效）。本机（Intel 驱动 32.0.101.8826）实测
-`d3d11` 与 `opengl` 输出逐像素一致。
+`--backend {d3d11,d3d12,vulkan,metal,opengl,null}`; **if unspecified, Qt's default
+backend is used**. The implementation sets `QSG_RHI_BACKEND` before
+`QGuiApplication` (Qt reads it during platform initialisation, and a later
+`setGraphicsApi()` has no effect). On this machine (Intel driver 32.0.101.8826)
+`d3d11` and `opengl` measured pixel-for-pixel identical.
 
-## 结构（MVVM）
+## Structure (MVVM)
 
-| 层 | 文件 | 职责 |
+| Layer | File | Responsibility |
 |---|---|---|
-| Model | `src/qmlmathplot/model.py` | 表达式 → GLSL、着色器源码模板、`ViewRect` 平移/缩放数学（不依赖 Qt，可单测） |
-| ViewModel | `src/qmlmathplot/viewmodel.py` | `PlotController`：expression / view / 着色器 URL / error；`qml_component_path()` 给出组件路径 |
-| View | `src/qmlmathplot/qml/MathPlot.qml` | 纯 QML：`ShaderEffect` + 鼠标平移/滚轮缩放 |
-| 烘焙 | `src/qmlmathplot/qsb.py` | GLSL → `.qsb`（PySide6 自带 `qsb.exe`），按源码 hash 缓存 |
-| 控件 | `src/qmlmathplot/widget.py` | `MathPlotWidget`：QQuickWidget 桥接，直接进 QtWidgets 布局 |
-| 入口 | `src/qmlmathplot/app.py` | 命令行/独立窗口（`qmlmathplot` 脚本、`examples/minimal.py`） |
-| 示例 | `examples/` | `minimal.py`（最小）、`explorer.py`（输入框 + 控件共存验证） |
+| Model | `src/qmlmathplot/model.py` | expression → GLSL, shader source template, `ViewRect` pan/zoom math (no Qt dependency, unit-testable) |
+| ViewModel | `src/qmlmathplot/viewmodel.py` | `PlotController`: expression / view / shader URL / error; `qml_component_path()` returns the component path |
+| View | `src/qmlmathplot/qml/MathPlot.qml` | pure QML: `ShaderEffect` + mouse pan / wheel zoom |
+| Bake | `src/qmlmathplot/qsb.py` | GLSL → `.qsb` (PySide6 ships `qsb.exe`), cached by source hash |
+| Widget | `src/qmlmathplot/widget.py` | `MathPlotWidget`: QQuickWidget bridge, drops straight into QtWidgets layouts |
+| Entry | `src/qmlmathplot/app.py` | command line / standalone window (the `qmlmathplot` script, `examples/minimal.py`) |
+| Examples | `examples/` | `minimal.py` (minimal), `explorer_qtwidgets.py` (input box + widget coexistence), `explorer_qtquick.py` (Qt Quick) |
 
-## 算法（视觉上"完美"的两块拼图）
+## Algorithm (the two pieces that make it visually "perfect")
 
-1. **屏幕空间距离描边**：每像素用 `f` 与 `f'` 算它到曲线的一阶距离，
-   `cov = clamp(lineWidth/2 + 0.5 − d, 0, 1)`。任何斜率等宽、天然抗锯齿，极点
-   （`tan(x)`）和跳变自动正确。
-2. **欠采样包络带**：一个像素的 x 区间里塞进多个振荡时（局部周期 < 1 像素），
-   逐像素距离已经没有意义（画出来是摩尔纹）。此时把该列的 `[min, max]` 填成
-   实心带——对 `sin(1/x)` 就等于填它的真实 ±1 包络。
+1. **Screen-space distance stroke**: for every pixel, compute its first-order
+   distance to the curve from `f` and `f'`,
+   `cov = clamp(lineWidth/2 + 0.5 − d, 0, 1)`. Equal width at any slope, naturally
+   antialiased, and correct by construction at poles (`tan(x)`) and jumps.
+2. **Undersampled envelope band**: when a pixel's x interval holds several
+   oscillations (local period < 1 pixel), the per-pixel distance is meaningless
+   (it renders as moiré). In that case the column's `[min, max]` is filled as a
+   solid band — for `sin(1/x)` this equals filling its true ±1 envelope.
 
-判据都是**尺度无关**的，取并集：(a) 列内折返 ≥ 2 次（普通像素 8 个采样点，带区里
-补到 16 点）；(d) 导数预期 `|f'|·dx` 远超实测跨度（硬阈值 16 倍且 `pred ≥ 4px`）。
-一道闸门：跨度 < 1.5 px 不填（别把峰顶起伏填成色块）。普通像素的成本是 1 次 `f`
-+ 1 次 `f'` + 8 次窄窗口采样；宽窗口（±8 列、16 点）只在带区里算。
+Both criteria are **scale-independent** and are unioned: (a) ≥ 2 direction
+reversals within the column (8 sample points for an ordinary pixel, topped up to 16
+inside the band region); (d) the derivative prediction `|f'|·dx` far exceeds the
+measured spread (hard threshold 16× and `pred ≥ 4px`). One gate: a spread < 1.5 px
+is not filled (do not turn peak ripple into a block of colour). An ordinary pixel
+costs 1 `f` + 1 `f'` + 8 narrow-window samples; the wide window (±8 columns, 16
+points) is only evaluated inside the band region.
 
-## 测试
+## Tests
 
 ```
-uv run pytest                      # 全部
-uv run pytest -m "not gui"         # 跳过开窗渲染的烟测
+uv run pytest                      # everything
+uv run pytest -m "not gui"         # skip the render smoke tests that open a window
 QSG_RHI_BACKEND=opengl uv run pytest -m gui
 ```
 
-- `test_model.py`：GLSL 生成（小整数次幂连乘，避开 `pow(x, y)` 在 x<0 的未定义）、
-  着色器注入、视图数学（缩放严格可逆、锚点不漂移）。
-- `test_shader_bake.py`：烘出的 `.qsb` 的 stage 必须与用途一致，且覆盖
-  GLSL/HLSL/MSL/SPIR-V 四个后端目标。
-- `test_render_smoke.py`：开窗渲染后取像素，验证细线形态、`sin(1/x)` 填 ±1 包络、
-  中心列外侧不得出现 |y|>1 的伪影、极点不连线、定义域外不画。
-- `test_widget.py`：`MathPlotWidget` 与邻居控件的共存——布局里出图、换表达式/非法
-  表达式保留上一份图形、**滚动区里的滚轮被绘图区吃掉（缩放而不是滚动父级）**、
-  绘图区不进 Tab 焦点链。`conftest.py` 提供会话级 `QApplication`（QtWidgets 需要，
-  且一个进程只能有一个）。
+- `test_model.py`: GLSL generation (small integer powers as repeated
+  multiplication, avoiding `pow(x, y)`'s undefined behaviour for x<0), shader
+  injection, view math (zoom strictly reversible, no anchor drift).
+- `test_shader_bake.py`: the stage of a baked `.qsb` must match its purpose, and
+  the four backend targets GLSL/HLSL/MSL/SPIR-V must all be covered.
+- `test_render_smoke.py`: open a window, render, read pixels; verify the thin-line
+  shape, `sin(1/x)` filling its ±1 envelope, no |y|>1 artefacts outside the central
+  columns, poles not connected, and nothing drawn outside the domain.
+- `test_widget.py`: `MathPlotWidget` coexisting with neighbouring widgets — the plot
+  appearing inside a layout, an expression change / an invalid expression keeping the
+  previous graph, **the wheel over a scroll area being consumed by the plot (zoom
+  instead of scrolling the parent)**, and the plot staying out of the Tab focus chain.
+  `conftest.py` provides a session-scoped `QApplication` (QtWidgets needs one, and a
+  process may only have one).
 
-## sin(1/x) 奇点附近的三个坑（已修，别再犯）
+## Pitfalls near the `sin(1/x)` singularity (fixed — do not repeat)
 
-1. **宏参数必须带括号**。表达式是内联进 `#define F(u) (...)` 的，宏是**文本替换**：
-   `F(x - h)` 遇上 `SIN(1.0/u)` 会展开成 `SIN(1.0/x - h)`，于是 8 个采样点全算的是
-   `1.0/x - h_k`（只差个微小偏移）——采样永远几乎相同，`turns=0`、`spread≈0`、包络
-   权重≈0，**包络带从来没生效过**。现在 `func_glsl(..., wrap=True)` 把参数印成 `(u)`，
-   `test_model.py` 里有回归。
-2. **GPU 的 sin/cos 在大参数上不可靠**。`sin(1/x)` 在奇点附近实参能到几百上千；
-   实测（Intel D3D11 与 OpenGL 一致）`cos(1/x)` 返回近 0 的垃圾、`sin` 的采样点几乎
-   相同。现在生成表达式时把 `sin/cos` 包成 `SIN/COS`：先把实参折进 `[0, 2π)` 再调
-   内置函数（小参数各家实现都准）。实测 `d1` 从垃圾的 ~200 回到正确的 ~-18200。
-3. **描边在陡峭列会饱和**。`|f'|` 极大时切线近似对任何 y 都算得极小的水平距离，
-   `cov` 会饱和成整列，还会沿切线外推到远超真实值域的地方（实测把 `sin(1/x)` 涂到
-   ±1.8，而它的值域是 ±1）。现在触发列里先用**采样包络**钳住描边，再用包络带整列替换。
-4. **逐列采样对振荡函数就是相位噪声**。某一列的采样点碰巧漏掉极值/挤在一起时，
-   判据会误判"可分辨"或包络偏窄——表现为虚实交替的梳状锯齿与带边缘的台阶
-   （实测相邻列上边缘平均差 **93.6px**、最大 421px）。现在用两把尺子分开：
-   - **窄窗口（±2 列、8 点）**判"这一列画不下"→ 决定填哪些列（窗口窄，填充范围不会被撑宽）；
-   - **宽窗口（±8 列、16 点）**只用来估带的上/下边缘 → 采样点更可能碰到极值，边缘才平。
-   实测带内相邻列上边缘差降到 **2.4px**；实心带宽度 20 逻辑列（与 numpy 参考版的
-   20/900 一致）。这里是有意取舍：**宁可多填一环带，也不画出锯齿**。
+All of them (macro arguments, GPU `sin`/`cos`, stroke saturation on steep columns,
+per-column phase noise) are recorded in `AGENTS.md` as symptom → cause → fix with
+the measurements that settled them. After the fixes (1350×900, default view, D3D11
+and OpenGL pixel-for-pixel identical): the singularity column of `sin(1/x)` is lit
+over a ratio of 0.50 (= half a column filling the ±1 envelope) with flat edges, and
+inside the central 41 columns no solid pixel falls outside |y|>1 (7961 before).
 
-修好后（1350×900、默认视图、D3D11 与 OpenGL 逐像素一致）：`sin(1/x)` 奇点列点亮
-比例 0.50（= 填 ±1 包络的半列）且边缘平齐，中心 41 列里落在 |y|>1 之外没有实心像素
-（修前是 7961 个）；`sin(x)`/`tan(x)`/`x^2`/`exp(-x²)sin(10x)` 的点亮范围都符合预期。
+- Macro arguments must be parenthesized.
+- GPU `sin`/`cos` are unreliable for large arguments.
+- Tangent-based distance saturates on steep columns.
+- Per-column sampling is phase noise for oscillating functions.
 
-## 定义域、极点与描边（Desmos 式）
+## Domain, poles and stroke (Desmos-style)
 
-[Desmos 的工程博客](https://engineering.desmos.com/articles/press-a-key-in-the-calculator/)
-写得很清楚：把函数**采样**成点、连成**线段**、按线段描边；"相邻点提示跳变就断开"；
-极值/零点再用二分细化。这里照同样思路做：
+[Desmos's engineering blog](https://engineering.desmos.com/articles/press-a-key-in-the-calculator/)
+spells it out: **sample** the function into points, join them into **segments**,
+stroke along the segments; "break where neighbouring points suggest a jump"; refine
+extrema/zeros by bisection. The same approach is used here:
 
-- **描边 = 到采样折线段的距离**（不是到切线的距离）。切线近似在陡峭/强弯曲处会高估
-  距离，笔触会变细、甚至渐变消失（`log(x)` 在 x→0+、`sin(1/x)` 的陡段）；按线段量
-  距离则**处处等宽**。
-- **跳变断开**：靠**解析极点断口**（分母变号，世界单位）——`1/x`、`tan(x)` 的渐近线处
-  不画竖直连线。曾经另有一条"相邻采样落差 > 4 个视口高就断线"的判据，它是像素/视口
-  相对量，放大后会把合法的陡峭段也切断（表现为断续的竖条），已移除。
-- **定义域**（sympy 推出、注入 `DOM`）：分母 ≠ 0、`log` 实参 > 0、`sqrt` 实参 ≥ 0、
-  `asin/acos` 实参 ∈ [−1,1]；域外像素直接丢弃。NaN/inf 采样点既不参与包络也不连线段。
-- **欠采样列**（一列里塞进多个振荡）整列换成包络带：折线在那种列里是随机锯齿。
-  判据有两条，都是**尺度无关**的：(a) 列内折返 ≥ 2 次——窄窗口普通像素采 8 点，带区里
-  补上另外 8 个交错点合成 16 点（8 点时随机采样有 ~11% 的列会漏判折返，表现为残留
-  竖条；全局采 16 点则要让每个像素多算 8 次 `f`，没必要为少数列付）；(d) 一列内按导数
-  要走的距离 pred 远超实测值域跨度 spread
-  （硬阈值 16 倍、且要求 pred ≥ 4px）——亚像素振荡的采样必然漏判（甚至恰好单调），
-  这条不依赖采样随机性。曾经用 `像素跨度 > 4 个视口高` 当闸门防极点涂满，但它是像素
-  单位：放大到视口跨度 < 0.5 时 sin(1/x) 的值域 ±1 换算成像素就超过闸门，带被整个
-  关掉 → 满屏竖条（实测放大 120 档完全空白）。极点改由解析断口单独处理。
-- **无界定义域边界上的无穷延伸**（`unbounded_edges()`，sympy 单侧极限）：`log(x)` 在
-  x→0+ **慢发散**（对数级），固定宽度的采样窗口永远采不到足够深的值——深视口里可见
-  曲线落在 x≈e^y（如 y∈[-16,-12] 时 x∈[1e-7,6e-6]），采样最左只到 log≈-7，**整段消失**。
-  修法：窗口跨过这种边界时，把折线沿边界 x 延伸成竖直射线到 ±1e12，任意深度都画得到
-  （射线落在边界 x 上，所以线宽恒定、各列对齐；x<0 那半边被定义域砍掉，可见宽度正好
-  是半条描边）。`1/x`、`tan(x)` 发散快，采样值天然超出任何视口，不需要；`sqrt`（极限 0）
-  与 `sin(1/x)`（无极限）也不在列。
+- **Stroke = distance to the sampled polyline segments** (not to the tangent). The
+  tangent approximation overestimates the distance on steep or strongly curved
+  parts, so the stroke thins out or even fades away (`log(x)` as x→0+, the steep
+  stretch of `sin(1/x)`); measuring to the segment is **equal width everywhere**.
+- **Break on jumps**: via the **analytic pole gap** (denominator sign change, world
+  units) — no vertical connector is drawn at the asymptotes of `1/x`, `tan(x)`.
+  (An earlier "adjacent samples differ by more than 4 viewport heights" criterion
+  was pixel-/viewport-relative, so under magnification it also cut legitimate steep
+  segments; it was removed.)
+- **Domain** (derived by sympy, injected as `DOM`): denominator ≠ 0, `log` argument
+  > 0, `sqrt` argument ≥ 0, `asin/acos` argument ∈ [−1,1]; pixels outside the domain
+  are discarded outright. NaN/inf samples take part in neither the envelope nor
+  segment joining.
+- **Undersampled columns** (several oscillations inside one column) are replaced
+  wholesale by the envelope band: a polyline is random sawtooth in such columns.
+  There are two criteria, both **scale-independent**: (a) ≥ 2 direction reversals
+  within the column — 8 points in the narrow window for an ordinary pixel, and
+  inside the band region 8 additional interleaved points make it 16 (with 8 points,
+  random sampling misses the reversals in ~11% of columns, showing up as residual
+  vertical stripes; sampling 16 points globally would cost 8 extra `f` evaluations
+  for every pixel, not worth paying for a few columns); (d) the distance `pred` a
+  column should traverse according to the derivative far exceeds the measured
+  `spread` (hard threshold 16×, and `pred ≥ 4px`) — sub-pixel oscillation sampling
+  necessarily misses reversals (it may even come out monotone), and this criterion
+  does not depend on sampling randomness. Pixel-unit gates are avoided here (a
+  spread measured in pixels stops being meaningful once the viewport is deep);
+  poles are handled by the analytic gap instead.
+- **Infinite extension at unbounded domain boundaries** (`unbounded_edges()`, sympy
+  one-sided limits): `log(x)` **diverges slowly** (logarithmically) as x→0+, so a
+  fixed-width sampling window never reaches deep enough values — in a deep viewport
+  the visible curve lies at x≈e^y (e.g. for y∈[-16,-12], x∈[1e-7,6e-6]), while the
+  leftmost sample only reaches log≈-7, so the **whole segment disappears**. Fix:
+  when the window crosses such a boundary, extend the polyline along the boundary x
+  into a vertical ray out to ±1e12, which draws at any depth (the ray lies on the
+  boundary x, so the width is constant and the columns align; the x<0 half is cut
+  away by the domain, leaving exactly half a stroke visible). `1/x` and `tan(x)`
+  diverge fast, so their sampled values naturally exceed any viewport and no ray is
+  needed; `sqrt` (limit 0) and `sin(1/x)` (no limit) are not on the list either.
 
-实测：`log(x)` 陡段横向宽度恒定 1~2 设备像素（此前是渐细的渐变）；`sin(1/x)` 的细线
-宽度均匀；`1/x`、`tan(x)` 极点不连线；`sin(x)`/`x^2`/`exp(-x²)sin(10x)` 不受影响。
+Measured: the steep stretch of `log(x)` has a constant horizontal width of 1~2
+device pixels (previously a tapering gradient); the thin line of `sin(1/x)` is
+uniform in width; `1/x` and `tan(x)` are not connected across their poles;
+`sin(x)`/`x^2`/`exp(-x²)sin(10x)` are unaffected.
 
-## 性能（实测）
+## Performance (measured)
 
-启动到出图约 **230 ms**，归因（Windows / D3D11 / 900×600）：
+Startup to the first frame is about **230 ms**, attributed as follows
+(Windows / D3D11 / 900×600):
 
-| 环节 | 耗时 | 说明 |
+| Stage | Time | Notes |
 |---|---|---|
-| Qt 图形设备初始化（RHI/D3D11） | **~160 ms** | 首个窗口 `show→曝光` 就是这个数；**裸窗口（无 ShaderEffect）一样**，不是着色器的锅 |
-| 建窗 + QML 装载 + 首帧 | ~80 ms | 第二个窗口起（设备已建）才是这个量级 |
-| `qsb` 烘焙 | 0 / ~126 ms | 按源码 hash 缓存：命中 0.15 ms；源码变了（改代码）首次要重烘 |
-| 表达式分析（sympy） | 0.6~3 ms | `unbounded_edges` 只分析**多项式**边界（`tan(x)` 的 `cos(x)=0` 用 solve+limit 要 94 ms，而 tan 发散快、采样天然够深，不需要那条射线） |
+| Qt graphics device init (RHI/D3D11) | **~160 ms** | exactly what the first window's `show→expose` costs; a **bare window (no ShaderEffect) is the same**, so it is not the shader's fault |
+| Window creation + QML load + first frame | ~80 ms | from the second window on (device already created) this is the order of magnitude |
+| `qsb` bake | 0 / ~126 ms | cached by source hash: 0.15 ms on a hit; after a source change (code edit) it must re-bake once |
+| Expression analysis (sympy) | 0.6~3 ms | `unbounded_edges` only analyses **polynomial** boundaries (`tan(x)`'s `cos(x)=0` takes 94 ms via solve+limit, while tan diverges fast and sampling is naturally deep enough, so that ray is not needed) |
 
-每帧 GPU 成本（2400×1500、极限放大、最坏情况）**31 ms**；900×600 约 1/7，远在
-60 Hz 的 16.7 ms 之下。着色器源码约 6.9 KB。
+Per-frame GPU cost (2400×1500, extreme zoom, worst case) is **31 ms**; about 1/7 of
+that at 900×600, far below the 16.7 ms of 60 Hz. The shader source is about 6.9 KB.
 
-## 踩过的坑（别再犯）
+## Pitfalls already hit (do not repeat)
 
-- **qsb 靠源文件后缀判 stage**：写成 `.glsl` 会被当成 vertex，片元着色器就会
-  被烘成顶点着色器 → D3D11 的像素阶段拿到非法 HLSL（`X4502`），Intel 驱动直接
-  第一帧挂死；GL 后端因为按槽位赋 stage 而看不出来。见 `qsb.bake()` 与
-  `test_shader_bake.py`。
-- **取像素用 `QQuickItem.grabToImage()`（异步）**，不要用
-  `QQuickWindow.grabWindow()`：后者的同步握手会和 Python 侧对象死锁，表现为
-  窗口"未响应"。
-- 表达式用**宏**而不是 GLSL 用户函数：一个像素里要对同一个 x 求值 9 次，
-  宏是预处理展开、没有函数调用语义。
+`AGENTS.md` at the repo root carries all 21 records (symptom → cause → fix, with the
+measurement that settled each one). The Qt/packaging ones that shaped the code:
+
+- qsb decides the stage from the source file suffix (see `qsb.bake()` and
+  `test_shader_bake.py`).
+- Read pixels with the async `QQuickItem.grabToImage()`, never
+  `QQuickWindow.grabWindow()`.
+- Expressions are **macros** rather than GLSL user functions: a pixel evaluates the
+  same x 9 times, and macros are preprocessor expansion with no call semantics.

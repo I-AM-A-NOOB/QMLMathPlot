@@ -1,4 +1,4 @@
-"""Model 层单测：表达式 -> GLSL、着色器源码、视图矩形数学（不依赖 Qt）。"""
+"""Model-layer unit tests: expression -> GLSL, shader sources, view-rectangle math (no Qt)."""
 
 import pytest
 import sympy as sp
@@ -16,8 +16,9 @@ X = sp.Symbol("x")
     (sp.exp(-X * X) * sp.sin(10 * X), "exp(-(x*x))*SIN(10*x)"),
 ])
 def test_func_glsl(expr, expected):
-    """小整数次幂必须连乘（GLSL 的 pow(x, y) 在 x<0 时未定义，驱动常给 NaN）；
-    sin/cos 必须包成 SIN/COS（参数归约，见 model 里的说明）。"""
+    """Small integer powers must be expanded into repeated multiplication (GLSL's
+    pow(x, y) is undefined for x<0 and drivers often return NaN); sin/cos must be
+    wrapped as SIN/COS (argument reduction, see the note in model)."""
     assert model.func_glsl(expr) == expected
 
 
@@ -30,7 +31,8 @@ def test_dfunc_glsl():
 
 
 def test_func_glsl_wraps_macro_parameter():
-    """wrap=True 把宏参数印成 (u)：宏是文本替换，少这层括号就改了语义。"""
+    """wrap=True prints the macro argument as (u): a macro is textual substitution,
+    and without that layer of parentheses the meaning changes."""
     assert model.func_glsl(sp.sin(1 / X), "u", wrap=True) == "SIN(1.0/(u))"
 
 
@@ -39,10 +41,10 @@ def test_shader_sources_inject_expression():
     assert vert == model.VERTEX_SHADER
     assert "@FUNC@" not in frag
     assert "@DFUNC@" not in frag
-    # 宏是文本替换：参数必须带括号，否则 F(x - h) 会展开成 1.0/x - h
-    # （实测这个括号缺失让 8 个采样点全算错，包络判据永远拿不到有效采样）
+    # Macros are textual substitution: the argument needs parentheses, otherwise
+    # F(x - h) would expand to 1.0/x - h
     assert "#define F(u) (SIN(1.0/(u)))" in frag
-    assert "#define DF -COS(1.0/x)/(x*x)" in frag  # 导数仍按 x 求值
+    assert "#define DF -COS(1.0/x)/(x*x)" in frag  # the derivative is still evaluated in x
 
 
 def test_zoom_round_trip_is_exact():
@@ -63,7 +65,7 @@ def test_zoom_keeps_anchor_world_point():
 
 def test_pan_pixels_moves_by_view_fraction():
     rect = model.ViewRect()
-    rect.pan_pixels(90, 60, 900, 600)  # 宽、高各 1/10
+    rect.pan_pixels(90, 60, 900, 600)  # 1/10 of the width and height
     assert rect.as_tuple() == pytest.approx((-7.2, 4.8, -1.6, 2.4))
 
 
@@ -82,15 +84,15 @@ def test_reset_restores_default_view():
 
 
 def test_pole_and_domain_analysis():
-    """极点因子（变号处 = +∞/-∞ 跳变）与定义域条件。"""
+    """Pole factors (a sign change = a +inf/-inf jump) and domain conditions."""
     assert model.pole_glsl(1 / X) == "(x)"
     assert model.domain_glsl(1 / X) == "(x != 0)"
-    assert model.pole_glsl(sp.tan(X)) == "(COS(x))"      # tan 的极点在 cos(x)=0
+    assert model.pole_glsl(sp.tan(X)) == "(COS(x))"      # tan's poles are where cos(x)=0
     assert model.domain_glsl(sp.tan(X)) == "(COS(x) != 0)"
     assert model.domain_glsl(sp.log(X)) == "(x > 0)"
     assert model.domain_glsl(sp.sqrt(X)) == "(x >= 0)"
-    assert model.pole_glsl(X**2) is None                 # 处处连续，没有极点因子
-    assert model.domain_glsl(X**2) is None               # 全定义域
+    assert model.pole_glsl(X**2) is None                 # continuous everywhere, no pole factor
+    assert model.domain_glsl(X**2) is None               # the whole domain
 
 
 def test_shader_sources_inject_domain_and_pole():
@@ -98,18 +100,20 @@ def test_shader_sources_inject_domain_and_pole():
     assert "#define DOM(u) ((u != 0))" in frag
     assert "#define POLE(u) ((u))" in frag
     _, smooth = model.shader_sources(X**2)
-    assert "#define DOM(u) true" in smooth               # 无法分析 => 恒真
-    assert "#define POLE(u) 1.0" in smooth               # 无极点 => 乘积恒正，不会误判
+    assert "#define DOM(u) true" in smooth               # not analysable => identically true
+    assert "#define POLE(u) 1.0" in smooth               # no pole => the product stays positive, no false positives
 
 
 
 
 def test_unbounded_edges():
-    """哪些定义域边界需要"无穷延伸"：只有慢发散的那些。
+    """Which domain boundaries need "infinite extension": only the slowly diverging ones.
 
-    log(x) 在 x→0+ 趋于 -∞，但采样窗口固定宽度、采不到那么深 → 深视口里曲线会整段
-    消失，必须靠解析出的边界射线补上。sqrt(x) 在 0 有界（0），sin(1/x) 在 0 无极限，
-    都不需要；1/x 快发散，采样天然够深，但解析上标出双方向也无害。
+    log(x) tends to -inf as x->0+, but the sampling window has a fixed width and cannot
+    reach that deep, so in a deep viewport the whole curve would vanish and has to be
+    added back by the analytically derived boundary ray. sqrt(x) is bounded at 0 (0), and
+    sin(1/x) has no limit at 0, so neither needs it; 1/x diverges fast and sampling is
+    naturally deep enough, but marking both directions analytically does no harm.
     """
     assert model.unbounded_edges(sp.log(X)) == [(0.0, True, False)]
     assert model.unbounded_edges(sp.sqrt(X)) == []

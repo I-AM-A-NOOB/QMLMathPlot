@@ -1,11 +1,12 @@
-"""MVP 入口：把组件包成一个最小可验证的窗口（供 `main.py` / `uv run qmlmathplot` 调用）。
+"""MVP entry point: wraps the component into a minimal verifiable window (called by `main.py` /
+`uv run qmlmathplot`).
 
     python main.py --backend d3d11 "sin(1/x)"
 
-RHI 后端由启动参数决定；不指定就用 Qt 的默认后端。指定时必须在
-``QGuiApplication`` 之前写成 ``QSG_RHI_BACKEND`` —— Qt 在平台初始化时读它，
-之后再调 ``QQuickWindow.setGraphicsApi()`` 不生效（窗口的 surface 已按默认后端
-建好，实测报 "QRhiGles2: Failed to make context current"）。
+The RHI backend comes from the launch argument; without it, Qt's default backend is used. When
+specified it must be written to ``QSG_RHI_BACKEND`` *before* ``QGuiApplication`` — Qt reads it
+during platform initialization, so calling ``QQuickWindow.setGraphicsApi()`` later has no effect
+(the window's surface has already been created for the default backend).
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from PySide6.QtQuick import QQuickView
 
 from .viewmodel import PlotController, qml_component_path, register_qml_types
 
-# QSG_RHI_BACKEND 的合法取值（Qt 6）；不指定 = Qt 默认（Windows 上是 d3d11）
+# Valid QSG_RHI_BACKEND values (Qt 6); unset = Qt default (d3d11 on Windows)
 BACKENDS = ("d3d11", "d3d12", "vulkan", "metal", "opengl", "null")
 
 DEFAULT_EXPRESSION = "sin(x)"
@@ -29,14 +30,14 @@ DEFAULT_EXPRESSION = "sin(x)"
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="qmlmathplot",
-        description="QMLMathPlot 组件的最小验证窗口（拖拽平移、滚轮缩放）。",
+        description="Minimal verifiable window for QMLMathPlot (drag to pan, wheel to zoom).",
     )
     parser.add_argument("expression", nargs="?", default=DEFAULT_EXPRESSION,
-                        help=f"sympy 语法表达式（默认 {DEFAULT_EXPRESSION}）")
+                        help=f"expression in sympy syntax (default {DEFAULT_EXPRESSION})")
     parser.add_argument("--backend", choices=BACKENDS, default=None,
-                        help="Qt Quick 的 RHI 后端；不指定则用 Qt 默认值")
-    parser.add_argument("--width", type=int, default=900, help="窗口宽（默认 900）")
-    parser.add_argument("--height", type=int, default=600, help="窗口高（默认 600）")
+                        help="RHI backend for Qt Quick; Qt's default when not specified")
+    parser.add_argument("--width", type=int, default=900, help="window width (default 900)")
+    parser.add_argument("--height", type=int, default=600, help="window height (default 600)")
     return parser
 
 
@@ -44,7 +45,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(sys.argv[1:] if argv is None else argv)
 
     if args.backend is not None:
-        # 显式指定的后端优先于环境变量：命令行就是要覆盖一切
+        # An explicitly given backend wins over the environment: the command line overrides all
         os.environ["QSG_RHI_BACKEND"] = args.backend
 
     app = QGuiApplication(sys.argv[:1])
@@ -62,14 +63,15 @@ def main(argv: list[str] | None = None) -> int:
 
     root = view.rootObject()
     if root is None:
-        print("QML 根对象创建失败", file=sys.stderr)
+        print("failed to create the QML root object", file=sys.stderr)
         return 1
 
-    # MVVM：App 侧持有 ViewModel 并注入组件（组件未注入时也会自带一个）
+    # MVVM: the app side owns the ViewModel and injects it into the component (which also
+    # brings its own when nothing is injected)
     controller = PlotController(args.expression)
     root.setProperty("controller", controller)
 
     view.show()
-    print(f"RHI 后端: {view.graphicsApi()}  (QSG_RHI_BACKEND={os.environ.get('QSG_RHI_BACKEND', '未设置')})",
+    print(f"RHI backend: {view.graphicsApi()}  (QSG_RHI_BACKEND={os.environ.get('QSG_RHI_BACKEND', 'not set')})",
           flush=True)
     return app.exec()

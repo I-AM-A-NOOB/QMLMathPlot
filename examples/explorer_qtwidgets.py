@@ -1,18 +1,26 @@
-"""稍详细的示例：函数输入框 + 一圈"会抢事件"的邻居，用来验证绘图控件会不会打架。
+"""A slightly more detailed example: a function input box plus a ring of event-grabbing
+neighbours, to verify that the plot widget does not fight with them.
 
-    python examples/explorer.py
+    python examples/explorer_qtwidgets.py
 
-刻意把绘图控件放进容易冲突的环境，肉眼 + 日志双重验证：
+Deliberately puts the plot widget in a conflict-prone environment, verified both by eye
+and by the log:
 
-* **输入框 QLineEdit**：回车或点"绘制"换表达式。绘图区是 ``ClickFocus``（不进 Tab
-  焦点链），所以连续输入时焦点不会被抢；输错时保留上一份可用图形，红字给出 sympy 报错。
-* **滚动区 QScrollArea**：绘图区 1200×800 比视口大。滚轮落在**绘图区**上是缩放
-  （QML 侧已 ``accepted``，事件不会漏给滚动区）；落在**滚动条**上才是滚动。
-  这是 widgets 世界里最容易打架的一处。
-* **分割条 QSplitter + 文本框**：拖动分割条改变绘图区大小，看重绘与叠放是否正常。
-* **覆盖层**：半透明 QLabel 叠在绘图区左上角（且 ``WA_TransparentForMouseEvents``），
-  验证 QQuickWidget 与兄弟控件的叠放、以及鼠标穿透。
-* **事件日志**（右侧）：滚轮/焦点事件落在哪个控件上，一行一行写出来，谁抢到一目了然。
+* **Input box QLineEdit**: Enter or the "Draw" button switches the expression. The plot
+  area is ``ClickFocus`` (not in the Tab focus chain), so focus is not stolen while
+  typing; on a bad expression the last working plot is kept and the sympy error appears
+  in red.
+* **Scroll area QScrollArea**: the plot area is 1200×800, larger than the viewport. A
+  wheel over the **plot area** zooms (the QML side already ``accepted`` it, so the event
+  never leaks to the scroll area); only a wheel over the **scroll bar** scrolls. This is
+  the easiest place to fight in the widgets world.
+* **Splitter QSplitter + text box**: dragging the splitter resizes the plot area, to see
+  whether repaint and stacking behave.
+* **Overlay**: a translucent QLabel over the plot area's upper-left corner (with
+  ``WA_TransparentForMouseEvents``), verifying QQuickWidget stacking with sibling widgets
+  and mouse pass-through.
+* **Event log** (right): which widget each wheel/focus event lands on, one line at a
+  time, so whoever grabbed it is obvious.
 """
 
 from __future__ import annotations
@@ -54,16 +62,16 @@ SAMPLES = (
 
 @final
 class Explorer(QMainWindow):
-    """输入框 + 滚动区 + 分割条 + 覆盖层，围着绘图控件一圈。"""
+    """An input box + scroll area + splitter + overlay, ringing the plot widget."""
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("QMLMathPlot — 控件共存验证")
+        self.setWindowTitle("QMLMathPlot — widget coexistence check")
         self.resize(1200, 760)
 
-        # ---------------------------------------------------------- 顶栏控件
+        # ---------------------------------------------------------- top-bar widgets
         self.input = QLineEdit("sin(1/x)")
-        self.input.setPlaceholderText("sympy 语法：sin(1/x) / tan(x) / log(x) …")
+        self.input.setPlaceholderText("sympy syntax: sin(1/x) / tan(x) / log(x) …")
         self.input.setMinimumWidth(260)
         self.input.returnPressed.connect(self.draw)
 
@@ -71,9 +79,9 @@ class Explorer(QMainWindow):
         self.samples.addItems(SAMPLES)
         self.samples.activated.connect(self.pick_sample)
 
-        draw = QPushButton("绘制")
+        draw = QPushButton("Draw")
         draw.clicked.connect(self.draw)
-        reset = QPushButton("重置视图")
+        reset = QPushButton("Reset view")
         reset.clicked.connect(lambda: self.plot.reset_view())
 
         self.error = QLabel("")
@@ -87,15 +95,15 @@ class Explorer(QMainWindow):
         top.addWidget(reset)
         top.addWidget(self.error, 1)
 
-        # ------------------------------------------------------ 绘图控件本体
+        # ------------------------------------------------------ the plot widget itself
         self.plot = MathPlotWidget(self.input.text())
-        self.plot.setMinimumSize(1200, 800)          # 比视口大 -> 滚动区真能滚
+        self.plot.setMinimumSize(1200, 800)          # larger than the viewport -> the scroll area really can scroll
         self.plot.expressionChanged.connect(self.sync_status)
         self.plot.errorChanged.connect(self.sync_status)
         self.plot.controller.viewChanged.connect(self.sync_status)
 
-        # 覆盖层：叠在绘图区上，但不吃鼠标事件
-        self.overlay = QLabel("覆盖层 QLabel（半透明、鼠标穿透）", self.plot)
+        # overlay: stacked over the plot area, but does not consume mouse events
+        self.overlay = QLabel("Overlay QLabel (translucent, click-through)", self.plot)
         self.overlay.setStyleSheet(
             "background: rgba(255,255,255,28); color: #dddddd; padding: 4px 8px;"
             "border: 1px solid rgba(255,255,255,60); border-radius: 4px;"
@@ -106,17 +114,17 @@ class Explorer(QMainWindow):
 
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidget(self.plot)
-        self.scroll_area.setWidgetResizable(False)        # 保持绘图区 1200×800
+        self.scroll_area.setWidgetResizable(False)        # keep the plot area at 1200×800
         self.scroll_area.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
-        # ------------------------------------------------------------ 右侧日志
+        # ------------------------------------------------------------ right-hand log
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setMaximumBlockCount(400)
         self.log.setPlainText(
-            "事件日志（滚轮 / 焦点落在哪个控件上）：\n"
-            "· 滚轮在绘图区 = 缩放；滚轮在滚动条 = 滚动\n"
-            "· 焦点只在输入框/文本框之间转移，绘图区不进 Tab 链\n"
+            "Event log (which widget each wheel / focus event lands on):\n"
+            "· wheel over the plot area = zoom; wheel over the scroll bar = scroll\n"
+            "· focus moves only between the input box / text box; the plot area is not in the Tab chain\n"
         )
 
         split = QSplitter(Qt.Orientation.Horizontal)
@@ -132,19 +140,19 @@ class Explorer(QMainWindow):
         self.setStatusBar(QStatusBar())
         self.sync_status()
 
-        # 全局事件过滤器：记录谁收到了滚轮/焦点（纯观察，不改行为）
+        # global event filter: log who received the wheel/focus (pure observation, no behaviour change)
         app = QApplication.instance()
         assert app is not None
         app.installEventFilter(self)
 
-    # ------------------------------------------------------------------ 槽
+    # ------------------------------------------------------------------ slots
     def pick_sample(self) -> None:
         self.input.setText(self.samples.currentText())
         self.draw()
 
     def draw(self) -> None:
         self.plot.expression = self.input.text()
-        self.log_line(f"绘制 {self.input.text()!r}")
+        self.log_line(f"draw {self.input.text()!r}")
         self.sync_status()
 
     def sync_status(self) -> None:
@@ -152,18 +160,18 @@ class Explorer(QMainWindow):
         self.error.setText(self.plot.error)
         self.statusBar().showMessage(
             f"x ∈ [{xmin:.6g}, {xmax:.6g}]   y ∈ [{ymin:.6g}, {ymax:.6g}]   "
-            f"（拖拽平移 / 滚轮以光标为锚点缩放）"
+            f"(drag to pan / wheel zooms anchored at the cursor)"
         )
 
     def log_line(self, text: str) -> None:
         self.log.appendPlainText(text)
 
-    # ------------------------------------------------------- 事件观察
+    # ------------------------------------------------------- event observation
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if event.type() == QEvent.Type.Wheel:
-            self.log_line(f"滚轮 -> {type(watched).__name__}")
+            self.log_line(f"wheel -> {type(watched).__name__}")
         elif event.type() == QEvent.Type.FocusIn and isinstance(watched, QWidget):
-            self.log_line(f"焦点 -> {type(watched).__name__}")
+            self.log_line(f"focus -> {type(watched).__name__}")
         return super().eventFilter(watched, event)
 
 

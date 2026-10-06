@@ -1,9 +1,11 @@
-"""端到端烟测：真的开窗渲染，取像素验证两块拼图（屏幕空间描边 + 欠采样包络带）。
+"""End-to-end smoke tests: really open a window and render, then check pixels for the two
+pieces of the puzzle (screen-space stroke + undersampled envelope band).
 
-取图必须用异步的 ``QQuickItem.grabToImage()``：``QQuickWindow.grabWindow()`` 的
-同步握手会和 Python 侧的场景图对象死锁（表现为窗口"未响应"）。
+Grabbing the image must use the asynchronous ``QQuickItem.grabToImage()``: the synchronous
+handshake of ``QQuickWindow.grabWindow()`` deadlocks with the Python-side scene-graph
+objects (the window shows up as "not responding").
 
-后端由环境变量 ``QSG_RHI_BACKEND`` 决定（不设 = Qt 默认）。
+The backend is chosen by the ``QSG_RHI_BACKEND`` environment variable (unset = Qt default).
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ from qmlmathplot import PlotController, qml_component_path
 pytestmark = pytest.mark.gui
 
 WIDTH, HEIGHT = 900, 600
-BACKGROUND = (0x14, 0x14, 0x1E)  # MathPlot.qml 的 backgroundColor
+BACKGROUND = (0x14, 0x14, 0x1E)  # backgroundColor of MathPlot.qml
 
 
 def _render(app: QGuiApplication, expression: str | None = None,
@@ -33,16 +35,17 @@ def _render(app: QGuiApplication, expression: str | None = None,
     root = view.rootObject()
     controller = PlotController(expression) if expression is not None else None
     if controller is not None:
-        # MVVM：App 侧创建 ViewModel 并注入组件（组件也会自带一个，这里走注入路径）
+        # MVVM: the app side creates the ViewModel and injects it into the component
+        # (the component also has its own; here we exercise the injection path)
         root.setProperty("controller", controller)
     view.show()
     if not QTest.qWaitForWindowExposed(view):
-        pytest.skip("没有可用的显示/GPU 场景图")
+        pytest.skip("no usable display/GPU scenegraph")
     if pan_pixels and controller is not None:
         controller.panPixels(0.0, pan_pixels, float(WIDTH), float(HEIGHT))
     if zoom_steps and controller is not None:
         for _ in range(zoom_steps):
-            controller.zoom(120.0, 0.5, 0.5)   # 每档跨度 ×0.9
+            controller.zoom(120.0, 0.5, 0.5)   # each step spans x0.9
 
     for _ in range(20):
         app.processEvents()
@@ -67,36 +70,38 @@ def _lit_count(image: QImage) -> int:
 
 
 def _column_ratio(image: QImage, x: int) -> float:
-    """某一列的点亮比例（与 devicePixelRatio 无关）。"""
+    """Fraction of lit pixels in one column (independent of devicePixelRatio)."""
     return sum(_lit(image, x, y) for y in range(image.height())) / image.height()
 
 
 def _center_column_ratio(image: QImage) -> float:
-    """图像中心列（世界 x≈0，即 sin(1/x) 的奇点）的点亮比例。"""
+    """Fraction of lit pixels in the image's centre column (world x≈0, the
+    singularity of sin(1/x))."""
     return _column_ratio(image, image.width() // 2)
 
 
 def test_smooth_curve_is_a_thin_stroke(app: QGuiApplication) -> None:
     image = _render(app, "sin(x)")
     width, height = image.width(), image.height()
-    assert _lit_count(image) > 100, "曲线上什么都没有"
-    assert _lit(image, width // 2, height // 2), "sin(0)=0 应过视图中心"
-    assert not _lit(image, width // 2, height // 10), "曲线上方应是背景"
+    assert _lit_count(image) > 100, "nothing at all is drawn on the curve"
+    assert _lit(image, width // 2, height // 2), "sin(0)=0 should pass through the view centre"
+    assert not _lit(image, width // 2, height // 10), "above the curve should be background"
     ratio = _center_column_ratio(image)
-    assert ratio < 0.05, f"中心列应只有一条细线，实际点亮 {ratio:.3f}"
+    assert ratio < 0.05, f"the centre column should hold only a thin line, got {ratio:.3f}"
 
 
 def test_component_works_without_injection(app: QGuiApplication) -> None:
-    """不注入 ViewModel 时组件自带一个（README 承诺的独立可用）。"""
+    """Without an injected ViewModel the component brings its own (the standalone
+    usability promised by the README)."""
     image = _render(app)
-    assert _lit_count(image) > 100, "自带 controller 的默认表达式 sin(x) 应画出曲线"
+    assert _lit_count(image) > 100, "the built-in controller's default expression sin(x) should draw a curve"
 
 
 def _solid_outside_pm1(image: QImage) -> int:
-    """中心 41 列里，落在 |y|>1 之外的**实心**像素数（阈值取高，不算抗锯齿羽化）。
+    """Number of **solid** pixels inside the central 41 columns that fall outside |y|>1
+    (threshold taken high, so antialiasing feathering is not counted).
 
-    sin(1/x) 的值域是 ±1，超出即伪影：曾经因为"宏参数没加括号"导致采样点全算错、
-    切线外推把整列涂满，实测溢出 7961 个像素。
+    sin(1/x) has range ±1; solid pixels beyond that are artifacts.
     """
     height = image.height()
     columns = range(image.width() // 2 - 20, image.width() // 2 + 21)
@@ -105,113 +110,122 @@ def _solid_outside_pm1(image: QImage) -> int:
 
 
 def _solid_band_columns(image: QImage) -> int:
-    """实心带（每列点亮 >40% 高度）的列数，用来盯住"别为了消锯齿把带撑太宽"。"""
+    """Number of columns of the solid band (each column >40% lit), to keep an eye on
+    "don't widen the band just to smooth out the jaggies"."""
     height = image.height()
     return sum(1 for x in range(image.width())
                if sum(_lit(image, x, y, threshold=60) for y in range(height)) > 0.4 * height)
 
 
 def test_undersampled_column_fills_envelope_within_pm1(app: QGuiApplication) -> None:
-    """sin(1/x) 奇点列填真实 ±1 包络（约半列），不得画到 ±1 之外，宽度也不能失控。
+    """The singular column of sin(1/x) fills the true ±1 envelope (about half a column),
+    must not be painted outside ±1, and its width must not run out of control.
 
-    带区宽度实测 20 逻辑列（numpy 参考版同样是 20/900）——采样窗口放宽是为了消掉
-    梳状锯齿（相邻列上边缘差 93px → 2px），代价是填充范围略宽，是有意取舍。
+    The sampling window is deliberately wider than strictly needed so the comb-like
+    aliasing is smoothed out, at the cost of a slightly wider fill; this tradeoff is intended.
     """
     image = _render(app, "sin(1/x)")
     ratio = _center_column_ratio(image)
-    assert 0.3 < ratio < 0.7, f"奇点列应填 ±1 包络（约半列），实际 {ratio:.2f}"
+    assert 0.3 < ratio < 0.7, f"the singular column should fill the ±1 envelope (about half a column), got {ratio:.2f}"
     outside = _solid_outside_pm1(image)
-    assert outside < 50, f"sin(1/x) 值域是 ±1，不该有实心像素在之外，实际 {outside}"
-    width = _solid_band_columns(image) / 1.5  # 抓图带 devicePixelRatio
-    assert 5 < width < 60, f"实心带宽度应在个位数~几十逻辑列，实际 {width:.0f}"
+    assert outside < 50, f"sin(1/x) has range ±1, so there should be no solid pixels outside it, got {outside}"
+    width = _solid_band_columns(image) / 1.5  # the grab carries devicePixelRatio
+    assert 5 < width < 60, f"the solid band width should be a single-digit to a few dozen logical columns, got {width:.0f}"
 
 
 def test_smooth_column_stays_thin(app: QGuiApplication) -> None:
     ratio = _center_column_ratio(_render(app, "sin(x)"))
-    assert ratio < 0.05, f"sin(x) 在 x=0 处应仍是细线，实际 {ratio:.2f}"
+    assert ratio < 0.05, f"sin(x) should still be a thin line at x=0, got {ratio:.2f}"
 
 
 def _column_lit(image: QImage, world_x: float) -> int:
-    """给定世界 x 处那一列的点亮像素数。"""
+    """Number of lit pixels in the column at the given world x."""
     x = min(image.width() - 1, max(0, int((world_x + 6) / 12 * image.width())))
     return sum(_lit(image, x, y) for y in range(image.height()))
 
 
 def test_asymptote_is_not_connected(app: QGuiApplication) -> None:
-    """1/x、tan(x) 在极点处不得画出竖直连线（值域 ±∞ 的跳变）。"""
+    """1/x and tan(x) must not draw a vertical connecting line at their poles
+    (a jump over a ±inf range)."""
     for expr, poles in (("1/x", [0.0]), ("tan(x)", [1.5708])):
         image = _render(app, expr)
         for pole in poles:
             lit = _column_lit(image, pole)
-            assert lit < 30, f"{expr} 在 x={pole} 处不应有连线，实际点亮 {lit} 像素"
+            assert lit < 30, f"{expr} should have no connecting line at x={pole}, got {lit} lit pixels"
 
 
 def test_out_of_domain_is_blank(app: QGuiApplication) -> None:
-    """log(x)、sqrt(x)、asin(x) 在定义域外不画（x<0 / |x|>1）。"""
+    """log(x), sqrt(x) and asin(x) draw nothing outside their domain (x<0 / |x|>1)."""
     for expr in ("log(x)", "sqrt(x)"):
         image = _render(app, expr)
         left = sum(_lit(image, x, y) for x in range(0, image.width() // 2 - 4)
                    for y in range(0, image.height(), 5))
-        assert left == 0, f"{expr} 在 x<0 不该有像素，实际 {left}"
+        assert left == 0, f"{expr} should have no pixels for x<0, got {left}"
     image = _render(app, "asin(x)")
-    # 左端 x ∈ [-6, -1]：|x|>1 全部落在定义域外
+    # left end x in [-6, -1]: everything with |x|>1 lies outside the domain
     far = sum(_lit(image, x, y) for x in range(0, int((-1.0 + 6) / 12 * image.width()))
               for y in range(0, image.height(), 5))
-    assert far == 0, f"asin(x) 在 |x|>1 不该有像素，实际 {far}"
+    assert far == 0, f"asin(x) should have no pixels for |x|>1, got {far}"
 
 
 def test_log_descent_is_not_cut(app: QGuiApplication) -> None:
-    """log(x) 在 x→0+ 要一路画到视口外，不能被采样包络下界切断（"逐渐变细消失"）。
+    """log(x) must be drawn all the way out of the viewport as x→0+, not cut off by the
+    lower bound of the sampling envelope ("gradually thinning away").
 
-    视口下移 6 个单位（y∈[-8,-4]）：x≈0.004 那一列的曲线在本列内就从 -4.5 扫到 -∞，
-    必须有点亮像素落到视口底边附近。
+    The viewport is panned down by 6 units (y in [-8,-4]): the curve's column at x≈0.004
+    sweeps from -4.5 to -inf within that single column, so lit pixels must land near the
+    bottom edge of the viewport.
     """
     image = _render(app, "log(x)", pan_pixels=-900.0)
     height = image.height()
     column = _column_lit(image, 0.004)
-    assert column > 0, "log(x) 在 x≈0.004 处应有像素"
-    # 下降段就在中心列附近（x≈0.004 处 log 已到 -7 以下，整列都该有像素）
+    assert column > 0, "log(x) should have pixels at x≈0.004"
+    # the descending part is right by the centre column (at x≈0.004 log is already below -7,
+    # so the whole column should have pixels)
     center = image.width() // 2
     bottom = sum(_lit(image, x, y) for x in range(center - 4, center + 5)
                  for y in range(int(height * 0.97), height))
-    assert bottom > 0, "log(x) 的下降段应一直画到视口底边"
+    assert bottom > 0, "log(x)'s descending part should be drawn all the way to the viewport's bottom edge"
 
 
 def test_log_descends_into_deep_views(app: QGuiApplication) -> None:
-    """log(x) 的下降段在深视口里也必须可见（x→0+ 慢发散，采样窗口够不到）。
+    """log(x)'s descending part must also be visible in deep viewports (x→0+ diverges
+    slowly, so the sampling window cannot reach it).
 
-    视口下移到 y∈[-16,-12] 时，可见的曲线全落在 x∈[1e-7,6e-6]，即紧贴定义域边界
-    x=0；固定宽度的采样窗口最左只能采到 log≈-7，整段会消失。修复后由"无界边界
-    射线"沿 x=0 画出，表现为贴着 y 轴的一整列竖直下降线。
+    With the viewport panned to y in [-16,-12], the visible curve lies entirely in
+    x in [1e-7, 6e-6], hugging the domain boundary x=0; a fixed-width sampling window can
+    only reach log≈-7, so the whole segment would disappear. It is drawn by the "unbounded
+    boundary ray" along x=0, which shows up as a full column of vertical descent hugging
+    the y axis.
     """
     image = _render(app, "log(x)", pan_pixels=-2100.0)
     height = image.height()
     center = image.width() // 2
     col = sum(_lit(image, x, y) for x in range(center - 3, center + 4)
               for y in range(height))
-    assert col > 0.5 * height, f"深视口里 log(x) 应贴着 x=0 有一整列下降线，实际 {col} 像素"
+    assert col > 0.5 * height, f"in a deep viewport log(x) should have a full column of descent hugging x=0, got {col} pixels"
 
 
 def test_extreme_zoom_of_oscillation_fills_solid(app: QGuiApplication) -> None:
-    """极限放大 sin(1/x)：振荡远快于采样时该整屏实心，而不是满屏竖条。
+    """Extreme zoom on sin(1/x): once the oscillation is far faster than the sampling rate
+    the screen should fill solid, not be a screen full of vertical stripes.
 
-    带区触发判据曾经用"像素跨度 > 4 个视口高"当闸门防极点涂满——但它是像素单位，
-    放大到视口跨度 < 0.5 时 sin(1/x) 的值域 ±1 换算成像素就超过闸门，带被整个关掉，
-    只剩折线锯齿。实测（放大档 = 跨度 ×0.9^档）：修复前 90 档只有 0.15% 列有亮、
-    120 档完全空白；修复后 90/120 档约 95% 列填满。
+    The band is gated by a criterion expressed in view-span units rather than pixels: a
+    pixel-based gate would switch the band off entirely once a zoomed view spans less than
+    the value range (in pixels), leaving only jagged polylines.
     """
     image = _render(app, "sin(1/x)", zoom_steps=90)
     height = image.height()
     counts = [sum(_lit(image, x, y) for y in range(height)) for x in range(image.width())]
     filled = sum(1 for c in counts if c > 0.5 * height) / len(counts)
-    assert filled > 0.5, f"极限放大应填成实心（亚像素振荡），实际填满列比例 {filled:.1%}"
+    assert filled > 0.5, f"extreme zoom should fill solid (sub-pixel oscillation), got a filled-column ratio of {filled:.1%}"
 
 
 def test_steep_segments_are_not_fragmented(app: QGuiApplication) -> None:
-    """陡峭段不能被"落差阈值"当成跳变切断（放大后竖条必须是连续的一整条）。
+    """Steep segments must not be cut off as jumps by a "drop threshold" (after zooming, a
+    vertical stripe must be one continuous line).
 
-    跳变断线曾经用"相邻采样落差 > 4 个视口高"——那是像素/视口相对量，放大后合法的
-    陡峭段也会被切断，表现为断续的竖条。极点已由解析断口负责，这条判据已移除。
+    Poles are already handled by the analytic gap, so no jump criterion is applied here.
     """
     image = _render(app, "sin(1/x)", zoom_steps=30)
     height = image.height()
@@ -225,4 +239,4 @@ def test_steep_segments_are_not_fragmented(app: QGuiApplication) -> None:
             cur = cur + 1 if ys[i] == ys[i - 1] + 1 else 1
             best = max(best, cur)
         worst = min(worst, best / len(ys))
-    assert worst > 0.9, f"竖条应连续（最长连续段/点亮行数），最差列只有 {worst:.2f}"
+    assert worst > 0.9, f"vertical stripes should be continuous (longest run / lit rows), worst column only {worst:.2f}"

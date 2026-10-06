@@ -1,7 +1,7 @@
 [project]
 name = "qmlmathplot"
 version = "0.1.0"
-description = "可嵌入 Qt Quick App 的函数绘图组件（隐式逐像素绘制，MVVM）"
+description = "Embeddable function plotter for Qt Quick / QtWidgets (implicit per-pixel drawing, MVVM)"
 readme = "README.md"
 authors = [
     { name = "I-AM-A-NOOB", email = "suzc08@outlook.com" }
@@ -27,5 +27,5 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
-    "gui: 需要真实 GPU 场景图（会开窗渲染）",
+    "gui: needs a real GPU scene graph (opens windows and renders)",
 ]

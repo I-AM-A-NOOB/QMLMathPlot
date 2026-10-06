@@ -1,10 +1,10 @@
-"""回归：烘出来的 .qsb 必须与用途匹配（stage + 覆盖所有 RHI 后端）。
+"""Regression: the baked .qsb must match its intended use (stage + coverage of every RHI backend).
 
-这是 D3D11 "第一帧挂死" 的根因：qsb 靠**源文件后缀**判 stage，写成 ``.glsl``
-会被当成 vertex —— 于是片元着色器烘出来是顶点着色器，D3D 的像素阶段拿到非法
-HLSL（``D3DCompile ps_5_0`` 报 ``X4502 invalid output semantic 'TEXCOORD0'``），
-Intel 驱动则表现为挂死。GL 后端不会暴露这个问题（ShaderEffect 按槽位赋 stage），
-所以这条必须单独测。
+This is the root cause of the D3D11 "first frame hangs": qsb decides the stage from the
+**source file suffix**, so a fragment shader written as ``.glsl`` is treated as a vertex
+shader -- the fragment shader comes out as a vertex shader and D3D's pixel stage receives
+invalid HLSL. The GL backend does not expose the problem (ShaderEffect assigns stages by
+slot), so this must be tested on its own.
 """
 
 import pytest
@@ -30,7 +30,7 @@ def test_baked_stage_matches_use(stage, expected):
 
 
 def test_baked_shader_covers_every_backend():
-    """qsb --qt6 的目标集：GLSL(OpenGL) / HLSL(D3D11) / MSL(Metal) / SPIR-V(Vulkan)。"""
+    """The target set of qsb --qt6: GLSL(OpenGL) / HLSL(D3D11) / MSL(Metal) / SPIR-V(Vulkan)."""
     _, frag_src = model.shader_sources(sp.sin(X))
     shader = QShader.fromSerialized(bake(frag_src, "frag").read_bytes())
     sources = {key.source() for key in shader.availableShaders()}
