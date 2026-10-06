@@ -137,6 +137,13 @@ histories and numbers belong here.
     guarded by a module-level flag because Qt complains about duplicate registrations
     (the widget registers on every construction otherwise).
 
+23. **A QML `Flickable` steals the drag from the plot.** Inside a `ScrollView` the plot's
+    panning stopped after ~18 px — the flickable's drag threshold — because
+    `QQuickFlickable` takes over the mouse grab. Fix: `preventStealing: true` on the plot's
+    MouseArea. Verified: a 300 px drag now pans 300 px worth of plot coordinates, 1:1 with
+    the cursor (measured `xmin` moved 3.0 units = 300/1200 × 12 world units), while the
+    flickable's `contentX` stays 0. Regression test: `tests/test_qtquick_coexistence.py`.
+
 ## Performance (measured)
 
 Startup to first frame is ≈ **230 ms** (Windows / D3D11 / 900×600):

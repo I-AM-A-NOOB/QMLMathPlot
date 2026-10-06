@@ -5,9 +5,10 @@
 //   * TextField: press Enter (or the Draw button) to re-plot. The plot never joins the
 //     tab-focus chain, so typing keeps focus.
 //   * ScrollView: the plot (1200x800) is larger than the viewport, so the view can really
-//     scroll. A wheel over the *plot* must zoom: MathPlot's WheelHandler accepts the event,
-//     so the Flickable underneath never scrolls. The footer shows the Flickable's contentY
-//     as proof (it stays at 0 while zooming).
+//     scroll. Both gestures over the *plot* belong to the plot: the wheel zooms
+//     (MathPlot's WheelHandler accepts it) and dragging pans (its MouseArea sets
+//     preventStealing, so the Flickable cannot take the grab). The footer shows the
+//     Flickable's contentY as proof — it stays at 0. Scroll the view with the scrollbars.
 //   * SplitView + TextArea: drag the handle and resize; both panes must repaint.
 //   * Overlay: a translucent Item drawn over the plot. A plain Item has no pointer handlers,
 //     so it does not swallow mouse events — no QtWidgets-style "transparent for mouse
@@ -121,7 +122,8 @@ ApplicationWindow {
             readOnly: true
             wrapMode: TextEdit.Wrap
             text: "Event log (focus / draw):\n"
-                  + "· wheel over the plot = zoom; the ScrollView underneath stays put\n"
+                  + "· wheel over the plot = zoom, drag over it = pan; the ScrollView stays put\n"
+                  + "  (scroll the view with the scrollbars)\n"
                   + "· focus stays in the input field; the plot never joins the tab chain\n"
         }
     }

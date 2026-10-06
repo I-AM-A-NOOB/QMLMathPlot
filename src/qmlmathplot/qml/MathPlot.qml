@@ -49,6 +49,10 @@ Item {
     MouseArea {
         anchors.fill: parent
         acceptedButtons: Qt.LeftButton
+        // Panning must win over any ancestor Flickable/ScrollView: without this the
+        // Flickable steals the grab once the drag passes its threshold, and the plot
+        // only moves a few pixels before panning stops.
+        preventStealing: true
 
         property real lastX: 0
         property real lastY: 0
