@@ -54,7 +54,7 @@ from qmlmathplot import PlotFigure
 
 fig = PlotFigure()                       # owns one PlotAxes; more later (subplots)
 
-ax = fig.axes
+ax = fig.ax                             # one Figure owns one Axes; fig.axes is the 1-tuple
 ax.xlim = (-6.0, 6.0)                    # visible limits (world units)
 ax.ylim = (-2.0, 2.0)
 ax.aspect = "auto"                       # "auto" | 1.0 | 2.0 ...  (matplotlib convention)
@@ -145,6 +145,10 @@ Rules:
 
 ## 7. Axes, ticks, grid, labels
 
+* One `Figure` owns one `Axes`. Several panels are a Qt layout of `PlotView`s (a
+  `GridLayout` in QML, a `QGridLayout` in widgets), not a `subplots()`/`GridSpec` clone:
+  layouts already solve sizing, spacing and resizing, and a figure-level grid would have to
+  fight them.
 * Limits live in `PlotAxes` and are what pan/zoom mutate (this replaces today's `ViewRect`).
 * `aspect = "auto"` keeps today's default: the limits map straight onto the item, so the
   shape follows the widget. A number keeps the y-unit/x-unit pixel ratio fixed
@@ -197,7 +201,31 @@ Semantics (this is the part that differs from Matplotlib on purpose):
 * `transparent=True` clears to alpha 0 (useful for slides); everything else follows the
   live styling, so an export can never drift from what the user sees.
 
-## 10. Where we deliberately differ from Matplotlib
+## 10. How Matplotlib-familiar should this be?
+
+**Verdict: copy the vocabulary, not the mechanism.** The vocabulary (limits, grid, title,
+legend, `savefig`, `annotate`) is a user-facing language: it costs nothing, reads the same in
+any toolkit, and lets a Matplotlib user guess right on the first try. The mechanism (artists,
+canvas, `draw()`, backends) exists to serve an *imperative rasteriser*; we are a live Qt
+scene, so copying it would add objects that do nothing and methods that lie.
+
+| Matplotlib | Copy? | Why |
+|---|---|---|
+| `xlim` / `ylim` / `grid` / `title` / `legend` / `savefig` / `annotate` | **yes** | pure vocabulary; no mechanism attached |
+| `fig.ax` (+ `fig.axes` as a 1-tuple) | **yes** | `fig, ax = plt.subplots()` is the idiom people's fingers know; the tuple keeps `fig.axes[0]` working |
+| `NavigationToolbar2QT` | **the idea, Qt-native** | `PlotToolbar` (home / back / forward / save) over a `ViewHistory` QObject — see §13 |
+| `plot(x, y)` with data arrays | **no** | our native citizen is an expression evaluated per pixel; a data series is a *guest* artist with a different quality path (§6). Pretending `add_curve` accepts arrays would silently change how the curve is drawn |
+| `FigureCanvas` / `FigureCanvasQt` / `draw()` / `draw_idle()` | **no** | a canvas exists to bridge a rasteriser into a toolkit. We *are* the toolkit: the scene is live, Qt invalidates, and `draw()` would be a no-op — an API that lies about how the pixels appear |
+| `Artist` / `Line2D` / `Transform` hierarchy | **no** | those classes exist so a backend can rasterise them. Ours is a shader program plus uniforms: the names would be empty shells |
+| `mpl_connect("button_press_event", …)` | **no** | Qt signals are the runtime's own event system, and are what a Qt app already uses |
+| `subplots()` / `GridSpec` | **no** | a Qt layout *is* the grid. A `Figure` owning many `Axes` would duplicate what `QGridLayout`/`GridLayout` already do, and would fight them |
+| `plt.*` global current figure | **only as `quickplot()`** | scripts and notebooks want it; applications must not have it |
+
+The litmus test for anything else: *does the name describe a thing the user thinks about
+(limits, a label, a file) or a step our renderer performs (draw, blit, rasterise)?* Copy the
+first, refuse the second.
+
+## 11. Where we deliberately differ from Matplotlib
 
 | Matplotlib | Here | Why |
 |---|---|---|
@@ -209,7 +237,7 @@ Semantics (this is the part that differs from Matplotlib on purpose):
 | blocking `show()` | the widget/`PlotView` is a live item; `quickplot()` blocks | Qt's event loop is the app's |
 | `ax.set_*` then `draw()` | properties with notify signals | Signal & Slot, no explicit draw |
 
-## 11. Migration from today's code
+## 12. Migration from today's code
 
 | Today | Becomes |
 |---|---|
@@ -224,7 +252,22 @@ Backwards compatibility: `PlotController` and `MathPlot` stay as thin aliases fo
 release, marked deprecated in their docstrings; the explorers move to `PlotView` so the new
 path is the one that is exercised.
 
-## 12. Build order
+## 13. Optional toolbar (the one Matplotlib widget worth having)
+
+`PlotToolbar` — a `QToolBar` (and a QML equivalent) over a `ViewHistory` QObject:
+
+| Slot | Effect |
+|---|---|
+| `home()` | `axes.reset_view()` |
+| `back()` / `forward()` | walk a bounded stack of limits pushed on every pan/zoom/reset |
+| `save()` | `figure.savefig(path)` with a file dialog |
+
+`ViewHistory` is where the value is: a plain `QObject` holding a capped list of `(xlim, ylim)`
+snapshots, with `canGoBack` / `canGoForward` properties and signals, so a toolbar, a menu
+item and a keyboard shortcut all bind to the same state. It is Qt-native and costs ~40 lines,
+which is why it is worth having where `FigureCanvasQt` is not.
+
+## 14. Build order
 
 1. `PlotAxes` (limits/aspect/ticks) + `Curve` split out of `PlotController`; `PlotView.qml`
    renders one curve. No visual change; all existing tests keep passing.
@@ -232,7 +275,8 @@ path is the one that is exercised.
 3. Grid shader + ticks + labels + title.
 4. `AnnotationListModel` + `underlay`/`overlay` + `mapToScreen`.
 5. Offscreen exporter (`to_image` / `savefig`) + its tests (size, range, stretch, transparency).
-6. Deprecation shims removed.
+6. `ViewHistory` + `PlotToolbar` (optional; nothing else depends on it).
+7. Deprecation shims removed.
 
 Each step is independently shippable and testable; steps 1–2 are the ones that change
 existing files, the rest are additive.
