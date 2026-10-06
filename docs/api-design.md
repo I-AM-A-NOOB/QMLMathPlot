@@ -213,7 +213,7 @@ scene, so copying it would add objects that do nothing and methods that lie.
 |---|---|---|
 | `xlim` / `ylim` / `grid` / `title` / `legend` / `savefig` / `annotate` | **yes** | pure vocabulary; no mechanism attached |
 | `fig.ax` (+ `fig.axes` as a 1-tuple) | **yes** | `fig, ax = plt.subplots()` is the idiom people's fingers know; the tuple keeps `fig.axes[0]` working |
-| `NavigationToolbar2QT` | **the idea, Qt-native** | `PlotToolbar` (home / back / forward / save) over a `ViewHistory` QObject — see §13 |
+| `NavigationToolbar2QT` | **no** | its features assume a rasterising canvas (rubber-band box zoom, per-canvas blitting) and our interaction is different — wheel-anchored zoom plus drag-pan. Shipping a toolbar would also mean maintaining two of them (QWidget *and* QML) and would fight host UI frameworks such as qfluentwidgets or RinUI. Expose primitives instead (§13) |
 | `plot(x, y)` with data arrays | **no** | our native citizen is an expression evaluated per pixel; a data series is a *guest* artist with a different quality path (§6). Pretending `add_curve` accepts arrays would silently change how the curve is drawn |
 | `FigureCanvas` / `FigureCanvasQt` / `draw()` / `draw_idle()` | **no** | a canvas exists to bridge a rasteriser into a toolkit. We *are* the toolkit: the scene is live, Qt invalidates, and `draw()` would be a no-op — an API that lies about how the pixels appear |
 | `Artist` / `Line2D` / `Transform` hierarchy | **no** | those classes exist so a backend can rasterise them. Ours is a shader program plus uniforms: the names would be empty shells |
@@ -252,20 +252,41 @@ Backwards compatibility: `PlotController` and `MathPlot` stay as thin aliases fo
 release, marked deprecated in their docstrings; the explorers move to `PlotView` so the new
 path is the one that is exercised.
 
-## 13. Optional toolbar (the one Matplotlib widget worth having)
+## 13. Host chrome: primitives, not a toolbar
 
-`PlotToolbar` — a `QToolBar` (and a QML equivalent) over a `ViewHistory` QObject:
+The library ships **no toolbar and no chrome**. A toolbar belongs to the host application (or
+to a UI framework the host already uses: qfluentwidgets, RinUI, Material, a QML `ToolBar`…),
+and each of those has its own look, its own placement rules and its own idea of what a button
+is. What the library owes the host is the *state and the actions*, in Qt's own vocabulary:
 
-| Slot | Effect |
+| Kind | Members |
 |---|---|
-| `home()` | `axes.reset_view()` |
-| `back()` / `forward()` | walk a bounded stack of limits pushed on every pan/zoom/reset |
-| `save()` | `figure.savefig(path)` with a file dialog |
+| Slots (actions) | `axes.reset_view()`, `axes.zoom(delta, u, v)`, `axes.pan_pixels(dx, dy, w, h)`, `figure.savefig(path, …)`, `figure.to_image(…)` |
+| Properties (state) | `axes.xlim`, `axes.ylim`, `axes.aspect`, `axes.grid`, … — readable *and* writable, each with a notify signal |
+| Signals (events) | `limitsChanged`, `aspectChanged`, `gridChanged`, … one per property |
+| Helpers | `PlotView.mapToScreen(x, y)` / `mapFromScreen(point)` for anything that needs the transform |
 
-`ViewHistory` is where the value is: a plain `QObject` holding a capped list of `(xlim, ylim)`
-snapshots, with `canGoBack` / `canGoForward` properties and signals, so a toolbar, a menu
-item and a keyboard shortcut all bind to the same state. It is Qt-native and costs ~40 lines,
-which is why it is worth having where `FigureCanvasQt` is not.
+That set is enough for chrome without the library guessing at it:
+
+```python
+# host button (any framework): "reset view"
+reset_button.clicked.connect(ax.reset_view)          # PySide signal -> Slot
+```
+
+```qml
+Button { text: "Reset"; onClicked: axes.resetView() }  // any QML UI framework
+```
+
+Two consequences worth stating:
+
+* **Box zoom / rubber band is not a library feature, and it needs nothing new from us.** A
+  host that wants a rubber band reads the two corners with `mapFromScreen()` and assigns
+  `ax.xlim` / `ax.ylim`; that *is* the zoom. We ship no mode, overlay or cursor for it,
+  because the host owns its input gestures anyway.
+* **A view history is the host's ten lines.** `xlim` / `ylim` are plain readable properties
+  and `limitsChanged` fires on every change, so back/forward is
+  `stack.append((ax.xlim, ax.ylim))` plus an assignment — no `ViewHistory` object of ours to
+  maintain, bind or style.
 
 ## 14. Build order
 
@@ -275,8 +296,7 @@ which is why it is worth having where `FigureCanvasQt` is not.
 3. Grid shader + ticks + labels + title.
 4. `AnnotationListModel` + `underlay`/`overlay` + `mapToScreen`.
 5. Offscreen exporter (`to_image` / `savefig`) + its tests (size, range, stretch, transparency).
-6. `ViewHistory` + `PlotToolbar` (optional; nothing else depends on it).
-7. Deprecation shims removed.
+6. Deprecation shims removed.
 
 Each step is independently shippable and testable; steps 1–2 are the ones that change
 existing files, the rest are additive.
