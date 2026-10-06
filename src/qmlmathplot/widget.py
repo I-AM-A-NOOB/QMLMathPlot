@@ -50,6 +50,7 @@ class MathPlotWidget(QWidget):
         line_width: float = 1.5,
         curve_color: str = "#33ccff",
         background_color: str = "#14141e",
+        aspect: str | float = "view",
     ) -> None:
         # Check before super().__init__(): constructing a QWidget without a
         # QApplication aborts inside Qt, so the friendly error would never be reached.
@@ -78,6 +79,7 @@ class MathPlotWidget(QWidget):
         self._root_set("lineWidth", float(line_width))
         self._root_set("curveColor", curve_color)
         self._root_set("backgroundColor", background_color)
+        self.aspect = aspect
 
         box = QVBoxLayout(self)
         box.setContentsMargins(0, 0, 0, 0)
@@ -121,6 +123,17 @@ class MathPlotWidget(QWidget):
     @curve_color.setter
     def curve_color(self, value: str) -> None:
         self._root_set("curveColor", value)
+
+    @property
+    def aspect(self) -> str | float:
+        """``"view"`` (default) lets the shape follow the widget's aspect ratio; a number
+        keeps the ratio of the y-unit to the x-unit fixed (``1.0`` = square units) by
+        expanding the view instead of distorting the curve."""
+        return self._controller.aspect
+
+    @aspect.setter
+    def aspect(self, value: str | float) -> None:
+        self._controller.aspect = value
 
     @property
     def background_color(self) -> str:

@@ -26,9 +26,18 @@ Item {
     property alias view: root.controller.view
     property alias error: root.controller.error
 
+    // "view" = the shape follows the widget's aspect ratio; a number keeps the ratio of the
+    // y-unit to the x-unit fixed (1.0 = square units), expanding the view instead of
+    // distorting it. The controller needs the size to do that.
+    property alias aspect: root.controller.aspect
+
     property real lineWidth: 1.5
     property color curveColor: "#33ccff"
     property color backgroundColor: "#14141e"
+
+    Component.onCompleted: root.controller.setViewport(width, height)
+    onWidthChanged: root.controller.setViewport(width, height)
+    onHeightChanged: root.controller.setViewport(width, height)
 
     Rectangle {
         anchors.fill: parent

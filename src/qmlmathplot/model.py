@@ -250,6 +250,35 @@ class ViewRect:
     def reset(self) -> None:
         self.xmin, self.xmax, self.ymin, self.ymax = DEFAULT_VIEW
 
+    def effective(self, width: float, height: float, aspect: float | None
+                  ) -> tuple[float, float, float, float]:
+        """The rect actually drawn in a `width` x `height` viewport.
+
+        ``aspect is None`` means "follow the view": the rect is used as-is, so the two axes
+        scale independently and the shape follows the widget's aspect ratio. With a number
+        (matplotlib's convention: pixels per y-unit over pixels per x-unit, 1.0 = square
+        units), the rect is **expanded around its center** — never cropped — until the two
+        scales have that ratio. So the plot keeps filling the widget and nothing that was
+        visible disappears; one axis simply shows more world.
+        """
+        if aspect is None or aspect <= 0 or width <= 0 or height <= 0:
+            return self.as_tuple()
+        span_x = self.xmax - self.xmin
+        span_y = self.ymax - self.ymin
+        if span_x <= 0 or span_y <= 0:
+            return self.as_tuple()
+        # current (pixels per y-unit) / (pixels per x-unit)
+        pixel_ratio = (height / span_y) / (width / span_x)
+        if pixel_ratio <= 0:
+            return self.as_tuple()
+        cx = 0.5 * (self.xmin + self.xmax)
+        cy = 0.5 * (self.ymin + self.ymax)
+        if pixel_ratio > aspect:            # y drawn too tall -> show more y (ratio down)
+            span_y *= pixel_ratio / aspect
+        else:                               # x drawn too wide -> show more x (ratio up)
+            span_x *= aspect / pixel_ratio
+        return (cx - 0.5 * span_x, cx + 0.5 * span_x, cy - 0.5 * span_y, cy + 0.5 * span_y)
+
     def world_at(self, u: float, v: float) -> tuple[float, float]:
         """World coordinates for a normalized screen position (0~1, top-left origin)."""
         return (self.xmin + (self.xmax - self.xmin) * u,

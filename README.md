@@ -42,7 +42,8 @@ the pure Qt Quick demo.
 **QtWidgets**: `MathPlotWidget` is an ordinary `QWidget` (internally it bridges the
 QML component into the widgets world with a `QQuickWidget` and renders into its own
 FBO, so it can be stacked on top of / coexist with sibling widgets). Properties and
-methods: `expression` / `error` / `line_width` / `curve_color` / `background_color`,
+methods: `expression` / `error` / `line_width` / `curve_color` / `background_color` /
+`aspect`,
 `view_bounds()` / `reset_view()` / `zoom(delta, u, v)` / `pan_pixels(dx, dy)`, the
 signals `expressionChanged` / `errorChanged`, and the underlying ViewModel exposed
 as `.controller`.
@@ -73,6 +74,7 @@ MathPlot {                       // component: inject a ViewModel, or let it cre
     anchors.fill: parent
     controller: myPlotController
     lineWidth: 1.5
+    aspect: 1.0          // "view" (default) or a fixed y-unit/x-unit ratio
     curveColor: "#33ccff"
     backgroundColor: "#14141e"
 }
@@ -80,9 +82,27 @@ MathPlot {                       // component: inject a ViewModel, or let it cre
 
 Component properties: `expression` (sympy syntax; changing it regenerates the GLSL
 and bakes a `.qsb`), `view` (`Qt.vector4d(xmin, xmax, ymin, ymax)`), `error` (why
-the expression/bake failed, empty on success), `lineWidth`, `curveColor`,
+the expression/bake failed, empty on success), `lineWidth`, `curveColor`, `aspect`,
 `backgroundColor`. `controller` is the ViewModel, exposing `zoom(delta, u, v)` /
 `panPixels(dx, dy, w, h)` / `resetView()` for the input layer to call.
+
+## Aspect ratio
+
+By default (`aspect: "view"`) the view rectangle is used as-is, so the two axes scale with the
+widget and a curve is stretched when the widget is not the shape the view was picked for.
+
+Set `aspect` to a number to keep the ratio of the y-unit to the x-unit fixed (matplotlib's
+convention: `1.0` = square units, `2.0` = the y-axis twice as tall). The view is then
+**expanded around its center — never cropped** — so the plot keeps filling the widget and
+nothing that was visible disappears; one axis simply shows more world. Resizing keeps the
+**scale** (world units per pixel), so a window resize or a splitter drag never zooms the
+curve: the visible range grows or shrinks with the widget instead. `reset_view()` restores
+the default rectangle and the ratio is re-applied from there.
+
+```python
+plot = MathPlotWidget("sin(1/x)", aspect=1.0)     # square units
+plot.aspect = "view"                              # back to following the widget
+```
 
 ## RHI backends
 
@@ -159,6 +179,10 @@ inside the central 41 columns no solid pixel falls outside |y|>1 (7961 before).
 - GPU `sin`/`cos` are unreliable for large arguments.
 - Tangent-based distance saturates on steep columns.
 - Per-column sampling is phase noise for oscillating functions.
+
+The view math lives in `ViewRect`: `effective()` derives what is actually drawn (the aspect
+expansion) from the stored rectangle, and the controller keeps that effective rectangle as the
+new view after a pan/zoom, so interaction always works on what is on screen.
 
 ## Domain, poles and stroke (Desmos-style)
 

@@ -37,7 +37,11 @@ ApplicationWindow {
         log.text += text + "\n";
     }
 
-    Component.onCompleted: plot.expression = window.initialExpression
+    Component.onCompleted: {
+        plot.expression = window.initialExpression;
+        aspectBox.currentIndex = 1;             // start at 1:1: no distortion on resize
+        plot.aspect = aspectBox.currentValue;
+    }
 
     function draw() {
         plot.expression = expressionField.text;
@@ -68,6 +72,22 @@ ApplicationWindow {
                 onActivated: {
                     expressionField.text = window.samples[currentIndex];
                     window.draw();
+                }
+            }
+            ComboBox {
+                id: aspectBox
+                objectName: "aspectBox"
+                textRole: "text"
+                valueRole: "value"
+                model: [
+                    { text: "Follow view", value: "view" },
+                    { text: "1:1 (square)", value: 1.0 },
+                    { text: "2:1", value: 2.0 },
+                    { text: "1:2", value: 0.5 }
+                ]
+                onActivated: {
+                    plot.aspect = currentValue;
+                    window.logLine("aspect -> " + currentText);
                 }
             }
             Button {

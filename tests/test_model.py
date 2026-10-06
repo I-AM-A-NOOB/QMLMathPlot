@@ -121,3 +121,28 @@ def test_unbounded_edges():
     assert model.unbounded_edges(X**2) == []
     assert sorted(model.unbounded_edges(1 / X)) == [(0.0, True, True)]
     assert model.unbounded_edges(1 / X**2) == [(0.0, False, True)]
+
+
+def test_effective_view_keeps_the_requested_scale_ratio() -> None:
+    """`aspect` expands the view around its center — never crops — until the y-unit and the
+    x-unit are drawn in the given ratio (1.0 = square units)."""
+    rect = model.ViewRect(-6.0, 6.0, -2.0, 2.0)
+
+    # "follow the view": the rect is used as-is (the shape follows the widget)
+    assert rect.effective(900, 600, None) == (-6.0, 6.0, -2.0, 2.0)
+
+    # square units on a 3:2 widget: y expands, x is untouched
+    xmin, xmax, ymin, ymax = rect.effective(900, 600, 1.0)
+    assert (xmin, xmax) == (-6.0, 6.0)
+    assert (ymin, ymax) == (-4.0, 4.0)
+    assert (600 / (ymax - ymin)) == pytest.approx(900 / (xmax - xmin))
+
+    # the default view already has a 2:1 pixel ratio on this widget -> unchanged
+    assert rect.effective(900, 600, 2.0) == (-6.0, 6.0, -2.0, 2.0)
+
+    # the invariant holds for any widget shape and any ratio, and nothing visible is cropped
+    for width, height in ((900, 600), (600, 900), (1600, 400), (400, 1600), (500, 500)):
+        for aspect in (0.5, 1.0, 2.0):
+            xmin, xmax, ymin, ymax = rect.effective(width, height, aspect)
+            assert xmin <= -6.0 and xmax >= 6.0 and ymin <= -2.0 and ymax >= 2.0
+            assert (height / (ymax - ymin)) == pytest.approx(aspect * width / (xmax - xmin))

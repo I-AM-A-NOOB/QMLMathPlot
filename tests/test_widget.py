@@ -166,3 +166,81 @@ def test_plot_does_not_join_tab_focus_chain(app: QApplication) -> None:
     _settle(app, 10)
     assert edit.hasFocus()
     assert _quick(plot).focusPolicy() is Qt.FocusPolicy.ClickFocus
+
+
+def _line_slope(image: QImage) -> float:
+    """Least-squares |dy/dx| of the lit pixels (image rows grow downwards)."""
+    xs: list[float] = []
+    ys: list[float] = []
+    for x in range(image.width()):
+        rows = [y for y in range(image.height())
+                if max(abs(image.pixelColor(x, y).red() - BACKGROUND[0]),
+                       abs(image.pixelColor(x, y).green() - BACKGROUND[1]),
+                       abs(image.pixelColor(x, y).blue() - BACKGROUND[2])) > 40]
+        if rows:
+            xs.append(float(x))
+            ys.append(sum(rows) / len(rows))
+    # y = x only exists where |x| <= ymax, so it may span just a fraction of the widget
+    assert len(xs) > image.width() // 5, "the line is not drawn"
+    mean_x = sum(xs) / len(xs)
+    mean_y = sum(ys) / len(ys)
+    num = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
+    den = sum((x - mean_x) ** 2 for x in xs)
+    return abs(num / den)
+
+
+@pytest.mark.parametrize(("width", "height"), [(640, 400), (400, 640)])
+def test_fixed_aspect_is_not_distorted_by_the_widget_shape(
+    app: QApplication, width: int, height: int
+) -> None:
+    """With ``aspect=1`` a 45-degree line in world units is drawn at 45 degrees in pixels,
+    whatever the widget's shape (that is the point of a fixed ratio)."""
+    plot = MathPlotWidget("x", aspect=1.0)
+    plot.resize(width, height)
+    plot.show()
+    assert QTest.qWaitForWindowExposed(plot), "no usable display/GPU scene graph"
+    _settle(app)
+
+    assert _line_slope(_grab(plot)) == pytest.approx(1.0, abs=0.05)
+    plot.hide()
+
+
+def test_follow_view_mode_distorts_as_before(app: QApplication) -> None:
+    """The default ``"view"`` mode keeps the old behaviour: the two axes scale with the
+    widget, so the same line is not at 45 degrees."""
+    plot = MathPlotWidget("x")                      # aspect defaults to "view"
+    plot.resize(640, 400)
+    plot.show()
+    assert QTest.qWaitForWindowExposed(plot)
+    _settle(app)
+
+    slope = _line_slope(_grab(plot))
+    assert slope > 1.5, f"expected the stretched slope, got {slope:.2f}"
+    plot.hide()
+
+
+def test_resize_keeps_the_scale_with_a_fixed_aspect(app: QApplication) -> None:
+    """With a fixed aspect, resizing must not zoom: the world units per pixel stay put and
+    the visible range follows the widget (the shape and the apparent size are unaffected)."""
+    plot = MathPlotWidget("x", aspect=1.0)
+    plot.resize(900, 600)
+    plot.show()
+    assert QTest.qWaitForWindowExposed(plot)
+    _settle(app)
+
+    def scale() -> tuple[float, float]:
+        xmin, xmax, ymin, ymax = plot.view_bounds()
+        return ((xmax - xmin) / plot.width(), (ymax - ymin) / plot.height())
+
+    start = scale()
+    for width, height in ((600, 600), (1200, 400), (500, 900)):
+        plot.resize(width, height)
+        _settle(app)
+        now = scale()
+        assert now[0] == pytest.approx(start[0], rel=0.02), f"{width}x{height} changed the x scale"
+        assert now[1] == pytest.approx(start[1], rel=0.02), f"{width}x{height} changed the y scale"
+
+    plot.resize(900, 600)
+    _settle(app)
+    assert scale() == pytest.approx(start, rel=0.02)     # and it is reversible
+    plot.hide()

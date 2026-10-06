@@ -168,6 +168,15 @@ histories and numbers belong here.
     test then saw 52 solid pixels outside `sin(1/x)`'s ±1 range, over its 50-pixel limit, and
     the fill fraction at zoom step 60 went 42 % → 61 %.
 
+25. **A fixed aspect must preserve the *scale* on resize, not the range.** The first
+    implementation satisfied the ratio by expanding the range (matplotlib's *datalim*): the
+    ratio held, but the units-per-pixel changed with the widget, so the curve visibly zoomed
+    while a window or a splitter was dragged. `PlotController.setViewport` now scales the
+    stored range proportionally to the new size (units per pixel stay put, the visible range
+    follows the widget) and only the first size report sets the baseline, so the startup view
+    is not scaled. `"view"` mode keeps the old behaviour: the range is fixed and the shape
+    follows the widget.
+
 ## Performance (measured)
 
 Startup to first frame is ≈ **230 ms** (Windows / D3D11 / 900×600):

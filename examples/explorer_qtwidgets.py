@@ -45,6 +45,14 @@ from PySide6.QtWidgets import (
 
 from qmlmathplot import MathPlotWidget
 
+#: Aspect choices: label -> the value handed to ``MathPlotWidget.aspect``.
+ASPECTS = (
+    ("Follow view", "view"),
+    ("1:1 (square)", 1.0),
+    ("2:1", 2.0),
+    ("1:2", 0.5),
+)
+
 SAMPLES = (
     "sin(x)",
     "sin(1/x)",
@@ -77,6 +85,11 @@ class Explorer(QMainWindow):
         self.samples.addItems(SAMPLES)
         self.samples.activated.connect(self.pick_sample)
 
+        self.aspects = QComboBox()
+        for label, value in ASPECTS:
+            self.aspects.addItem(label, value)
+        self.aspects.activated.connect(self.pick_aspect)
+
         draw = QPushButton("Draw")
         draw.clicked.connect(self.draw)
         reset = QPushButton("Reset view")
@@ -90,6 +103,8 @@ class Explorer(QMainWindow):
         top.addWidget(self.input, 1)
         top.addWidget(draw)
         top.addWidget(self.samples)
+        top.addWidget(QLabel("aspect:"))
+        top.addWidget(self.aspects)
         top.addWidget(reset)
         top.addWidget(self.error, 1)
 
@@ -130,7 +145,8 @@ class Explorer(QMainWindow):
         box.addWidget(split, 1)
         self.setCentralWidget(central)
         self.setStatusBar(QStatusBar())
-        self.sync_status()
+        self.aspects.setCurrentIndex(1)          # start at 1:1: no distortion on resize
+        self.pick_aspect()
 
         # global event filter: log who received the wheel/focus (pure observation, no behaviour change)
         app = QApplication.instance()
@@ -138,6 +154,12 @@ class Explorer(QMainWindow):
         app.installEventFilter(self)
 
     # ------------------------------------------------------------------ slots
+    def pick_aspect(self) -> None:
+        value = self.aspects.currentData()
+        self.plot.aspect = value
+        self.log_line(f"aspect -> {self.aspects.currentText()}")
+        self.sync_status()
+
     def pick_sample(self) -> None:
         self.input.setText(self.samples.currentText())
         self.draw()
