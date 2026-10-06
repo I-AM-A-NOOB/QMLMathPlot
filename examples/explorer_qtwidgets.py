@@ -10,12 +10,11 @@ and by the log:
   area is ``ClickFocus`` (not in the Tab focus chain), so focus is not stolen while
   typing; on a bad expression the last working plot is kept and the sympy error appears
   in red.
-* **Scroll area QScrollArea**: the plot area is 1200×800, larger than the viewport. A
-  wheel over the **plot area** zooms (the QML side already ``accepted`` it, so the event
-  never leaks to the scroll area); only a wheel over the **scroll bar** scrolls. This is
-  the easiest place to fight in the widgets world.
-* **Splitter QSplitter + text box**: dragging the splitter resizes the plot area, to see
-  whether repaint and stacking behave.
+* **Splitter QSplitter + text box**: dragging the splitter resizes the plot area — the plot
+  fills its pane at any size — to see whether repaint and stacking behave. (The "does the
+  plot steal the wheel/drag from a scrollable parent?" case needs an oversized plot, so it
+  lives in ``tests/test_widget.py`` and ``tests/test_qtquick_coexistence.py`` instead of in
+  this demo.)
 * **Overlay**: a translucent QLabel over the plot area's upper-left corner (with
   ``WA_TransparentForMouseEvents``), verifying QQuickWidget stacking with sibling widgets
   and mouse pass-through.
@@ -38,7 +37,6 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QPlainTextEdit,
     QPushButton,
-    QScrollArea,
     QSplitter,
     QStatusBar,
     QVBoxLayout,
@@ -97,7 +95,6 @@ class Explorer(QMainWindow):
 
         # ------------------------------------------------------ the plot widget itself
         self.plot = MathPlotWidget(self.input.text())
-        self.plot.setMinimumSize(1200, 800)          # larger than the viewport -> the scroll area really can scroll
         self.plot.expressionChanged.connect(self.sync_status)
         self.plot.errorChanged.connect(self.sync_status)
         self.plot.controller.viewChanged.connect(self.sync_status)
@@ -112,23 +109,18 @@ class Explorer(QMainWindow):
         self.overlay.move(12, 12)
         self.overlay.raise_()
 
-        self.scroll_area = QScrollArea()
-        self.scroll_area.setWidget(self.plot)
-        self.scroll_area.setWidgetResizable(False)        # keep the plot area at 1200×800
-        self.scroll_area.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-
         # ------------------------------------------------------------ right-hand log
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setMaximumBlockCount(400)
         self.log.setPlainText(
             "Event log (which widget each wheel / focus event lands on):\n"
-            "· wheel over the plot area = zoom; wheel over the scroll bar = scroll\n"
+            "· wheel over the plot area = zoom, drag over it = pan\n"
             "· focus moves only between the input box / text box; the plot area is not in the Tab chain\n"
         )
 
         split = QSplitter(Qt.Orientation.Horizontal)
-        split.addWidget(self.scroll_area)
+        split.addWidget(self.plot)
         split.addWidget(self.log)
         split.setSizes([880, 320])
 

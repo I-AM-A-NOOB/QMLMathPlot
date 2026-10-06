@@ -4,12 +4,10 @@
 // This is the Qt Quick counterpart of examples/explorer_qtwidgets.py. What it exercises:
 //   * TextField: press Enter (or the Draw button) to re-plot. The plot never joins the
 //     tab-focus chain, so typing keeps focus.
-//   * ScrollView: the plot (1200x800) is larger than the viewport, so the view can really
-//     scroll. Both gestures over the *plot* belong to the plot: the wheel zooms
-//     (MathPlot's WheelHandler accepts it) and dragging pans (its MouseArea sets
-//     preventStealing, so the Flickable cannot take the grab). The footer shows the
-//     Flickable's contentY as proof — it stays at 0. Scroll the view with the scrollbars.
-//   * SplitView + TextArea: drag the handle and resize; both panes must repaint.
+//   * SplitView: drag the handle and resize; the plot fills its pane at any size. (The
+//     "does the plot steal the wheel/drag from a scrollable parent?" case needs an
+//     oversized plot, so it lives in tests/test_qtquick_coexistence.py and
+//     tests/test_widget.py instead of in this demo.)
 //   * Overlay: a translucent Item drawn over the plot. A plain Item has no pointer handlers,
 //     so it does not swallow mouse events — no QtWidgets-style "transparent for mouse
 //     events" flag is needed here.
@@ -27,6 +25,9 @@ ApplicationWindow {
     visible: true
     title: "QMLMathPlot — Qt Quick coexistence check"
 
+    // Single source of truth for the startup expression: the field and the plot must agree.
+    readonly property string initialExpression: "sin(1/x)"
+
     readonly property var samples: [
         "sin(x)", "sin(1/x)", "tan(x)", "log(x)", "1/x",
         "x^2", "exp(-x*x)*sin(10*x)", "asin(x)", "sqrt(x)"
@@ -35,6 +36,8 @@ ApplicationWindow {
     function logLine(text) {
         log.text += text + "\n";
     }
+
+    Component.onCompleted: plot.expression = window.initialExpression
 
     function draw() {
         plot.expression = expressionField.text;
@@ -50,7 +53,7 @@ ApplicationWindow {
                 id: expressionField
                 objectName: "expressionField"
                 Layout.fillWidth: true
-                text: "sin(1/x)"
+                text: window.initialExpression
                 focus: true
                 placeholderText: "sympy syntax: sin(1/x) / tan(x) / log(x) …"
                 onAccepted: window.draw()
@@ -84,35 +87,29 @@ ApplicationWindow {
         anchors.fill: parent
         orientation: Qt.Horizontal
 
-        ScrollView {
-            id: scroll
-            objectName: "scroll"
+        MathPlot {
+            id: plot
+            objectName: "plot"
             SplitView.preferredWidth: 880
+            SplitView.fillHeight: true
+            lineWidth: 1.5
 
-            MathPlot {
-                id: plot
-                objectName: "plot"
-                width: 1200
-                height: 800
-                lineWidth: 1.5
+            // Overlay: no pointer handlers, so mouse events pass straight through
+            Rectangle {
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.margins: 12
+                width: overlayLabel.implicitWidth + 16
+                height: overlayLabel.implicitHeight + 8
+                radius: 4
+                color: "#22ffffff"
+                border.color: "#66ffffff"
 
-                // Overlay: no pointer handlers, so mouse events pass straight through
-                Rectangle {
-                    anchors.left: parent.left
-                    anchors.top: parent.top
-                    anchors.margins: 12
-                    width: overlayLabel.implicitWidth + 16
-                    height: overlayLabel.implicitHeight + 8
-                    radius: 4
-                    color: "#22ffffff"
-                    border.color: "#66ffffff"
-
-                    Text {
-                        id: overlayLabel
-                        anchors.centerIn: parent
-                        color: "#dddddd"
-                        text: "Overlay Item (translucent, click-through)"
-                    }
+                Text {
+                    id: overlayLabel
+                    anchors.centerIn: parent
+                    color: "#dddddd"
+                    text: "Overlay Item (translucent, click-through)"
                 }
             }
         }
@@ -122,8 +119,7 @@ ApplicationWindow {
             readOnly: true
             wrapMode: TextEdit.Wrap
             text: "Event log (focus / draw):\n"
-                  + "· wheel over the plot = zoom, drag over it = pan; the ScrollView stays put\n"
-                  + "  (scroll the view with the scrollbars)\n"
+                  + "· wheel over the plot = zoom, drag over it = pan\n"
                   + "· focus stays in the input field; the plot never joins the tab chain\n"
         }
     }
@@ -139,7 +135,7 @@ ApplicationWindow {
                       + "   (drag to pan / wheel to zoom at the cursor)"
             }
             Item { Layout.fillWidth: true }
-            Label { text: "scrollView contentY = " + scroll.contentItem.contentY.toFixed(0) }
+            Label { text: "plot " + plot.width.toFixed(0) + "x" + plot.height.toFixed(0) }
         }
     }
 

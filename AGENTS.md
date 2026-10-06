@@ -159,7 +159,11 @@ histories and numbers belong here.
     | 40 (89°) | 1.31 | **2.05** |
     | 200 (89.7°) | 1.30 | **2.02** |
 
-    ±1 column fixes it with no extra `f` evaluations. ±2 columns reaches the nominal width
+    ±1 column fixes it with no extra `f` evaluations, and it also *widens* the band: at the
+    default view of `sin(1/x)` the solid band went from 7 to 14 columns of 900 (central 40
+    columns: 18 % → 35 % filled), because the wider window sees more direction turns. The
+    "20 columns" figure in item 6 predates several revisions of the band criteria and is not
+    directly comparable. ±2 columns reaches the nominal width
     everywhere but over-triggers the band criteria (calibrated for this window): a render
     test then saw 52 solid pixels outside `sin(1/x)`'s ±1 range, over its 50-pixel limit, and
     the fill fraction at zoom step 60 went 42 % → 61 %.
