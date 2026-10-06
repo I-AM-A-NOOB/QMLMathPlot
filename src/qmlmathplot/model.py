@@ -136,6 +136,16 @@ def _domain_conditions(expr: sp.Expr) -> list[sp.Expr]:
     return out
 
 
+def _domain_is_pole_only(expr: sp.Expr) -> bool:
+    """True when every domain condition is just "denominator != 0" (tan, sec, 1/x, …).
+
+    Those functions are defined everywhere except at the poles, where the value itself
+    blows up and the NaN/inf test already rejects the sample. Evaluating the predicate
+    again for every sample is then pure overhead.
+    """
+    return all(isinstance(cond, sp.Ne) and cond.rhs == 0 for cond in _domain_conditions(expr))
+
+
 def unbounded_edges(expr: sp.Expr, name: str = "x") -> list[tuple[float, bool, bool]]:
     """Points on a domain boundary where the function genuinely tends to ±∞:
     [(boundary x, tends to -∞?, tends to +∞?)].
@@ -375,8 +385,11 @@ vec2 _edge_du(float ex) {
 #define F(u) (@FUNC@)
 #define DF @DFUNC@
 // Domain predicate (pixels outside the domain are not drawn) and "pole denominators"
-// (sign change => the interval crosses a pole)
+// (sign change => the interval crosses a pole). DOMS is the per-sample variant: for a
+// purely pole-shaped domain (tan, 1/x, sec, …) it is `true`, because there the NaN/inf
+// test on the value already rejects out-of-domain samples.
 @DOM@
+@DOMS@
 @POLE@
 
 void main() {
@@ -407,19 +420,11 @@ void main() {
     float h = 0.5 * dx;
     float nl = 1e30;
     float nh = -1e30;
-    float turns = 0.0;
-    float prev_s = 0.0;
-    float prev_x = 0.0;
-    float prev_d = 0.0;
-    bool prev_ok = false;
-    vec2 p = vec2(x * sx, y * sy);          // screen space (pan does not affect distance)
-    float dmin = 1e30;
     // 8 points: the **even slots** of a 16-point grid (±1 column, 0.125-column spacing).
     // Ordinary pixels evaluate only these 8; banded columns add the odd slots to make 16
-    // and count turns. With 8 points, random sampling misses the reversal in roughly 11%
-    // of columns -> leftover vertical stripes, while evaluating 16 globally costs 8 extra F
-    // evaluations per pixel, not worth paying for a few columns.
+    // and count turns there (see below).
     float smp[8];
+    float smp_x[8];
     bool smp_ok[8];
     for (int i = 0; i < 8; i++) {
         float t = -1.0 + (float(i) + 0.25) / 4.0;           // even slot of the 16-point grid
@@ -428,136 +433,137 @@ void main() {
         // Skip out-of-domain/NaN/inf (pole) samples: they join neither the envelope nor the
         // segments. DOM is included because GLSL's log(negative) etc. are undefined and
         // some drivers return finite garbage.
-        bool ok = DOM(xi) && (s == s) && (abs(s) < 1e30);
+        bool ok = DOMS(xi) && (s == s) && (abs(s) < 1e30);
         smp[i] = s;
+        smp_x[i] = xi;
         smp_ok[i] = ok;
         if (ok) {
             nl = min(nl, s);
             nh = max(nh, s);
-            if (prev_ok) {
-                float d = s - prev_s;
-                if (prev_d * d < 0.0) { turns += 1.0; }      // turn within the column
-                prev_d = d;
-                // Polyline segment: join adjacent samples directly. Poles are handled by
-                // the analytic gap (denominator sign change, world units) and out-of-domain
-                // samples are filtered out by `ok`.
-                dmin = min(dmin, _seg_dist(p, vec2(prev_x * sx, prev_s * sy),
-                                              vec2(xi * sx, s * sy)));
-            }
-            prev_x = xi;
-            prev_s = s;
-        }
-        prev_ok = ok;
-    }
-    // ---- 1b) infinite extension at unbounded boundaries ----
-    // When the window crosses a domain boundary where the function tends to ±∞, pull a
-    // vertical ray from the nearest valid sample along the boundary to ±1e12: the falling
-    // branch of a slowly diverging function (log(x) as x→0+) can thus be drawn to any
-    // depth. The ray lies on the boundary x (not each column's own sample x), so the width
-    // stays constant and the columns align.
-    float ex_ = _edge_hit(x - h, x + h);
-    if (ex_ < 1e29 && nl < 1e29) {
-        vec2 du_ = _edge_du(ex_);
-        if (du_.x != 0.0) {
-            dmin = min(dmin, _seg_dist(p, vec2(ex_ * sx, nl * sy), vec2(ex_ * sx, -1e12)));
-        }
-        if (du_.y != 0.0) {
-            dmin = min(dmin, _seg_dist(p, vec2(ex_ * sx, nh * sy), vec2(ex_ * sx, 1e12)));
         }
     }
-    float cov = clamp(lineWidth * 0.5 + 0.5 - dmin, 0.0, 1.0);
 
-    // ---- 2) undersampled columns -> draw the ± envelope band (instead of random aliasing) ----
-    // Sample 16 points in a ±2-column window and use two complementary criteria to decide
-    // "this column cannot be drawn":
-    //   a) turn count: the curve reverses up/down >= 2 times within the column => several
-    //      oscillations are packed into one column (a single turn = a resolvable extremum,
-    //      stroked normally)
-    //   d) the measured spread is far below the derivative prediction |f'|·dx => deep
-    //      undersampling (when the oscillator is too fast for sampling to see any pattern,
-    //      a) suffers from phase noise and d) catches it)
-    // Here [min,max] is filled as a solid band: for sin(1/x) this is exactly its true ±1
-    // envelope.
+    // ---- 2) band decision (cheap: reuses the samples above) ----
+    float w = 0.0;          // band weight: 0 = stroke only, 1 = solid envelope band
+    bool gap = false;       // this column straddles a pole -> draw nothing at all
     if (abs(d1) * dx * sy > 1.0) {
-        // The wide window (±8 columns, 16 points) only estimates the band's top/bottom
-        // edges — a wide window is more likely to hit the extrema, so the band edges do not
-        // develop dark seams/steps from a too-narrow envelope.
-        float wl = 1e30;
-        float wh = -1e30;
-        for (int i = 0; i < 16; i++) {
-            float t = -16.0 + 32.0 * (float(i) + 0.5) / 16.0;  // ±8 columns
-            float s = F(x + t * h);
-            if (s == s && abs(s) < 1e30) {
-                wl = min(wl, s);
-                wh = max(wh, s);
-            }
-        }
         float spread = (nh - nl) * sy;                  // measured spread (px, narrow window)
-
+        float hp = 0.5 * dx;
         // A true jump: this column crosses a pole (denominator sign change) and the values
         // far exceed the viewport => the +∞/-∞ connector is not drawn (removes the vertical
         // connector of 1/x, tan(x) at asymptotes). A **bounded** oscillation such as
         // sin(1/x) never exceeds the viewport and is still represented by the envelope band.
-        // Only columns that cross a pole get a gap (the gap aligns with the pole, and the
-        // branches are still drawn up to near the asymptote).
-        float _hp = 0.5 * dx;
-        // The criterion uses "sample spread > 32× the viewport height" rather than pixels:
-        // a pixel threshold drifts with zoom (when zoomed deep, the bounded oscillation of
-        // sin(1/x) can exceed many viewport heights and would be cut spuriously).
-        if (POLE(x - _hp) * POLE(x + _hp) <= 0.0 && (nh - nl) > 32.0 * spany) {
-            cov = 0.0;
+        // "Sample spread > 32× the viewport height" rather than a pixel threshold: pixels
+        // drift with zoom, world units do not.
+        if (POLE(x - hp) * POLE(x + hp) <= 0.0 && (nh - nl) > 32.0 * spany) {
+            gap = true;
         } else {
-
-        // Extra sampling for turn counting: fill in the odd slots of the 16-point grid,
-        // interleaved with the narrow window's even slots to form 16 points. Computed only
-        // here — the banded region is exactly where accuracy matters, and other pixels save
-        // these 8 F evaluations.
-        float turns16 = 0.0;
-        {
-            bool have = false;
-            float ps = 0.0;
-            float pd = 0.0;
-            for (int k = 0; k < 16; k++) {
-                float s;
-                bool ok;
-                if (k - (k / 2) * 2 == 0) {             // even slot: reuse a narrow-window sample
-                    s = smp[k / 2];
-                    ok = smp_ok[k / 2];
-                } else {                                 // odd slot: sample additionally
-                    float xi = x + (-1.0 + (float(k) + 0.5) / 8.0) * h;
-                    s = F(xi);
-                    ok = DOM(xi) && (s == s) && (abs(s) < 1e30);
-                }
-                if (ok) {
-                    if (have) {
-                        float d = s - ps;
-                        if (pd * d < 0.0) { turns16 += 1.0; }
-                        pd = d;
+            // Turn counting at 16 points: fill in the odd slots of the 16-point grid,
+            // interleaved with the narrow window's even slots. Computed only here — this is
+            // where accuracy matters, and other pixels save these 8 F evaluations.
+            float turns16 = 0.0;
+            {
+                bool have = false;
+                float ps = 0.0;
+                float pd = 0.0;
+                for (int k = 0; k < 16; k++) {
+                    float s;
+                    bool ok;
+                    if (k - (k / 2) * 2 == 0) {         // even slot: reuse a narrow-window sample
+                        s = smp[k / 2];
+                        ok = smp_ok[k / 2];
+                    } else {                             // odd slot: sample additionally
+                        float xi = x + (-1.0 + (float(k) + 0.5) / 8.0) * h;
+                        s = F(xi);
+                        ok = DOMS(xi) && (s == s) && (abs(s) < 1e30);
                     }
-                    ps = s;
-                    have = true;
+                    if (ok) {
+                        if (have) {
+                            float d = s - ps;
+                            if (pd * d < 0.0) { turns16 += 1.0; }
+                            pd = d;
+                        }
+                        ps = s;
+                        have = true;
+                    }
                 }
             }
+            float pred = max(abs(d1) * dx * sy, 2.0);   // derivative-predicted spread (pixels)
+            w = step(2.0, turns16);                     // a) >= 2 turns in the column (16 points)
+            // d) The threshold 16 is measured: a monotone concave curve such as log gives a
+            //    ratio ~3.6, branches of tan/1/x <1, and a truly sub-pixel sin(1/x) ~58;
+            //    pred >= 4px excludes "resolvable extrema" (at a peak pred≈0, spread≈0, and
+            //    the ratio would misjudge).
+            w = max(w, step(16.0 * spread + 1e-6, pred) * step(4.0, pred));
+            w *= smoothstep(1.5, 4.0, spread);          // no point filling a band < 1.5 pixels
         }
-        float pred = max(abs(d1) * dx * sy, 2.0);       // derivative-predicted spread (pixels)
-        float w = step(2.0, turns16);                   // a) >= 2 turns in the column (16 points)
-        // d) The threshold 16 is measured: a monotone concave curve such as log gives a
-        //    ratio ~3.6, branches of tan/1/x <1, and a truly sub-pixel sin(1/x) ~58;
-        //    pred >= 4px excludes "resolvable extrema" (at a peak pred≈0, spread≈0, and the
-        //    ratio would misjudge).
-        w = max(w, step(16.0 * spread + 1e-6, pred) * step(4.0, pred));
-        w *= smoothstep(1.5, 4.0, spread);              // no point filling a band < 1.5 pixels
+    }
 
-
-        // The band's top/bottom edges take the wide window's envelope (the narrow one bites
-        // out dark seams)
-        float band = clamp((wh - y) * sy + 2.0, 0.0, 1.0)
-                   * clamp((y - wl) * sy + 2.0, 0.0, 1.0);
-        // A triggering column (several oscillations packed into one column) is replaced
-        // wholesale by the envelope band: the polyline is random aliasing in such a column,
-        // while the band is its true value range. Columns with w=0 keep the polyline stroke
-        // (constant width).
-        cov = mix(cov, band, w);
+    // ---- 3) stroke + band, each paid for only when it survives ----
+    // A fully banded column (w >= 1) discards the stroke anyway (mixing with w = 1 keeps
+    // only the band), a stroke-only column (w == 0) never needs the wide window, and a pole
+    // gap draws nothing. So the per-pixel cost is 1 + 8 F evaluations in the common case,
+    // 1 + 8 + 8 when the turn count is needed, and 1 + 8 + 8 + 16 for a solid band.
+    float cov = 0.0;
+    if (!gap) {
+        if (w < 1.0) {
+            // Stroke: distance to the polyline of sampled segments (Desmos' approach,
+            // engineering.desmos.com). Constant width everywhere, whereas "distance to the
+            // tangent" overestimates on steep/strongly curved parts and makes the line thin
+            // out and eventually vanish (log(x) as x→0+, steep parts of sin(1/x)).
+            vec2 p = vec2(x * sx, y * sy);      // screen space (pan does not affect distance)
+            float dmin = 1e30;
+            float prev_xi = 0.0;
+            float prev_si = 0.0;
+            bool prev_oki = false;
+            for (int i = 0; i < 8; i++) {
+                if (smp_ok[i]) {
+                    if (prev_oki) {
+                        dmin = min(dmin, _seg_dist(p, vec2(prev_xi * sx, prev_si * sy),
+                                                      vec2(smp_x[i] * sx, smp[i] * sy)));
+                    }
+                    prev_xi = smp_x[i];
+                    prev_si = smp[i];
+                }
+                prev_oki = smp_ok[i];
+            }
+            // Infinite extension at unbounded boundaries: when the window crosses a domain
+            // boundary where the function tends to ±∞, pull a vertical ray from the nearest
+            // valid sample along the boundary to ±1e12, so a slowly diverging branch
+            // (log(x) as x→0+) is drawn to any depth. The ray lies on the boundary x, so the
+            // width stays constant and the columns align.
+            float ex_ = _edge_hit(x - h, x + h);
+            if (ex_ < 1e29 && nl < 1e29) {
+                vec2 du_ = _edge_du(ex_);
+                if (du_.x != 0.0) {
+                    dmin = min(dmin, _seg_dist(p, vec2(ex_ * sx, nl * sy), vec2(ex_ * sx, -1e12)));
+                }
+                if (du_.y != 0.0) {
+                    dmin = min(dmin, _seg_dist(p, vec2(ex_ * sx, nh * sy), vec2(ex_ * sx, 1e12)));
+                }
+            }
+            cov = clamp(lineWidth * 0.5 + 0.5 - dmin, 0.0, 1.0);
+        }
+        if (w > 0.0) {
+            // The wide window (±8 columns, 16 points) only estimates the band's top/bottom
+            // edges: a wider window is more likely to hit the extrema, so the edges do not
+            // develop dark seams/steps from a too-narrow envelope.
+            float wl = 1e30;
+            float wh = -1e30;
+            for (int i = 0; i < 16; i++) {
+                float t = -16.0 + 32.0 * (float(i) + 0.5) / 16.0;   // ±8 columns
+                float s = F(x + t * h);
+                if (s == s && abs(s) < 1e30) {
+                    wl = min(wl, s);
+                    wh = max(wh, s);
+                }
+            }
+            float band = clamp((wh - y) * sy + 2.0, 0.0, 1.0)
+                       * clamp((y - wl) * sy + 2.0, 0.0, 1.0);
+            // A banded column is replaced wholesale by the envelope band: the polyline is
+            // random aliasing there, while the band is the true value range. w = 0 columns
+            // keep the polyline stroke (constant width).
+            cov = mix(cov, band, w);
         }
     }
 
@@ -584,6 +590,10 @@ def shader_sources(expr: sp.Expr) -> tuple[str, str]:
     frag = frag.replace(
         "@DOM@",
         f"#define DOM(u) ({dom})" if dom else "#define DOM(u) true",
+    )
+    frag = frag.replace(
+        "@DOMS@",
+        "#define DOMS(u) true" if _domain_is_pole_only(expr) else "#define DOMS(u) DOM(u)",
     )
     pole = pole_glsl(expr, "u")
     frag = frag.replace(

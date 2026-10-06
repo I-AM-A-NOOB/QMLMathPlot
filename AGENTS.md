@@ -157,3 +157,24 @@ Startup to first frame is ≈ **230 ms** (Windows / D3D11 / 900×600):
 
 Per-frame GPU cost (2400×1500, extreme zoom, worst case) **31 ms**; at 900×600 it is about
 1/7 of that, well below 60 Hz's 16.7 ms. Fragment shader source ≈ 6.9 KB.
+
+**Per-pixel work** (measured by patching a counter into the shader and reading it back out
+of the rendered pixels — the mean/peak number of `F` evaluations per pixel):
+
+| expression | before | after |
+|---|---|---|
+| `tan(x)` | 32.96 / 33 | **16.96 / 17** |
+| `x^3` | 31.36 / 33 | **16.45 / 17** |
+| `log(x)` | 8.50 / 33 | **5.83 / 17** |
+| `1/x` | 14.64 / 33 | **10.87 / 17** |
+| `exp(-x*x)*sin(10*x)` | 14.97 / 33 | **10.99 / 17** |
+| `sin(1/x)`, default view | 12.56 / 33 | **10.30 / 33** |
+
+The shader is written so that each piece of work is paid for only when it survives: the
+band decision is made from the 8 narrow-window samples first (1 + 8 evaluations in the
+common case), the interleaved odd slots are sampled only when the turn count is needed
+(1 + 8 + 8), the wide window only when the column will actually be banded (1 + 8 + 8 + 16),
+and a fully banded column skips the stroke entirely (mixing with w = 1 discards it anyway).
+A pole-gap column draws nothing and skips all of it. Verified pixel-identical (≤1/255 in one
+channel on 2-8 of 1.2 M pixels, i.e. compiler scheduling noise) across 18 expression/view
+combinations, including every zoom level of `sin(1/x)`, deep `log` views and all poles.
