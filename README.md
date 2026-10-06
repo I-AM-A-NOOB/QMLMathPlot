@@ -86,6 +86,14 @@ the expression/bake failed, empty on success), `lineWidth`, `curveColor`, `aspec
 `backgroundColor`. `controller` is the ViewModel, exposing `zoom(delta, u, v)` /
 `panPixels(dx, dy, w, h)` / `resetView()` for the input layer to call.
 
+## Design notes
+
+The planned Matplotlib-flavoured surface — `PlotFigure` / `PlotAxes` / `Curve`, multiple
+curves, ticks/grid/annotations, the Qt property+signal contract and the image export
+pipeline — is specified in [`docs/api-design.md`](docs/api-design.md). It records what the
+current code becomes and the build order, and it supersedes the aspect decisions here where
+it says so.
+
 ## Aspect ratio
 
 By default (`aspect: "view"`) the view rectangle is used as-is, so the two axes scale with the

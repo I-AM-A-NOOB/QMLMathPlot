@@ -177,6 +177,14 @@ histories and numbers belong here.
     is not scaled. `"view"` mode keeps the old behaviour: the range is fixed and the shape
     follows the widget.
 
+26. **Exporting an image without a visible window.** `QQuickRenderControl.grab()` does not
+    exist in PySide6 6.11 (and reading the RHI target by hand is impossible — `QRhi` is not
+    bound), while `QQuickItem.grabToImage()` returns a **null** result on a window that was
+    never exposed. What works: a `QQuickWidget` with `WA_DontShowOnScreen`, shown offscreen
+    at the target size, read back with the synchronous `QQuickWidget.grabFramebuffer()`.
+    Verified with `sin(1/x)`, `xlim=ylim=(-1,1)`, 800×200 logical → 1200×300 device pixels
+    with the curve stretched 4:1.
+
 ## Performance (measured)
 
 Startup to first frame is ≈ **230 ms** (Windows / D3D11 / 900×600):
