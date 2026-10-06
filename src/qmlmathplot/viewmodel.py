@@ -36,6 +36,7 @@ class PlotController(QObject):
         self._symbol = sp.Symbol("x")
         self._expression = expression
         self._view = ViewRect()
+        self._home = ViewRect()                 # the configured default view (reset target)
         self._aspect: str | float = "view"      # "view" = follow the widget, or a number
         self._viewport: tuple[float, float] = (800.0, 600.0)
         self._viewport_known = False            # the first report only sets the baseline
@@ -94,13 +95,19 @@ class PlotController(QObject):
         self.shadersChanged.emit()
 
     # ------------------------------------------------------------------ View
-    def _effective_rect(self) -> ViewRect:
-        """The rect that is actually drawn (see ViewRect.effective)."""
-        rect = ViewRect()
-        rect.xmin, rect.xmax, rect.ymin, rect.ymax = self._view.effective(
-            self._viewport[0], self._viewport[1], self._aspect_value()
-        )
-        return rect
+    def _apply_aspect(self) -> None:
+        """Write the aspect adjustment back into the limits (expand only, never crop).
+
+        The invariant of the whole view is: ``xlim``/``ylim`` *are* the visible range. The
+        aspect is the only thing the library may change about them, and it does so by
+        adjusting them — never by keeping a second, hidden range.
+        """
+        aspect = self._aspect_value()
+        if aspect is None:
+            return
+        width, height = self._viewport
+        bounds = self._view.effective(width, height, aspect)
+        self._view.xmin, self._view.xmax, self._view.ymin, self._view.ymax = bounds
 
     def _aspect_value(self) -> float | None:
         """The aspect as a number, or None for "follow the view"."""
@@ -120,6 +127,7 @@ class PlotController(QObject):
         if value == self._aspect:
             return
         self._aspect = value
+        self._apply_aspect()            # keep xlim/ylim == what is drawn
         self.aspectChanged.emit()
         self.viewChanged.emit()
 
@@ -136,16 +144,29 @@ class PlotController(QObject):
         range as it is (the shape then follows the widget). The first report only records the
         baseline size, so the startup view is not scaled.
         """
-        if width <= 0 or height <= 0 or (width, height) == self._viewport:
+        if width <= 0 or height <= 0:
             return
-        old_w, old_h = self._viewport
-        if self._viewport_known and self._aspect_value() is not None:
-            factor_x = width / old_w
-            factor_y = height / old_h
-            span_x = (self._view.xmax - self._view.xmin) * factor_x
-            span_y = (self._view.ymax - self._view.ymin) * factor_y
+        if not self._viewport_known:
+            # First real size. The aspect may already have been applied against the *assumed*
+            # size, so re-derive the view from the home limits for the real size — expanding a
+            # stale result would leave the range off by the assumed/real ratio.
+            self._viewport = (width, height)
+            self._viewport_known = True
+            bounds = self._home.effective(width, height, self._aspect_value())
+            self._view.xmin, self._view.xmax, self._view.ymin, self._view.ymax = bounds
+            self.viewChanged.emit()
+            return
+        if (width, height) == self._viewport:
+            return
+        old_w, _old_h = self._viewport
+        aspect = self._aspect_value()
+        if aspect is not None:
+            # Keep the scale (world units per pixel) and the centre, so the curve never zooms
+            # while a window or a splitter is dragged; the aspect then fixes the other span.
+            span_x = (self._view.xmax - self._view.xmin) * (width / old_w)
             cx = 0.5 * (self._view.xmin + self._view.xmax)
             cy = 0.5 * (self._view.ymin + self._view.ymax)
+            span_y = height * span_x / (width * aspect)
             self._view.xmin, self._view.xmax = cx - 0.5 * span_x, cx + 0.5 * span_x
             self._view.ymin, self._view.ymax = cy - 0.5 * span_y, cy + 0.5 * span_y
         self._viewport = (width, height)
@@ -153,7 +174,8 @@ class PlotController(QObject):
         self.viewChanged.emit()
 
     def _get_view(self) -> QVector4D:
-        return QVector4D(*self._effective_rect().as_tuple())
+        # The limits are the visible range (see _apply_aspect), so this is a plain read.
+        return QVector4D(*self._view.as_tuple())
 
     view: QVector4D = Property(QVector4D, _get_view, notify=viewChanged)
 
@@ -161,16 +183,12 @@ class PlotController(QObject):
     def zoom(self, delta: float, u: float, v: float) -> None:
         """Zoom anchored at the normalized position (u, v); delta is the wheel step (120 = one
         notch)."""
-        rect = self._effective_rect()       # zoom what is on screen, then keep that view
-        rect.zoom(delta, u, v)
-        self._view.xmin, self._view.xmax, self._view.ymin, self._view.ymax = rect.as_tuple()
+        self._view.zoom(delta, u, v)        # zooming scales both spans: the aspect holds
         self.viewChanged.emit()
 
     @Slot(float, float, float, float)
     def panPixels(self, dx: float, dy: float, width: float, height: float) -> None:
-        rect = self._effective_rect()       # pan what is on screen, then keep that view
-        rect.pan_pixels(dx, dy, width, height)
-        self._view.xmin, self._view.xmax, self._view.ymin, self._view.ymax = rect.as_tuple()
+        self._view.pan_pixels(dx, dy, width, height)
         self.viewChanged.emit()
 
     @Slot()

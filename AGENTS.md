@@ -185,6 +185,18 @@ histories and numbers belong here.
     Verified with `sin(1/x)`, `xlim=ylim=(-1,1)`, 800×200 logical → 1200×300 device pixels
     with the curve stretched 4:1.
 
+27. **The limits *are* the visible range — write the aspect adjustment back.** An earlier
+    version derived an "effective" range for drawing and left `xlim`/`ylim` alone, so what the
+    app read was not what it saw. The aspect now adjusts the limits in place. Two ordering
+    traps found while doing it: (a) the adjustment was applied against the *assumed* viewport
+    (800×600) at construction, so the first real size could only expand that stale result and
+    the range came out off by the assumed/real ratio — the first *known* size now re-derives
+    from the home view instead; (b) `MathPlot.qml`'s default `PlotController {}` receives the
+    size reports that fire during `setSource`, i.e. *before* `MathPlotWidget` injects its own
+    controller, so the injected one never learned the size and treated the first resize as a
+    baseline. The widget now reports the authoritative size from its own `resizeEvent`
+    (`Component.onCompleted` sees a 0×0 item anyway).
+
 ## Performance (measured)
 
 Startup to first frame is ≈ **230 ms** (Windows / D3D11 / 900×600):

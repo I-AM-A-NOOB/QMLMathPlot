@@ -35,6 +35,9 @@ Item {
     property color curveColor: "#33ccff"
     property color backgroundColor: "#14141e"
 
+    // Tell the controller the size: the first report is the baseline (the controller derives
+    // the view from its home limits for that size), later ones are resizes (which keep the
+    // scale, so the curve never zooms while a window or splitter is dragged).
     Component.onCompleted: root.controller.setViewport(width, height)
     onWidthChanged: root.controller.setViewport(width, height)
     onHeightChanged: root.controller.setViewport(width, height)

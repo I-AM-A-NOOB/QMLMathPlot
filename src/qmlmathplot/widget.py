@@ -85,6 +85,16 @@ class MathPlotWidget(QWidget):
         box.setContentsMargins(0, 0, 0, 0)
         box.addWidget(self._quick)
 
+    def resizeEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        """Report the plot's real size to the controller.
+
+        The QML component reports it too, but for the widget path those reports can fire while
+        the component is still being created — before the injected controller is in place — so
+        the widget reports the authoritative size itself.
+        """
+        super().resizeEvent(event)
+        self._controller.setViewport(float(self._quick.width()), float(self._quick.height()))
+
     # ------------------------------------------------------------- ViewModel
     @property
     def controller(self) -> PlotController:

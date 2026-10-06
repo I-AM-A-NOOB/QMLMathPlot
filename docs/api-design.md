@@ -112,7 +112,7 @@ custom QML elements can sit at world coordinates without re-deriving the transfo
 | | `annotations` | `AnnotationListModel*` | model signals | `Repeater` adds/removes one Item |
 | | `legend` | `bool` | `legendChanged` | legend box shown/hidden |
 | `PlotAxes` | `xlim`, `ylim` | `QVector2D` | `limitsChanged` | grid, ticks, labels, all curves, all annotations |
-| | `aspect` | `QVariant` (`"auto"` or number) | `aspectChanged` | the effective limits (see §7) |
+| | `aspect` | `QVariant` (`"auto"` or number) | `aspectChanged` → also `limitsChanged` | the limits are adjusted in place (§14) |
 | | `grid`, `gridColor`, `gridWidth` | `bool`, `QColor`, `double` | `gridChanged` | the grid shader's uniforms only |
 | | `ticks` | `QVariant` | `ticksChanged` | tick positions + labels |
 | | `title`, `xlabel`, `ylabel` | `QString` | `labelsChanged` | text items |
@@ -150,6 +150,8 @@ Rules:
   layouts already solve sizing, spacing and resizing, and a figure-level grid would have to
   fight them.
 * Limits live in `PlotAxes` and are what pan/zoom mutate (this replaces today's `ViewRect`).
+  They *are* the visible range: the aspect adjustment is written into them (§14), never kept
+  as a separate derived value.
 * `aspect = "auto"` keeps today's default: the limits map straight onto the item, so the
   shape follows the widget. A number keeps the y-unit/x-unit pixel ratio fixed
   (matplotlib's convention, `1.0` = square units) by **expanding the limits around their
@@ -243,7 +245,7 @@ first, refuse the second.
 |---|---|
 | `PlotController` (expression + shaders + view) | `Curve` (expression + shaders + style) and `PlotAxes` (view) |
 | `ViewRect` | `PlotAxes` limits (+ the same pan/zoom math, kept) |
-| `PlotController.view` (QVector4D) | `PlotAxes.effective_limits` (the drawn limits, after the aspect expansion) |
+| `PlotController.view` (QVector4D) | `PlotAxes.xlim` / `ylim` — the drawn limits themselves (no second, hidden range) |
 | `MathPlot.qml` | `PlotView.qml` (grid shader + Repeater + furniture) |
 | `MathPlotWidget` | unchanged public shape, now backed by `PlotFigure` |
 | `PlotController.setViewport` | `PlotAxes.set_viewport` (same scale-preserving rule) |
@@ -288,7 +290,70 @@ Two consequences worth stating:
   `stack.append((ax.xlim, ax.ylim))` plus an assignment — no `ViewHistory` object of ours to
   maintain, bind or style.
 
-## 14. Build order
+## 14. Pan/zoom and the limits contract
+
+Matplotlib's visible range is *data limits* set programmatically (`set_xlim`, autoscale from
+the data) with the gestures bolted on by a toolbar. Ours is a **live viewport** with the
+gestures built in. That difference needs one explicit rule, otherwise the two worlds keep
+disagreeing about who owns `xlim`.
+
+### The rule
+
+> **`axes.xlim` / `axes.ylim` are the visible range — always.** Anything the library adjusts
+> (only ever the aspect) is *written back* into them. There is no second, hidden range.
+
+Today's code violates this: it derives an "effective" range for drawing and leaves `xlim`
+alone, so what you read is not what you see. Build step 1 fixes it by moving the aspect
+adjustment from a derived value into the setters (`effective()` becomes the helper those
+setters call). The invariant then is one line, testable, and it makes `view_bounds()`,
+`mapFromScreen()`, the status bar and `savefig()` all trivially consistent.
+
+### The adjustment rules (the only things that ever change the limits besides the user)
+
+| Trigger | Rule | Why |
+|---|---|---|
+| `aspect` set to a number | expand around the centre until the pixel ratio matches — **never crop** | nothing that was visible may disappear; one axis simply shows more world |
+| widget resized (numeric aspect) | keep the **scale** (world units per pixel) and the centre; the range follows the widget | the curve must not zoom while a window or splitter is dragged |
+| widget resized (`aspect="auto"`) | limits unchanged | with no aspect contract the limits are exactly the user's |
+| `reset_view()` | back to **`home`** | see below |
+
+Coherent because both rules "keep what the user is looking at": a resize keeps the *scale*,
+an aspect change keeps the *range*.
+
+### Interaction model (and its knobs)
+
+* Wheel = zoom, anchored at the cursor, multiplicative `zoomStep` (0.9/notch, so up and down
+  are exact inverses). Drag = pan, 1:1 with the cursor.
+* Both are **on by default** (a plot that works out of the box) and both are switchable:
+  `axes.panEnabled`, `axes.zoomEnabled` (and `zoomStep`). A host that needs the wheel for its
+  own scrolling turns zoom off; a host that wants Ctrl+wheel binds it itself.
+* The anchor is a parameter of the slot (`zoom(delta, u, v)`), so a host can zoom about the
+  centre or about a keyboard-driven cursor without us inventing a mode.
+
+### What we deliberately do not have
+
+| Matplotlib | Here | Trade-off we accept |
+|---|---|---|
+| autoscale from data | **no** — a documented default window, `home` = the limits at configuration | an *expression* has no sample set to autoscale from; sampling one on the CPU would contradict the per-pixel model. This is the Desmos model: a fixed window you pan and zoom |
+| `reset_view()` to a hard-coded default | **`home`** = whatever the limits were when the figure was configured | one more piece of state; but "home" then means what a user expects |
+| rubber-band box zoom (toolbar) | **host's job**: `mapFromScreen()` the two corners, assign `xlim`/`ylim` | we ship no mode, overlay or cursor — the host owns its input gestures anyway |
+| `adjustable='box'` (letterbox the axes) | **not offered**; a numeric aspect always adjusts the limits (`'datalim'` behaviour) | we cannot shrink the plot inside its widget. The plot fills its area (an explicit earlier requirement), so letterboxing is not available — the only alternatives would be distorting or cropping, and both are worse |
+| `set_xlim(10, 0)` (inverted axes) | **accepted and passed through** (mirrored mapping) | needs a shader test with a negative scale (build step 1); if the distance math misbehaves, normalise and document instead |
+| `NavigationToolbar2QT` | **no** (§13) | two toolkits to maintain, and it clashes with host UI frameworks |
+
+### What a host must do to look Matplotlib-like
+
+| Want | Do |
+|---|---|
+| toolbar with home/back/forward | `stack.append((ax.xlim, ax.ylim))` on `limitsChanged`; buttons assign them back; `home` button calls `reset_view()` |
+| rubber band | a `MouseArea`/`DragHandler` + `mapFromScreen()` + assign `xlim`/`ylim` |
+| "fit to this expression" | assign the limits yourself (or read them from a plot you already made) |
+| wheel scrolls the page instead of zooming | `axes.zoomEnabled = false` |
+
+Everything in the second column is a few lines of host code over slots and properties we
+already expose — which is the point of §13.
+
+## 15. Build order
 
 1. `PlotAxes` (limits/aspect/ticks) + `Curve` split out of `PlotController`; `PlotView.qml`
    renders one curve. No visual change; all existing tests keep passing.
