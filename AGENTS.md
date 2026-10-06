@@ -144,6 +144,26 @@ histories and numbers belong here.
     the cursor (measured `xmin` moved 3.0 units = 300/1200 × 12 world units), while the
     flickable's `contentX` stays 0. Regression test: `tests/test_qtquick_coexistence.py`.
 
+24. **The stroke's sampling window must be wide enough for the perpendicular foot.** With
+    the narrow window at ±0.5 columns the polyline segments were only 0.25 columns long. On a
+    sloped line a pixel's perpendicular foot is displaced along x by `m·d/√(1+m²)` (up to
+    ~1 px at the coverage ramp's edge), so the foot fell outside the segment and `_seg_dist`
+    returned the distance to the nearest *endpoint* instead: the coverage collapsed and the
+    stroke looked thin and ragged on steep parts. Effective width (device px, nominal 2.25 at
+    DPR 1.5) measured with straight lines `k·x`, area ÷ length:
+
+    | screen slope | before | after (±1 column) |
+    |---|---|---|
+    | 2 (63°) | 1.92 | **2.24** |
+    | 10 (84°) | 1.43 | **2.10** |
+    | 40 (89°) | 1.31 | **2.05** |
+    | 200 (89.7°) | 1.30 | **2.02** |
+
+    ±1 column fixes it with no extra `f` evaluations. ±2 columns reaches the nominal width
+    everywhere but over-triggers the band criteria (calibrated for this window): a render
+    test then saw 52 solid pixels outside `sin(1/x)`'s ±1 range, over its 50-pixel limit, and
+    the fill fraction at zoom step 60 went 42 % → 61 %.
+
 ## Performance (measured)
 
 Startup to first frame is ≈ **230 ms** (Windows / D3D11 / 900×600):

@@ -171,6 +171,10 @@ extrema/zeros by bisection. The same approach is used here:
   tangent approximation overestimates the distance on steep or strongly curved
   parts, so the stroke thins out or even fades away (`log(x)` as x→0+, the steep
   stretch of `sin(1/x)`); measuring to the segment is **equal width everywhere**.
+  Sampled over ±1 column: the polyline must be wide enough that a pixel's
+  perpendicular foot lands on a segment (on a sloped line it is displaced along x
+  by `m·d/√(1+m²)`); with a narrower window the distance degraded to "distance to
+  the nearest endpoint" and steep parts looked thin and ragged.
 - **Break on jumps**: via the **analytic pole gap** (denominator sign change, world
   units) — no vertical connector is drawn at the asymptotes of `1/x`, `tan(x)`.
   (An earlier "adjacent samples differ by more than 4 viewport heights" criterion

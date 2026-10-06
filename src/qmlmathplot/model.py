@@ -417,7 +417,14 @@ void main() {
     // and stroke by segment. The width stays constant everywhere, whereas "distance to the
     // tangent" overestimates on steep/strongly curved parts and makes the line thin out and
     // eventually vanish (log(x) as x→0+, steep parts of sin(1/x)).
-    float h = 0.5 * dx;
+    // Sampling half-step: 8 samples span ±1 column. The stroke needs a window that wide —
+    // a pixel's perpendicular foot on a sloped line is displaced along x by m·d/√(1+m²)
+    // (up to ~1 px), so with a narrower polyline the foot falls outside the segments and the
+    // distance degrades to "distance to the nearest segment endpoint": the coverage collapses
+    // and the stroke looks thin and ragged on steep parts (measured before the fix: 58 % of
+    // the nominal width at 84°, 85 % at 63°). A wider window (±2 columns) fixes the width
+    // fully but over-triggers the band criteria, which are calibrated for this one.
+    float h = dx;
     float nl = 1e30;
     float nh = -1e30;
     // 8 points: the **even slots** of a 16-point grid (±1 column, 0.125-column spacing).
@@ -551,7 +558,7 @@ void main() {
             float wl = 1e30;
             float wh = -1e30;
             for (int i = 0; i < 16; i++) {
-                float t = -16.0 + 32.0 * (float(i) + 0.5) / 16.0;   // ±8 columns
+                float t = -8.0 + 16.0 * (float(i) + 0.5) / 16.0;    // ±8 columns
                 float s = F(x + t * h);
                 if (s == s && abs(s) < 1e30) {
                     wl = min(wl, s);
