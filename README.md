@@ -344,3 +344,29 @@ measurement that settled each one). The Qt/packaging ones that shaped the code:
   same x 9 times, and macros are preprocessor expansion with no call semantics.
 - PySide ties a property's notify signal to the `Signal` **object**; a name string
   silently leaves the property without one (and QML bindings then never refresh).
+
+## Releasing
+
+1. Bump `version` in `pyproject.toml` and commit.
+2. Tag and push: `git tag v0.2.0 && git push origin v0.2.0`.
+3. `.github/workflows/publish.yml` then runs the non-GUI test suite, builds the sdist and wheel
+   with `uv build`, and uploads them to PyPI. The tag must match `pyproject.toml` or the run
+   fails before anything is published.
+
+Authentication is PyPI's **trusted publishing** (OIDC) — no API token, no repository secret.
+Configure it once at <https://pypi.org/manage/account/publishing/> (and the same on
+test.pypi.org) with the owner, the repository name, the workflow file name `publish.yml` and the
+environment `pypi`. A project that does not exist on PyPI yet uses the "pending publisher" form
+there and is created by the first successful run. Running the workflow manually
+(*Actions → Publish to PyPI → Run workflow*) publishes to TestPyPI by default, so a release can
+be rehearsed:
+
+```
+pip install -i https://test.pypi.org/simple/ qmlmathplot
+```
+
+The workflow runs on Windows: that is the platform this library is verified on (the shader baker
+`qsb` ships inside the PySide6 wheel and is only confirmed to be present there, see `qsb.py`),
+and the GUI tests need a GPU scene graph no runner has. The artifact is `py3-none-any`, so the
+platform does not change what is published. The GUI tests stay a developer-machine thing:
+`uv run pytest` (everything) versus `uv run pytest -m "not gui"` (what CI runs).

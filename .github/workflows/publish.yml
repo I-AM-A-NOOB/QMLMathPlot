@@ -1,0 +1,103 @@
+name: Publish to PyPI
+
+# Publishing runs on a version tag (`v1.2.3`) whose version must match `pyproject.toml`, or
+# manually (workflow_dispatch) to push a build to TestPyPI first.
+#
+# Authentication is PyPI's **trusted publishing**: no API token, no repository secret. Set it up
+# once at https://pypi.org/manage/account/publishing/ (and the same on test.pypi.org) with:
+#   PyPI project name : qmlmathplot
+#   Owner             : <your GitHub user or org>
+#   Repository name   : <this repo>
+#   Workflow name     : publish.yml          <- this file's name
+#   Environment name  : pypi                 <- the `environment:` below
+# For a project that does not exist on PyPI yet, use the "pending publisher" form there; the
+# first successful run creates the project.
+#
+# Releasing: bump `version` in pyproject.toml, commit, then
+#   git tag v0.2.0 && git push origin v0.2.0
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Where to publish this build
+        type: choice
+        options: [testpypi, pypi]
+        default: testpypi
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and test
+    # Windows because that is the platform this library is actually verified on: the shader
+    # baker (`qsb`) ships inside the PySide6 wheel and is only confirmed to be there on Windows
+    # (see qsb.py), and the GUI tests need a GPU scene graph that no runner has. The artifact is
+    # `py3-none-any`, so the platform does not affect what is published.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Tag must match the package version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          version=$(python -c "import pathlib,tomllib;print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$version" != "$tag" ]; then
+            echo "::error::pyproject.toml says $version but the tag is v$tag"
+            exit 1
+          fi
+          echo "publishing version $version"
+
+      - name: Install
+        run: uv sync --group dev
+
+      # The GUI tests open real windows and need a GPU scene graph; a runner has neither.
+      # They are marked `gui` and are meant to be run on a developer machine:
+      #     uv run pytest              # everything, needs a desktop session
+      - name: Test
+        run: uv run pytest -m "not gui" -q
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      - name: Show what will be uploaded
+        shell: bash
+        run: ls -l dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Publish to ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'pypi' }}
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # the OIDC token that PyPI exchanges for an upload credential
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # A tag push always goes to PyPI; a manual run defaults to TestPyPI so a release can
+          # be rehearsed (install it with
+          #   pip install -i https://test.pypi.org/simple/ qmlmathplot ).
+          repository-url: >-
+            ${{ github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
+                && 'https://test.pypi.org/legacy/'
+                || 'https://upload.pypi.org/legacy/' }}
