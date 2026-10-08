@@ -1,7 +1,7 @@
-"""Model layer: expression -> GLSL, shader source templates, view-rect (pan/zoom) math.
+"""Model layer: expression -> GLSL and the shader source templates.
 
-This layer imports no Qt and can be tested standalone without a GUI; both the ViewModel
-(PlotController) and the View (the QML ShaderEffect) build on it.
+This layer imports no Qt and can be tested standalone without a GUI; both the camera
+(camera.py) and the View (the QML ShaderEffect) build on it.
 
 The drawing model is **implicit (signed-distance)**: the fragment shader computes, per
 pixel, the first-order screen-space distance "to the curve". Cost per frame is
@@ -20,17 +20,12 @@ from sympy.printing.glsl import GLSLPrinter
 from sympy.printing.precedence import PRECEDENCE
 
 __all__ = [
-    "DEFAULT_VIEW",
     "FRAGMENT_TEMPLATE",
     "VERTEX_SHADER",
-    "ViewRect",
     "dfunc_glsl",
     "func_glsl",
     "shader_sources",
 ]
-
-# Default view (world coordinates)
-DEFAULT_VIEW = (-6.0, 6.0, -2.0, 2.0)
 
 
 class _PlotGLSLPrinter(GLSLPrinter):
@@ -228,100 +223,6 @@ def domain_glsl(expr: sp.Expr, name: str = "x") -> str | None:
 def dfunc_glsl(expr: sp.Expr, name: str = "x") -> str:
     """GLSL text for f'(x) (used by the stroke criterion and the pole criterion)."""
     return func_glsl(sp.diff(expr, sp.Symbol("x")), name)
-
-
-class ViewRect:
-    """View rectangle (world coordinates) plus pan/zoom operations; owned by the ViewModel."""
-
-    ZOOM_PER_STEP = 0.9  # one step up on the wheel: span ×0.9 (10% zoom in)
-    MIN_SPAN = 1e-9  # span limits, to avoid zooming to 0 (can never scroll back) or to inf
-    MAX_SPAN = 1e9
-
-    __slots__ = ("xmin", "xmax", "ymin", "ymax")
-
-    def __init__(self, xmin: float = -6.0, xmax: float = 6.0,
-                 ymin: float = -2.0, ymax: float = 2.0) -> None:
-        self.xmin, self.xmax, self.ymin, self.ymax = xmin, xmax, ymin, ymax
-
-    # ---- read-only view ----
-    def as_tuple(self) -> tuple[float, float, float, float]:
-        return (self.xmin, self.xmax, self.ymin, self.ymax)
-
-    def reset(self) -> None:
-        self.xmin, self.xmax, self.ymin, self.ymax = DEFAULT_VIEW
-
-    def effective(self, width: float, height: float, aspect: float | None
-                  ) -> tuple[float, float, float, float]:
-        """The rect actually drawn in a `width` x `height` viewport.
-
-        ``aspect is None`` means "follow the view": the rect is used as-is, so the two axes
-        scale independently and the shape follows the widget's aspect ratio. With a number
-        (matplotlib's convention: pixels per y-unit over pixels per x-unit, 1.0 = square
-        units), the rect is **expanded around its center** — never cropped — until the two
-        scales have that ratio. So the plot keeps filling the widget and nothing that was
-        visible disappears; one axis simply shows more world.
-        """
-        if aspect is None or aspect <= 0 or width <= 0 or height <= 0:
-            return self.as_tuple()
-        span_x = self.xmax - self.xmin
-        span_y = self.ymax - self.ymin
-        if span_x <= 0 or span_y <= 0:
-            return self.as_tuple()
-        # current (pixels per y-unit) / (pixels per x-unit)
-        pixel_ratio = (height / span_y) / (width / span_x)
-        if pixel_ratio <= 0:
-            return self.as_tuple()
-        cx = 0.5 * (self.xmin + self.xmax)
-        cy = 0.5 * (self.ymin + self.ymax)
-        if pixel_ratio > aspect:            # y drawn too tall -> show more y (ratio down)
-            span_y *= pixel_ratio / aspect
-        else:                               # x drawn too wide -> show more x (ratio up)
-            span_x *= aspect / pixel_ratio
-        return (cx - 0.5 * span_x, cx + 0.5 * span_x, cy - 0.5 * span_y, cy + 0.5 * span_y)
-
-    def world_at(self, u: float, v: float) -> tuple[float, float]:
-        """World coordinates for a normalized screen position (0~1, top-left origin)."""
-        return (self.xmin + (self.xmax - self.xmin) * u,
-                self.ymax - (self.ymax - self.ymin) * v)
-
-    # ---- pan ----
-    def pan_pixels(self, dx: float, dy: float, width: float, height: float) -> None:
-        """Pan by a pixel displacement (screen y points down, world y points up)."""
-        if width <= 0 or height <= 0:
-            return
-        world_dx = (self.xmax - self.xmin) * dx / width
-        world_dy = (self.ymax - self.ymin) * dy / height
-        self.xmin -= world_dx
-        self.xmax -= world_dx
-        self.ymin += world_dy
-        self.ymax += world_dy
-
-    # ---- zoom ----
-    def zoom(self, delta: float, u: float, v: float) -> None:
-        """Zoom anchored at the normalized position (u, v); delta is the wheel increment
-        (120 = one step).
-
-        The scale factor depends only on delta, so scrolling up and down at the same
-        position are exact inverses; the anchor scales by "distance to the anchor", so the
-        world point under the cursor is not panned away.
-        """
-        if delta == 0:
-            return
-        scale = self.ZOOM_PER_STEP ** (delta / 120.0)
-
-        span_x = self.xmax - self.xmin
-        span_y = self.ymax - self.ymin
-        anchor_x, anchor_y = self.world_at(u, v)
-
-        span_x = min(max(span_x * scale, self.MIN_SPAN), self.MAX_SPAN)
-        span_y = min(max(span_y * scale, self.MIN_SPAN), self.MAX_SPAN)
-
-        self.xmin = anchor_x - span_x * u
-        self.xmax = anchor_x + span_x * (1.0 - u)
-        self.ymin = anchor_y - span_y * (1.0 - v)
-        self.ymax = anchor_y + span_y * v
-
-
 # --------------------------------------------------------------------------
 # Shader sources (fragment shader + per-pixel implicit drawing)
 # --------------------------------------------------------------------------
@@ -375,7 +276,7 @@ layout(location = 0) out vec4 fragColor;
 layout(std140, binding = 0) uniform buf {
     mat4 qt_Matrix;
     float qt_Opacity;
-    vec4 view;        // xmin, xmax, ymin, ymax
+    vec4 camera;      // centre.x, centre.y, world units per logical pixel (x, y)
     vec2 size;        // viewport size (logical pixels)
     float lineWidth;  // line width (logical pixels)
     vec4 color;       // non-premultiplied rgba
@@ -422,8 +323,10 @@ vec2 _edge_du(float ex) {
 @POLE@
 
 void main() {
-    float x = mix(view.x, view.y, vUV.x);
-    float y = mix(view.w, view.z, vUV.y);
+    // Camera -> world: the centre lands in the middle of the item, one logical pixel is
+    // (camera.z, camera.w) world units, and vUV.y is top-down (screen y grows downwards).
+    float x = camera.x + (vUV.x - 0.5) * size.x * camera.z;
+    float y = camera.y + (0.5 - vUV.y) * size.y * camera.w;
 
     // Domain: pixels outside are not drawn (x<0 for log(x), x<0 for sqrt(x), |x|>1 for
     // asin, …)
@@ -432,11 +335,10 @@ void main() {
         return;
     }
 
-    float spanx = view.y - view.x;
-    float spany = view.w - view.z;
-    float dx = spanx / size.x;      // world x per pixel
-    float sx = size.x / spanx;      // pixels per world x
-    float sy = size.y / spany;      // pixels per world y
+    float spany = size.y * camera.w;   // visible y span (world units)
+    float dx = camera.z;               // world x per pixel
+    float sx = 1.0 / camera.z;         // pixels per world x
+    float sy = 1.0 / camera.w;         // pixels per world y
 
     float f0 = F(x);
     float d1 = DF;

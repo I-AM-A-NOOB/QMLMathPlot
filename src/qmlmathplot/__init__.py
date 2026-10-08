@@ -1,6 +1,11 @@
-"""QMLMathPlot — an embeddable function plotting widget (works with Qt Quick and QtWidgets).
+"""QMLMathPlot — an embeddable function plotter for Qt (Qt Quick and QtWidgets).
 
-Quickest usage (one line in a QtWidgets layout):
+The plot is an **infinite canvas with a camera**: the camera holds where you are looking
+(centre, zoom, aspect) and the visible range follows from it, so resizing a widget shows more
+or less canvas instead of distorting or re-zooming the curve. Curves are expressions evaluated
+per pixel in a fragment shader, so the cost does not depend on the function's frequency.
+
+QtWidgets layout in one line:
 
     from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget
     from qmlmathplot import MathPlotWidget
@@ -13,69 +18,65 @@ Quickest usage (one line in a QtWidgets layout):
     window.show()
     app.exec()
 
-Standalone window / command line:
+Qt Quick (QML) — the component plus the model:
 
-    uv run qmlmathplot "sin(1/x)"            # see qmlmathplot.app
-    python examples/minimal.py "tan(x)"      # same
-    python examples/explorer_qtwidgets.py    # input field coexisting with other widgets
+    import QmlMathPlot 1.0
+    PlotView { plot: myPlot; anchors.fill: parent }
 
-Pure QML (Qt Quick) apps use the component plus the ViewModel (MVVM, three layers,
-each testable on its own):
-
-    Model       model.py        expression -> GLSL, shader sources, view rectangle math (no Qt)
-    ViewModel   viewmodel.py    PlotController: expression / view / shader URLs / error
-    View        qml/MathPlot.qml    pure QML component; inject the ViewModel to use it
-
-    from PySide6.QtCore import QUrl
     from PySide6.QtGui import QGuiApplication
     from PySide6.QtQuick import QQuickView
-    from qmlmathplot import PlotController, qml_component_path, register_qml_types
+    from PySide6.QtCore import QUrl
+    from qmlmathplot import Plot, qml_component_path, register_qml_types
 
     app = QGuiApplication([])
     register_qml_types()
     view = QQuickView()
     view.setSource(QUrl.fromLocalFile(qml_component_path()))
-    view.rootObject().setProperty("controller", PlotController("sin(1/x)"))
+    view.rootObject().setProperty("plot", Plot())
     view.show()
     app.exec()
 
-``MathPlotWidget`` is imported **lazily**: pure QML usage does not pull in QtWidgets for it.
+Model, without Qt widgets:
+
+    plot = Plot()
+    plot.xlim, plot.ylim = (-6.0, 6.0), (-2.0, 2.0)
+    curve = plot.add_curve("sin(1/x)", label="sin(1/x)")
+    curve.expression = "sin(2/x)"          # one signal -> re-bake -> the view swaps it
+    plot.theme = "ggplot"                  # Matplotlib's style sheets, see qmlmathplot.themes
+
+Demos: ``examples/minimal.py``, ``examples/explorer_qtwidgets.py``,
+``examples/explorer_qtquick.py``. Design notes: ``docs/api-design.md``.
 """
 
 from typing import TYPE_CHECKING
 
-from .model import (
-    DEFAULT_VIEW,
-    FRAGMENT_TEMPLATE,
-    VERTEX_SHADER,
-    ViewRect,
-    dfunc_glsl,
-    func_glsl,
-    shader_sources,
-)
-from .viewmodel import QML_URI, PlotController, qml_component_path, register_qml_types
+from .camera import HOME_SIZE, HOME_VIEW, Camera, nice_ticks
+from .curve import Curve, CurveListModel
+from .plot import Plot
+from .view import QML_MAJOR, QML_MINOR, QML_URI, qml_component_path, register_qml_types
 
-if TYPE_CHECKING:  # type checkers only; at runtime the lazy import happens via module __getattr__
+if TYPE_CHECKING:  # only for type checkers; at runtime the module-level __getattr__ is used
     from .widget import MathPlotWidget
 
 __all__ = [
-    "DEFAULT_VIEW",
-    "FRAGMENT_TEMPLATE",
-    "PlotController",
-    "QML_URI",
-    "VERTEX_SHADER",
-    "ViewRect",
-    "dfunc_glsl",
-    "func_glsl",
-    "qml_component_path",
-    "register_qml_types",
-    "shader_sources",
+    "Camera",
+    "Curve",
+    "CurveListModel",
+    "HOME_SIZE",
+    "HOME_VIEW",
     "MathPlotWidget",
+    "nice_ticks",
+    "Plot",
+    "qml_component_path",
+    "QML_MAJOR",
+    "QML_MINOR",
+    "QML_URI",
+    "register_qml_types",
 ]
 
 
 def __getattr__(name: str) -> object:
-    """Lazily import ``MathPlotWidget`` (avoids the QtWidgets cost pure QML usage doesn't need)."""
+    """``MathPlotWidget`` is imported lazily, so pure-QML use never loads QtWidgets."""
     if name == "MathPlotWidget":
         from .widget import MathPlotWidget
 

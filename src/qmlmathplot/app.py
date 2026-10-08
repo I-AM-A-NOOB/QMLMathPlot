@@ -19,7 +19,8 @@ from PySide6.QtCore import QUrl
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQuick import QQuickView
 
-from .viewmodel import PlotController, qml_component_path, register_qml_types
+from .plot import Plot
+from .view import qml_component_path, register_qml_types
 
 # Valid QSG_RHI_BACKEND values (Qt 6); unset = Qt default (d3d11 on Windows)
 BACKENDS = ("d3d11", "d3d12", "vulkan", "metal", "opengl", "null")
@@ -66,10 +67,11 @@ def main(argv: list[str] | None = None) -> int:
         print("failed to create the QML root object", file=sys.stderr)
         return 1
 
-    # MVVM: the app side owns the ViewModel and injects it into the component (which also
+    # MVVM: the app side owns the model and injects it into the component (which also
     # brings its own when nothing is injected)
-    controller = PlotController(args.expression)
-    root.setProperty("controller", controller)
+    plot = Plot()
+    plot.add_curve(args.expression)
+    root.setProperty("plot", plot)
 
     view.show()
     print(f"RHI backend: {view.graphicsApi()}  (QSG_RHI_BACKEND={os.environ.get('QSG_RHI_BACKEND', 'not set')})",

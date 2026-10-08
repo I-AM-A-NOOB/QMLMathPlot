@@ -1,5 +1,6 @@
 """End-to-end smoke tests: really open a window and render, then check pixels for the two
-pieces of the puzzle (screen-space stroke + undersampled envelope band).
+pieces of the puzzle (screen-space stroke + undersampled envelope band) and for the QML
+furniture (grid, ticks, title).
 
 Grabbing the image must use the asynchronous ``QQuickItem.grabToImage()``: the synchronous
 handshake of ``QQuickWindow.grabWindow()`` deadlocks with the Python-side scene-graph
@@ -16,16 +17,19 @@ from PySide6.QtGui import QGuiApplication, QImage
 from PySide6.QtQuick import QQuickView
 from PySide6.QtTest import QTest
 
-from qmlmathplot import PlotController, qml_component_path
+from qmlmathplot import Plot, qml_component_path
 
 pytestmark = pytest.mark.gui
 
 WIDTH, HEIGHT = 900, 600
-BACKGROUND = (0x14, 0x14, 0x1E)  # backgroundColor of MathPlot.qml
+BACKGROUND = (0x14, 0x14, 0x1E)  # background of PlotView.qml
+HOME = (-6.0, 6.0, -2.0, 2.0)    # the classic view: the pixel positions below assume it
 
 
-def _render(app: QGuiApplication, expression: str | None = None,
-            pan_pixels: float = 0.0, zoom_steps: int = 0) -> QImage:
+def _render_plot(app: QGuiApplication, expression: str | None = None,
+                 pan_pixels: float = 0.0, zoom_steps: int = 0, furniture: bool = False,
+                 title: str = ""):
+    """Open the component at the classic 900x600 view and grab one frame: (image, plot)."""
     view = QQuickView()
     view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
     view.resize(WIDTH, HEIGHT)
@@ -33,19 +37,39 @@ def _render(app: QGuiApplication, expression: str | None = None,
     assert view.status() is QQuickView.Status.Ready, [e.toString() for e in view.errors()]
 
     root = view.rootObject()
-    controller = PlotController(expression) if expression is not None else None
-    if controller is not None:
-        # MVVM: the app side creates the ViewModel and injects it into the component
-        # (the component also has its own; here we exercise the injection path)
-        root.setProperty("controller", controller)
+    if expression is None:
+        # No injection: the component brings its own plot and its default sin(x) curve. Its
+        # own plot is deliberately not read back (a QML-declared property of a registered
+        # Python type has no Python converter), so the component's own home view stands.
+        plot = None
+    else:
+        # MVVM: the app side creates the model and injects it into the component
+        plot = Plot()
+        plot.add_curve(expression)
+        root.setProperty("plot", plot)
+    # The pixel expectations below measure the *curve*, and the furniture sits exactly on the
+    # columns being measured (the grid at x=0, the tick labels along the bottom edge), so it
+    # stays off except in the test that is about the furniture itself.
+    if plot is not None and not furniture:
+        plot.grid = False
+        plot.ticks_visible = False
+    if plot is not None:
+        plot.title = title
+
     view.show()
     if not QTest.qWaitForWindowExposed(view):
         pytest.skip("no usable display/GPU scenegraph")
-    if pan_pixels and controller is not None:
-        controller.panPixels(0.0, pan_pixels, float(WIDTH), float(HEIGHT))
-    if zoom_steps and controller is not None:
-        for _ in range(zoom_steps):
-            controller.zoom(120.0, 0.5, 0.5)   # each step spans x0.9
+
+    if plot is not None:
+        camera = plot.camera
+        camera.setViewport(float(WIDTH), float(HEIGHT))
+        camera.xlim = (HOME[0], HOME[1])
+        camera.ylim = (HOME[2], HOME[3])
+        if pan_pixels:
+            camera.pan_pixels(0.0, pan_pixels)
+        if zoom_steps:
+            for _ in range(zoom_steps):
+                camera.zoom_by(120.0, 0.5, 0.5, float(WIDTH), float(HEIGHT))  # each step spans x0.9
 
     for _ in range(20):
         app.processEvents()
@@ -56,7 +80,12 @@ def _render(app: QGuiApplication, expression: str | None = None,
     loop.exec()
     image = result.image()
     view.hide()
-    return image
+    return image, plot
+
+
+def _render(app: QGuiApplication, expression: str | None = None,
+            pan_pixels: float = 0.0, zoom_steps: int = 0) -> QImage:
+    return _render_plot(app, expression, pan_pixels, zoom_steps)[0]
 
 
 def _lit(image: QImage, x: int, y: int, threshold: int = 20) -> bool:
@@ -67,6 +96,21 @@ def _lit(image: QImage, x: int, y: int, threshold: int = 20) -> bool:
 
 def _lit_count(image: QImage) -> int:
     return sum(_lit(image, x, y) for y in range(image.height()) for x in range(image.width()))
+
+
+def _curve_count(image: QImage) -> int:
+    """Pixels whose hue is the default curve colour (blue far above red).
+
+    ``_lit`` also sees the grid and the tick labels, so the standalone test needs a count
+    that only the curve can satisfy.
+    """
+    count = 0
+    for y in range(0, image.height(), 2):
+        for x in range(0, image.width(), 2):
+            color = image.pixelColor(x, y)
+            if color.blue() - color.red() > 60:
+                count += 1
+    return count
 
 
 def _column_ratio(image: QImage, x: int) -> float:
@@ -91,10 +135,10 @@ def test_smooth_curve_is_a_thin_stroke(app: QGuiApplication) -> None:
 
 
 def test_component_works_without_injection(app: QGuiApplication) -> None:
-    """Without an injected ViewModel the component brings its own (the standalone
+    """Without an injected model the component brings its own plot and curve (the standalone
     usability promised by the README)."""
     image = _render(app)
-    assert _lit_count(image) > 100, "the built-in controller's default expression sin(x) should draw a curve"
+    assert _curve_count(image) > 100, "the component's own default sin(x) curve should draw"
 
 
 def _solid_outside_pm1(image: QImage) -> int:
@@ -240,3 +284,39 @@ def test_steep_segments_are_not_fragmented(app: QGuiApplication) -> None:
             best = max(best, cur)
         worst = min(worst, best / len(ys))
     assert worst > 0.9, f"vertical stripes should be continuous (longest run / lit rows), worst column only {worst:.2f}"
+
+
+def test_grid_ticks_and_title_are_drawn(app: QGuiApplication) -> None:
+    """The QML furniture: grid lines exactly at the tick positions, tick marks along the
+    bottom edge and the title at the top.
+
+    The positions are derived from the camera, so the test checks the mapping the view does
+    rather than repeating a hard-coded one.
+    """
+    image, plot = _render_plot(app, "sin(x)", furniture=True, title="QMLMathPlot")
+    camera = plot.camera
+    dpr = image.devicePixelRatio()
+
+    def screen(world_x: float, world_y: float = 0.0) -> tuple[int, int]:
+        return (int(round(((world_x - camera.centre.x()) / camera.scale_x + WIDTH / 2) * dpr)),
+                int(round(((camera.centre.y() - world_y) / camera.scale_y + HEIGHT / 2) * dpr)))
+
+    # a grid line runs through the tick at world x = 4 (its column is lit end to end) and
+    # there is none at x = 5, where only the curve crosses the column
+    grid_x, _ = screen(4.0)
+    assert _column_ratio(image, grid_x) > 0.9, "no grid line at the tick x=4"
+    between_x, _ = screen(5.0)
+    assert _column_ratio(image, between_x) < 0.2, "there should be no grid line between the ticks"
+    horizontal_y = screen(0.0, 1.0)[1]
+    lit_rows = sum(_lit(image, x, horizontal_y) for x in range(0, image.width()))
+    assert lit_rows > 0.9 * image.width(), "no grid line at the tick y=1"
+
+    # tick marks and labels hug the bottom edge; the title sits at the top centre
+    strip = int(16 * dpr)
+    bottom = sum(_lit(image, x, y, threshold=15)
+                 for x in range(0, image.width(), 3) for y in range(image.height() - strip, image.height()))
+    assert bottom > 0, "no tick marks or labels along the bottom edge"
+    top = sum(_lit(image, x, y, threshold=15)
+              for x in range(image.width() // 3, 2 * image.width() // 3)
+              for y in range(0, strip))
+    assert top > 0, "the title is not drawn at the top"

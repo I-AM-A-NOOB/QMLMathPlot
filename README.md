@@ -6,6 +6,10 @@ cost is ∝ the pixel count and independent of the function's frequency, so
 oscillating functions (e.g. `sin(1/x)`) cannot drag the frame rate down through
 polyline aliasing, and no CPU-side sampling is needed.
 
+The state is a **camera on an infinite canvas**: a `Plot` holds a `Camera` (where you look)
+and a list of `Curve`s (what is drawn), and the QML component `PlotView` binds to it. Several
+panels are several `Plot`s in a Qt layout — there is no figure, no axes box and no page.
+
 ## Quick start
 
 One line in a QtWidgets layout (least effort):
@@ -21,6 +25,17 @@ plot = MathPlotWidget("sin(1/x)")        # drag to pan / wheel zooms anchored at
 box.addWidget(plot)
 window.show()
 app.exec()
+```
+
+`MathPlotWidget` keeps one curve's worth of convenience (`expression`, `error`,
+`line_width`, `curve_color`, `background_color`, `aspect`, `view_bounds()`,
+`reset_view()`, `zoom()`, `pan_pixels()`); everything else lives on the model behind it:
+
+```python
+plot.plot.curves.add_curve("tan(x)", color="#ff8866", label="tan")   # a second curve
+plot.plot.camera.aspect = 1.0          # square units ("auto" by default)
+plot.plot.grid = False
+plot.plot.theme = "ggplot"
 ```
 
 Standalone window / command line:
@@ -43,26 +58,25 @@ the pure Qt Quick demo.
 QML component into the widgets world with a `QQuickWidget` and renders into its own
 FBO, so it can be stacked on top of / coexist with sibling widgets). Properties and
 methods: `expression` / `error` / `line_width` / `curve_color` / `background_color` /
-`aspect`,
-`view_bounds()` / `reset_view()` / `zoom(delta, u, v)` / `pan_pixels(dx, dy)`, the
-signals `expressionChanged` / `errorChanged`, and the underlying ViewModel exposed
-as `.controller`.
+`aspect`, `view_bounds()` / `reset_view()` / `zoom(delta, u, v)` / `pan_pixels(dx, dy)`,
+the signals `expressionChanged` / `errorChanged`, and the model itself as `.plot`.
 
-**Pure QML (Qt Quick)**: just inject a ViewModel (MVVM, see below).
+**Pure QML (Qt Quick)**: create the model in Python and inject it (MVVM, see below).
 
 ```python
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQuick import QQuickView
-from qmlmathplot import PlotController, qml_component_path, register_qml_types
+from qmlmathplot import Plot, qml_component_path, register_qml_types
 
 app = QGuiApplication([])
-register_qml_types()                       # registers PlotController + MathPlot as QML types
+register_qml_types()                       # registers Plot, Camera, Curve and PlotView
 
-controller = PlotController("sin(1/x)")               # ViewModel (owned by the app)
+plot = Plot()                              # the model (owned by the app)
+plot.add_curve("sin(1/x)")
 view = QQuickView()
 view.setSource(QUrl.fromLocalFile(qml_component_path()))
-view.rootObject().setProperty("controller", controller)
+view.rootObject().setProperty("plot", plot)
 view.show()
 app.exec()
 ```
@@ -70,51 +84,89 @@ app.exec()
 ```qml
 import QmlMathPlot 1.0
 
-MathPlot {                       // component: inject a ViewModel, or let it create its own
+PlotView {                       // inject a Plot, or let the component create its own
     anchors.fill: parent
-    controller: myPlotController
-    lineWidth: 1.5
-    aspect: 1.0          // "view" (default) or a fixed y-unit/x-unit ratio
-    curveColor: "#33ccff"
-    backgroundColor: "#14141e"
+    plot: myPlot
+
+    // Arbitrary QML in world coordinates: the transform is the view's own
+    Rectangle {
+        x: mapToScreen(0, 0).x - 4
+        y: mapToScreen(0, 0).y - 4
+        width: 8; height: 8; radius: 4; color: "#ffcc00"
+    }
 }
 ```
 
-Component properties: `expression` (sympy syntax; changing it regenerates the GLSL
-and bakes a `.qsb`), `view` (`Qt.vector4d(xmin, xmax, ymin, ymax)`), `error` (why
-the expression/bake failed, empty on success), `lineWidth`, `curveColor`, `aspect`,
-`backgroundColor`. `controller` is the ViewModel, exposing `zoom(delta, u, v)` /
-`panPixels(dx, dy, w, h)` / `resetView()` for the input layer to call.
+`PlotView` exposes `mapToScreen(x, y)` / `mapFromScreen(point)` plus the forwarders
+`camera` and `curves`; input handling (pan by left-drag, wheel zoom anchored at the cursor)
+is built in and switchable through `camera.panEnabled` / `camera.zoomEnabled`.
+
+The model:
+
+| Object | Members |
+|---|---|
+| `Plot` | `camera`, `curves`, `xlim`/`ylim` (forwarded), `add_curve()` / `remove_curve()`, and the style properties: `background`, `grid`, `grid_color`, `grid_width`, `grid_alpha`, `grid_style`, `color_cycle`, `line_width`, `text_color`, `tick_color`, `tick_length`, `font_size`, `tick_font_size`, `title`, `title_color`, `title_font_size`, `title_bold`, `ticks_visible`, `theme` |
+| `Camera` | `centre`, `zoom` (world units per logical pixel), `aspect`, `xlim`/`ylim` (derived), `ticks_x`/`ticks_y`, `zoomStep` / `panEnabled` / `zoomEnabled`, slots `setViewport(w, h)` / `zoom_by(delta, u, v, w, h)` / `pan_pixels(dx, dy)` / `reset()` |
+| `Curve` | `expression`, `color`, `lineWidth`, `visible`, `label`, `error` (read-only), the baked `vertexShader` / `fragmentShader` |
+| `CurveListModel` | the curves as a model (`curve`, `expression`, `color`, `lineWidth`, `visible`, `vertexShader`, `fragmentShader` roles) so QML puts one `ShaderEffect` behind each |
+
+Every setter is a Qt `Property` with a notify signal, so the same calls work from QML, from a
+Qt Designer slot or from a `QTimer`:
+
+```python
+QTimer.singleShot(1000, lambda: setattr(curve, "expression", "sin(3/x)"))
+```
 
 ## Design notes
 
-The planned surface — an **infinite canvas with a camera** (`Plot` / `Camera` / `Curve`),
-multiple curves, ticks/grid/annotations, the Qt property+signal contract and the image export
-pipeline — is specified in [`docs/api-design.md`](docs/api-design.md). It records what the
-current code becomes and the build order, and it supersedes the aspect decisions here where it
-says so. In short: the Matplotlib *vocabulary* is kept where it is vocabulary (limits, grid,
-title, ticks, annotate), while the *mechanism* is refused — no `Figure`/`Axes`/`subplots`
-(one view per widget, no bounded page), no `FigureCanvas`/`draw()` (the scene is live), no
-toolbar/legend (host chrome), and `save_image()` instead of `savefig()` (an export is a canvas
-region at a pixel size).
+The design — the camera model, the Qt property/signal contract, the object model and the
+build order — is specified in [`docs/api-design.md`](docs/api-design.md). In short: the
+Matplotlib *vocabulary* is kept where it is vocabulary (limits, grid, title, ticks, annotate),
+while the *mechanism* is refused — no `Figure`/`Axes`/`subplots` (one view per widget, no
+bounded page), no `FigureCanvas`/`draw()` (the scene is live), no toolbar and no legend (host
+chrome), and an export is a canvas region at a pixel size rather than a re-rendered page (not
+implemented yet).
 
-## Aspect ratio
+## The camera (centre, zoom, aspect)
 
-By default (`aspect: "view"`) the view rectangle is used as-is, so the two axes scale with the
-widget and a curve is stretched when the widget is not the shape the view was picked for.
+`Camera` stores three numbers that do not depend on the widget: `centre` (world coordinates in
+the middle of the view), `zoom` (world units per **logical** pixel on x) and `aspect` (the
+ratio of the y scale to the x scale). `xlim` / `ylim` are *derived* from them and the last
+reported size, so they always say what is on screen; assigning them moves the camera.
 
-Set `aspect` to a number to keep the ratio of the y-unit to the x-unit fixed (matplotlib's
-convention: `1.0` = square units, `2.0` = the y-axis twice as tall). The view is then
-**expanded around its center — never cropped** — so the plot keeps filling the widget and
-nothing that was visible disappears; one axis simply shows more world. Resizing keeps the
-**scale** (world units per pixel), so a window resize or a splitter drag never zooms the
-curve: the visible range grows or shrinks with the widget instead. `reset_view()` restores
-the default rectangle and the ratio is re-applied from there.
+- `aspect = "auto"` (the default) keeps the two scales independent: the widget's shape decides
+  how much canvas is visible, and neither axis is tied to the other. A number keeps the ratio
+  fixed (matplotlib's convention: `1.0` = square units, `2.0` = the y-unit twice as tall).
+  Setting it only ever **shows more** — the camera keeps its centre and expands, never crops.
+- **Resizing never zooms**: the scales are kept and the visible range follows the widget, so
+  dragging a window edge or a splitter shows more or less canvas instead of scaling the curve.
+- `camera.reset()` returns to the home view (the classic 12 x 4 window, resolved for the
+  current size); the aspect stays as configured.
+- The home is a *view*, so the first size report turns it into scales for that widget: opening
+  a narrow window shows the same window of canvas rather than a sliver of it.
 
 ```python
 plot = MathPlotWidget("sin(1/x)", aspect=1.0)     # square units
-plot.aspect = "view"                              # back to following the widget
+plot.aspect = "auto"                              # back to following the widget's shape
+plot.plot.camera.zoom_by(120, 0.5, 0.5, w, h)     # one wheel notch, anchored at the centre
 ```
+
+## Themes
+
+`Plot.theme` applies a style sheet to the style properties above:
+
+```python
+plot.theme = "ggplot"                # any of the bundled sheets
+plot.theme = "my-style"              # themes/my-style.mplstyle next to the package
+plot.theme = "path/to/any.mplstyle"  # any file in the same format
+```
+
+The 26 bundled sheets are Matplotlib's own styles, vendored verbatim into
+`qmlmathplot/themes/*.mplstyle` and converted at load time: Matplotlib's `rcParams` keys are
+mapped onto this library's property names, and keys describing things this library does not
+have (spines, figure size, dpi, legend, marker styles, …) are ignored. `themes.names()` lists
+them (`"default"` plus the 26 sheets). An unknown name raises `KeyError` and leaves the current
+theme alone.
 
 ## RHI backends
 
@@ -124,13 +176,16 @@ backend is used**. The implementation sets `QSG_RHI_BACKEND` before
 `setGraphicsApi()` has no effect). On this machine (Intel driver 32.0.101.8826)
 `d3d11` and `opengl` measured pixel-for-pixel identical.
 
-## Structure (MVVM)
+## Structure (model / view)
 
 | Layer | File | Responsibility |
 |---|---|---|
-| Model | `src/qmlmathplot/model.py` | expression → GLSL, shader source template, `ViewRect` pan/zoom math (no Qt dependency, unit-testable) |
-| ViewModel | `src/qmlmathplot/viewmodel.py` | `PlotController`: expression / view / shader URL / error; `qml_component_path()` returns the component path |
-| View | `src/qmlmathplot/qml/MathPlot.qml` | pure QML: `ShaderEffect` + mouse pan / wheel zoom |
+| Model | `src/qmlmathplot/model.py` | expression → GLSL, shader source template (no Qt dependency, unit-testable) |
+| Camera | `src/qmlmathplot/camera.py` | `Camera`: centre / zoom / aspect, the derived ranges, pan/zoom/reset, the nice-number tick algorithm |
+| Curves | `src/qmlmathplot/curve.py` | `Curve` (expression → baked `.qsb`, style, error) and `CurveListModel` |
+| Plot | `src/qmlmathplot/plot.py` | `Plot`: the camera, the curves and the styling the view binds to |
+| View | `src/qmlmathplot/qml/PlotView.qml` (+ `view.py`) | QML: background, grid, ticks/title, one `ShaderEffect` per curve, pan/zoom input; `view.py` registers the types and yields the component path |
+| Themes | `src/qmlmathplot/themes.py` + `themes/` | the vendored Matplotlib style sheets, resolved onto the `Plot`'s properties |
 | Bake | `src/qmlmathplot/qsb.py` | GLSL → `.qsb` (PySide6 ships `qsb.exe`), cached by source hash |
 | Widget | `src/qmlmathplot/widget.py` | `MathPlotWidget`: QQuickWidget bridge, drops straight into QtWidgets layouts |
 | Entry | `src/qmlmathplot/app.py` | command line / standalone window (the `qmlmathplot` script, `examples/minimal.py`) |
@@ -165,18 +220,30 @@ QSG_RHI_BACKEND=opengl uv run pytest -m gui
 
 - `test_model.py`: GLSL generation (small integer powers as repeated
   multiplication, avoiding `pow(x, y)`'s undefined behaviour for x<0), shader
-  injection, view math (zoom strictly reversible, no anchor drift).
+  injection (including the camera uniform and the mapping), and the camera math
+  (the home view at the first size, resize keeping the scale, an anchored zoom that
+  is exactly reversible, the aspect expanding but never cropping, ticks).
+- `test_curve.py`: a failed expression keeps the last working shaders, the style
+  setters are idempotent, and the list model reports the right roles.
+- `test_plot.py`: the plot's properties convert, notify exactly once and are wired
+  (a PySide property with an unresolved notify name silently loses it), the limits
+  are forwarded to the camera, and a theme applies / an unknown name is rejected.
+- `test_themes.py`: the vendored style sheets resolve to this library's properties.
 - `test_shader_bake.py`: the stage of a baked `.qsb` must match its purpose, and
   the four backend targets GLSL/HLSL/MSL/SPIR-V must all be covered.
 - `test_render_smoke.py`: open a window, render, read pixels; verify the thin-line
   shape, `sin(1/x)` filling its ±1 envelope, no |y|>1 artefacts outside the central
-  columns, poles not connected, and nothing drawn outside the domain.
+  columns, poles not connected, nothing drawn outside the domain, and the QML
+  furniture (grid lines exactly at the tick positions, ticks/labels, title).
 - `test_widget.py`: `MathPlotWidget` coexisting with neighbouring widgets — the plot
   appearing inside a layout, an expression change / an invalid expression keeping the
-  previous graph, **the wheel over a scroll area being consumed by the plot (zoom
-  instead of scrolling the parent)**, and the plot staying out of the Tab focus chain.
-  `conftest.py` provides a session-scoped `QApplication` (QtWidgets needs one, and a
-  process may only have one).
+  previous graph, curves added/hidden/removed through the model, **the wheel over a
+  scroll area being consumed by the plot (zoom instead of scrolling the parent)**, the
+  fixed aspect being undistorted by the widget's shape, and the plot staying out of the
+  Tab focus chain. `conftest.py` provides a session-scoped `QApplication` (QtWidgets
+  needs one, and a process may only have one).
+- `test_qtquick_coexistence.py`: the same drag conflict in Qt Quick (a `Flickable`
+  must not steal the pan).
 
 ## Pitfalls near the `sin(1/x)` singularity (fixed — do not repeat)
 
@@ -191,10 +258,6 @@ inside the central 41 columns no solid pixel falls outside |y|>1 (7961 before).
 - GPU `sin`/`cos` are unreliable for large arguments.
 - Tangent-based distance saturates on steep columns.
 - Per-column sampling is phase noise for oscillating functions.
-
-The view math lives in `ViewRect`: `effective()` derives what is actually drawn (the aspect
-expansion) from the stored rectangle, and the controller keeps that effective rectangle as the
-new view after a pan/zoom, so interaction always works on what is on screen.
 
 ## Domain, poles and stroke (Desmos-style)
 
@@ -265,10 +328,12 @@ Startup to the first frame is about **230 ms**, attributed as follows
 
 Per-frame GPU cost (2400×1500, extreme zoom, worst case) is **31 ms**; about 1/7 of
 that at 900×600, far below the 16.7 ms of 60 Hz. The shader source is about 6.9 KB.
+Every visible curve is one full-screen fragment pass, so `Curve.visible` is the lever
+when a figure carries many of them.
 
 ## Pitfalls already hit (do not repeat)
 
-`AGENTS.md` at the repo root carries all 21 records (symptom → cause → fix, with the
+`AGENTS.md` at the repo root carries all the records (symptom → cause → fix, with the
 measurement that settled each one). The Qt/packaging ones that shaped the code:
 
 - qsb decides the stage from the source file suffix (see `qsb.bake()` and
@@ -277,3 +342,5 @@ measurement that settled each one). The Qt/packaging ones that shaped the code:
   `QQuickWindow.grabWindow()`.
 - Expressions are **macros** rather than GLSL user functions: a pixel evaluates the
   same x 9 times, and macros are preprocessor expansion with no call semantics.
+- PySide ties a property's notify signal to the `Signal` **object**; a name string
+  silently leaves the property without one (and QML bindings then never refresh).

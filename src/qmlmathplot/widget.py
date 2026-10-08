@@ -14,6 +14,10 @@ on the QML side, so they never leak to a parent scroll area.
 
 A ``QApplication`` must exist first (QQuickWidget belongs to QtWidgets); ``register_qml_types()``
 is called automatically here and is safe to call repeatedly.
+
+The widget keeps one curve's worth of convenience (``expression``, ``line_width``,
+``curve_color``) for the common case; everything else lives on the model, reachable as
+``plot`` — ``plot.curves`` for more curves, ``plot.camera`` for the view.
 """
 
 from __future__ import annotations
@@ -22,7 +26,9 @@ from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtQuickWidgets import QQuickWidget
 from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget
 
-from .viewmodel import PlotController, qml_component_path, register_qml_types
+from .curve import Curve
+from .plot import Plot
+from .view import qml_component_path, register_qml_types
 
 __all__ = ["MathPlotWidget"]
 
@@ -34,8 +40,9 @@ class MathPlotWidget(QWidget):
     :param line_width: line width (logical pixels)
     :param curve_color: curve color (``#rrggbb``)
     :param background_color: background color (``#rrggbb``)
+    :param aspect: ``"auto"`` (default) or the ratio of the y scale to the x scale
 
-    The signals ``expressionChanged`` / ``errorChanged`` stay in sync with the ViewModel; a
+    The signals ``expressionChanged`` / ``errorChanged`` stay in sync with the first curve; a
     non-empty ``error`` means the expression failed to parse (the last working drawing is kept).
     """
 
@@ -50,7 +57,7 @@ class MathPlotWidget(QWidget):
         line_width: float = 1.5,
         curve_color: str = "#33ccff",
         background_color: str = "#14141e",
-        aspect: str | float = "view",
+        aspect: str | float = "auto",
     ) -> None:
         # Check before super().__init__(): constructing a QWidget without a
         # QApplication aborts inside Qt, so the friendly error would never be reached.
@@ -71,14 +78,13 @@ class MathPlotWidget(QWidget):
             )
 
         self._root = self._quick.rootObject()   # status is Ready, so this is always valid
-        self._controller = PlotController(expression, self)
-        self._root.setProperty("controller", self._controller)
-        self._controller.expressionChanged.connect(self.expressionChanged)
-        self._controller.errorChanged.connect(self.errorChanged)
-
-        self._root_set("lineWidth", float(line_width))
-        self._root_set("curveColor", curve_color)
-        self._root_set("backgroundColor", background_color)
+        self._plot = Plot(self)
+        self._plot.background = background_color
+        self._plot.line_width = float(line_width)
+        self._curve = self._plot.add_curve(expression, color=curve_color, line_width=line_width)
+        self._curve.expressionChanged.connect(self.expressionChanged)
+        self._curve.errorChanged.connect(self.errorChanged)
+        self._root.setProperty("plot", self._plot)
         self.aspect = aspect
 
         box = QVBoxLayout(self)
@@ -86,87 +92,92 @@ class MathPlotWidget(QWidget):
         box.addWidget(self._quick)
 
     def resizeEvent(self, event) -> None:  # noqa: N802 (Qt naming)
-        """Report the plot's real size to the controller.
+        """Report the plot's real size to the camera.
 
         The QML component reports it too, but for the widget path those reports can fire while
-        the component is still being created — before the injected controller is in place — so
-        the widget reports the authoritative size itself.
+        the component is still being created — before the injected plot is in place — so the
+        widget reports the authoritative size itself.
         """
         super().resizeEvent(event)
-        self._controller.setViewport(float(self._quick.width()), float(self._quick.height()))
+        self._plot.camera.setViewport(float(self._quick.width()), float(self._quick.height()))
 
-    # ------------------------------------------------------------- ViewModel
+    # ------------------------------------------------------------------ Model
     @property
-    def controller(self) -> PlotController:
-        """The underlying ViewModel (for connecting more signals)."""
-        return self._controller
+    def plot(self) -> Plot:
+        """The underlying model: camera, curves and styling."""
+        return self._plot
+
+    @property
+    def curve(self) -> Curve:
+        """The first curve, which the single-curve conveniences below drive."""
+        return self._curve
 
     @property
     def expression(self) -> str:
-        return self._controller.expression
+        return self._curve.expression
 
     @expression.setter
     def expression(self, source: str) -> None:
-        self._controller.expression = source
+        self._curve.expression = source
 
     @property
     def error(self) -> str:
         """Most recent parse error (empty string = OK)."""
-        return self._controller.error
+        return self._curve.error
 
     # ---------------------------------------------------------------- Appearance
-    def _root_set(self, name: str, value: object) -> None:
-        self._root.setProperty(name, value)
-
     @property
     def line_width(self) -> float:
-        return float(self._root.property("lineWidth"))
+        return self._curve.lineWidth
 
     @line_width.setter
     def line_width(self, value: float) -> None:
-        self._root_set("lineWidth", float(value))
+        self._plot.line_width = float(value)     # default for curves added later
+        self._curve.lineWidth = float(value)
 
     @property
     def curve_color(self) -> str:
-        return str(self._root.property("curveColor"))
+        return self._curve.color.name()
 
     @curve_color.setter
     def curve_color(self, value: str) -> None:
-        self._root_set("curveColor", value)
-
-    @property
-    def aspect(self) -> str | float:
-        """``"view"`` (default) lets the shape follow the widget's aspect ratio; a number
-        keeps the ratio of the y-unit to the x-unit fixed (``1.0`` = square units) by
-        expanding the view instead of distorting the curve."""
-        return self._controller.aspect
-
-    @aspect.setter
-    def aspect(self, value: str | float) -> None:
-        self._controller.aspect = value
+        self._curve.color = value
 
     @property
     def background_color(self) -> str:
-        return str(self._root.property("backgroundColor"))
+        return self._plot.background.name()
 
     @background_color.setter
     def background_color(self, value: str) -> None:
-        self._root_set("backgroundColor", value)
+        self._plot.background = value
+
+    @property
+    def aspect(self) -> str | float:
+        """``"auto"`` (default) lets the shape follow the widget's aspect ratio; a number
+        keeps the ratio of the y scale to the x scale fixed (``1.0`` = square units)."""
+        return self._plot.camera.aspect
+
+    @aspect.setter
+    def aspect(self, value: str | float) -> None:
+        self._plot.camera.aspect = value
 
     # ------------------------------------------------------------------ View
     def view_bounds(self) -> tuple[float, float, float, float]:
         """Current view (xmin, xmax, ymin, ymax) in world coordinates."""
-        v = self._controller.view
-        return (v.x(), v.y(), v.z(), v.w())
+        xlim = self._plot.camera.xlim
+        ylim = self._plot.camera.ylim
+        return (xlim.x(), xlim.y(), ylim.x(), ylim.y())
 
     def reset_view(self) -> None:
-        self._controller.resetView()
+        self._plot.camera.reset()
 
     def zoom(self, delta: float, u: float = 0.5, v: float = 0.5) -> None:
         """Zoom anchored at the normalized point (u, v); delta is the wheel step (120 = one
         notch, positive = zoom in)."""
-        self._controller.zoom(delta, u, v)
+        self._plot.camera.zoom_by(
+            delta, u, v, float(self._quick.width()), float(self._quick.height())
+        )
 
     def pan_pixels(self, dx: float, dy: float) -> None:
         """Pan by pixels (screen coordinates, y pointing down)."""
-        self._controller.panPixels(dx, dy, float(self._quick.width()), float(self._quick.height()))
+        self._plot.camera.pan_pixels(dx, dy)

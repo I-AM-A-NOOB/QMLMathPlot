@@ -197,6 +197,59 @@ histories and numbers belong here.
     baseline. The widget now reports the authoritative size from its own `resizeEvent`
     (`Component.onCompleted` sees a 0×0 item anyway).
 
+28. **A QML `property alias` cannot point at a chain.** `PlotView` first declared
+    `property alias aspect: root.plot.camera.aspect`; the whole component then failed to load
+    with *"Invalid alias reference. An alias reference must be specified as `<id>`,
+    `<id>.<property>` or `<id>.<value property>.<property>`"*. Aliases resolve through ids (and
+    value types), not through an injected object's members, and the plot *is* an injected
+    property (`plot: myPlot`) rather than an id, so no alias form can reach it. Fix: forward
+    objects instead (`property QtObject camera: root.plot.camera`) and have the furniture read
+    `root.plot.camera.ticks_x` directly; a host writes `view.camera.aspect = 1.0`.
+
+29. **Python tuples do not survive a QVariant into QML.** `Camera.ticks_x` returned
+    `list[tuple[float, str]]`; in QML it arrived as an array of the right `length` whose
+    elements were opaque (`tick[0]` → `-1`, `JSON.stringify(tick[0])` → `""`), so the grid
+    silently drew nothing. Lists index normally (`[[1.0, "a"]]` → `[0][0] == 1`). Fix: the tick
+    getters convert through `Camera._qml_pairs()` and expose two-element **lists**; the same
+    trap applies to any nested structure (`QVector2D` / `Qt.vector2d` is the other option).
+
+30. **PySide's `Property(..., notify="name")` accepts a string and silently produces a property
+    with NO notify signal.** The style properties emitted anyway (the setter emits explicitly),
+    but QML bindings never refreshed, and
+    `metaObject().property(i).notifySignal().isValid()` is **False** — no error anywhere. Fix:
+    pass the `Signal` *object* (`notify=gridColorChanged`, declared above the property in the
+    class body). A class-level `Signal` has no `.emit()` and no `.name`, so `Plot._style` emits
+    via the descriptor protocol: `notify.__get__(self, type(self)).emit()`.
+    Regression: `test_plot.py::test_every_style_property_has_a_wired_notify_signal`.
+
+31. **A Python `QAbstractListModel` subclass cannot be a Qt property type.** Declaring
+    `Plot.curves` as `Property(CurveListModel, …)` produced, at class-creation time,
+    *"QMetaObjectBuilder: Failed to add property 'curves' to 'Plot': Invalid property type
+    'QAbstractListModel*'"* — and QML then saw nothing for `plot.curves`, so the `Repeater`
+    created **no** delegates: the plot drew only the grid, no curve at all. Fix: declare the
+    property as `QObject`; QML only needs the object to *be* a list model, and
+    `roleNames()`/`data()` still drive the delegates.
+
+32. **In Qt 6.11 an ancestor's `Component.onCompleted` runs before its descendants'.** Measured
+    (PySide6 6.11.2): the root item's handler ran before the child `PlotView`'s, and before a
+    nested `Plot`'s, so a component's default child does **not** exist when an outer handler
+    first runs. The Qt Quick explorer's `Component.onCompleted` called `curves.at(0)` on the
+    component's default plot and got `IndexError`; worse, a `text: plot.curves.at(0).error`
+    *binding* evaluated to an error and, failed bindings never being re-evaluated, stayed empty
+    forever. Fix: let the component's default-curve handler act only on an empty model
+    (`if (curves.rowCount() === 0) add_curve("sin(x)")`, so a host that adds its own curve
+    wins), have a host create its own curve instead of assuming the default one, and update
+    chrome imperatively (`draw()` sets the error label) rather than binding through
+    `curves.at(0)`.
+
+33. **A QML-declared property typed as a registered Python class cannot be read back from
+    Python.** `property Plot plot: defaultPlot` loads and binds fine, but reading it with
+    `root.property("plot")` raises `RuntimeError: Can't find converter for 'Plot*'` (a
+    `QtObject`-typed forwarder returns the Python object as expected). Fix: read what you need
+    from a `QtObject`-typed forwarder (the render smoke test uses `plot.property("camera")`) or
+    keep the Python-side reference you injected.
+
+
 ## Performance (measured)
 
 Startup to first frame is ≈ **230 ms** (Windows / D3D11 / 900×600):

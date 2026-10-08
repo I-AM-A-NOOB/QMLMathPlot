@@ -36,11 +36,11 @@ Item {{
         contentWidth: {PLOT_WIDTH}
         contentHeight: {PLOT_HEIGHT}
 
-        MathPlot {{
+        // No injection: the component brings its own plot and its default sin(x) curve
+        PlotView {{
             objectName: "plot"
             width: {PLOT_WIDTH}
             height: {PLOT_HEIGHT}
-            controller.expression: "sin(x)"
         }}
     }}
 }}
@@ -84,15 +84,17 @@ def test_drag_over_plot_pans_instead_of_flicking(app: QGuiApplication, tmp_path:
     flick = view.rootObject().findChild(QQuickItem, "flick")
     assert plot is not None and flick is not None
 
-    xmin_before = plot.property("view").x()
-    span = plot.property("view").y() - xmin_before
+    # The view lives on the camera (the component forwards it as `camera`).
+    camera = plot.property("camera")
+    xmin_before = camera.xlim.x()
+    span = camera.xlim.y() - xmin_before
 
     drag_pixels = -300.0
     _drag(view, QPointF(WIDTH / 2, HEIGHT / 2), QPointF(drag_pixels, 0.0))
     for _ in range(20):
         app.processEvents()
 
-    xmin_after = plot.property("view").x()
+    xmin_after = camera.xlim.x()
     # Panning is 1:1 with the cursor in plot coordinates: -300 px of a 1200 px wide plot.
     expected = -drag_pixels / PLOT_WIDTH * span
     moved = xmin_after - xmin_before

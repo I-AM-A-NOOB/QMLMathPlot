@@ -38,13 +38,17 @@ ApplicationWindow {
     }
 
     Component.onCompleted: {
-        plot.expression = window.initialExpression;
+        // The app side owns the model: it adds its own curve (the component's own default
+        // curve is only added when nothing did, so this one wins).
+        view.plot.add_curve(window.initialExpression);
         aspectBox.currentIndex = 1;             // start at 1:1: no distortion on resize
-        plot.aspect = aspectBox.currentValue;
+        view.plot.camera.aspect = aspectBox.currentValue;
     }
 
     function draw() {
-        plot.expression = expressionField.text;
+        const curve = view.plot.curves.at(0);
+        curve.expression = expressionField.text;
+        errorLabel.text = curve.error;
         logLine("draw " + JSON.stringify(expressionField.text));
     }
 
@@ -80,22 +84,24 @@ ApplicationWindow {
                 textRole: "text"
                 valueRole: "value"
                 model: [
-                    { text: "Follow view", value: "view" },
+                    { text: "Auto (widget shape)", value: "auto" },
                     { text: "1:1 (square)", value: 1.0 },
                     { text: "2:1", value: 2.0 },
                     { text: "1:2", value: 0.5 }
                 ]
                 onActivated: {
-                    plot.aspect = currentValue;
+                    view.plot.camera.aspect = currentValue;
                     window.logLine("aspect -> " + currentText);
                 }
             }
             Button {
                 text: "Reset view"
-                onClicked: plot.controller.resetView()
+                onClicked: view.plot.camera.reset()
             }
+            // Filled in by draw(): a binding on curves.at(0) would be evaluated before the
+            // app's own curve exists, and a failed binding is never re-evaluated.
             Label {
-                text: plot.error
+                id: errorLabel
                 color: "#ff8080"
             }
         }
@@ -107,12 +113,11 @@ ApplicationWindow {
         anchors.fill: parent
         orientation: Qt.Horizontal
 
-        MathPlot {
-            id: plot
+        PlotView {
+            id: view
             objectName: "plot"
             SplitView.preferredWidth: 880
             SplitView.fillHeight: true
-            lineWidth: 1.5
 
             // Overlay: no pointer handlers, so mouse events pass straight through
             Rectangle {
@@ -155,13 +160,14 @@ ApplicationWindow {
                       + "   (drag to pan / wheel to zoom at the cursor)"
             }
             Item { Layout.fillWidth: true }
-            Label { text: "plot " + plot.width.toFixed(0) + "x" + plot.height.toFixed(0) }
+            Label { text: "plot " + view.width.toFixed(0) + "x" + view.height.toFixed(0) }
         }
     }
 
     function viewBounds(index) {
-        const v = plot.view;
-        return index === 0 ? v.x : index === 1 ? v.y : index === 2 ? v.z : v.w;
+        const camera = view.plot.camera;
+        return index === 0 ? camera.xlim.x : index === 1 ? camera.xlim.y
+             : index === 2 ? camera.ylim.x : camera.ylim.y;
     }
 
     Connections {

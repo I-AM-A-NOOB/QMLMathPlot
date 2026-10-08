@@ -47,7 +47,7 @@ from qmlmathplot import MathPlotWidget
 
 #: Aspect choices: label -> the value handed to ``MathPlotWidget.aspect``.
 ASPECTS = (
-    ("Follow view", "view"),
+    ("Follow view", "auto"),
     ("1:1 (square)", 1.0),
     ("2:1", 2.0),
     ("1:2", 0.5),
@@ -112,7 +112,7 @@ class Explorer(QMainWindow):
         self.plot = MathPlotWidget(self.input.text())
         self.plot.expressionChanged.connect(self.sync_status)
         self.plot.errorChanged.connect(self.sync_status)
-        self.plot.controller.viewChanged.connect(self.sync_status)
+        self.plot.plot.camera.viewChanged.connect(self.sync_status)
 
         # overlay: stacked over the plot area, but does not consume mouse events
         self.overlay = QLabel("Overlay QLabel (translucent, click-through)", self.plot)
@@ -156,7 +156,7 @@ class Explorer(QMainWindow):
     # ------------------------------------------------------------------ slots
     def pick_aspect(self) -> None:
         value = self.aspects.currentData()
-        self.plot.aspect = value
+        self.plot.plot.camera.aspect = value      # "auto" | a number
         self.log_line(f"aspect -> {self.aspects.currentText()}")
         self.sync_status()
 
@@ -165,7 +165,9 @@ class Explorer(QMainWindow):
         self.draw()
 
     def draw(self) -> None:
-        self.plot.expression = self.input.text()
+        # The expression box drives the plot's first curve (the plot's own convenience setter
+        # would do as well; this is the model path an app uses for several curves).
+        self.plot.plot.curves.at(0).expression = self.input.text()
         self.log_line(f"draw {self.input.text()!r}")
         self.sync_status()
 

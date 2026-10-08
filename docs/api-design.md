@@ -1,7 +1,13 @@
 # API design — an infinite canvas on Qt
 
-Status: **decided**. Supersedes the earlier `Figure`/`Axes` framing of this document: those
+Status: **decided**; supersedes the earlier `Figure`/`Axes` framing of this document: those
 exist to serve a *bounded canvas with subplots*, and QMLMathPlot has neither.
+
+**Implemented** (see the build order): §2–§7 — `Plot` / `Camera` / `Curve` / `CurveListModel`,
+multiple curves, grid, ticks, titles, and the theme system (§7b). **Not implemented yet**: §8
+annotations and `underlay`/`overlay`, §9 export (shelved), `quickplot()`, `add_series()`,
+`plot.ticks` as a settable property. Everything else in this document is the plan of record,
+not a description of the current code.
 
 ---
 
@@ -166,8 +172,54 @@ swap happening when `shadersChanged` fires.
 * Tick *values* are computed in Python (`Camera.tick_values()` — nice-number algorithm, pure
   and unit-tested) and pushed through `ticksChanged`; QML only positions and formats them.
   Labels regenerate on camera changes, not per frame.
-* The grid is a **static shader** (tick positions as uniforms): crisp at any zoom, no
-  per-frame QML churn, baked once. Tick marks and labels are QML.
+* The grid, tick marks and labels are **drawn in QML** (a `Canvas`/`Shape` regenerated when
+  the camera changes). Simple and crisp enough for the tens of lines a grid has; moving it
+  into a static shader (tick positions as uniforms, baked once) stays the documented
+  optimisation if a figure ever needs many lines.
+
+## 7b. Themes
+
+The style system copies Matplotlib's, because that is where the good defaults live and it
+costs nothing to be compatible with them: a theme is a set of style overrides, and the
+bundled ones are **Matplotlib's own style sheets, vendored verbatim** into
+`qmlmathplot/themes/*.mplstyle` (26 files, redistributed under Matplotlib's BSD license — see
+`themes/LICENSE.matplotlib`), converted at load time.
+
+```python
+plot.theme = "ggplot"
+plot.theme = "dark_background"
+plot.theme = "seaborn-v0_8-darkgrid"
+plot.theme = "my-style"                 # themes/my-style.mplstyle
+plot.theme = "path/to/any.mplstyle"     # any file in the same format
+qmlmathplot.themes.names()              # everything available
+```
+
+The file format is Matplotlib's (`key: value`, `#` comments), so a new style sheet can be
+dropped in without touching code. `themes.resolve(name)` converts `rcParams` into our
+property names:
+
+| Matplotlib | Plot property |
+|---|---|
+| `axes.facecolor` (else `figure.facecolor`) | `background` |
+| `axes.grid` | `grid` |
+| `grid.color` / `grid.linewidth` / `grid.alpha` / `grid.linestyle` | `gridColor` / `gridWidth` / `gridAlpha` / `gridStyle` |
+| `axes.prop_cycle` | `colorCycle` |
+| `lines.linewidth` | `lineWidth` (default for new curves) |
+| `text.color`, `axes.labelcolor` | `textColor` |
+| `xtick.color`, `ytick.color` | `tickColor` |
+| `xtick.major.size`, `ytick.major.size` | `tickLength` |
+| `font.size` | `fontSize` |
+| `xtick.labelsize`, `ytick.labelsize` | `tickFontSize` |
+| `axes.titlecolor` / `axes.titlesize` / `axes.titleweight` | `titleColor` / `titleFontSize` / `titleBold` |
+
+Values are converted the way Matplotlib reads them: points become logical pixels (×4/3),
+`w`/`k` short names, bare hex (`E5E5E5`), float grayscale (`0.8`) and `C0`… cycle references
+are all accepted. Keys describing things this library does not have (spines, figure size,
+dpi, legend, marker styles) are dropped silently, which is what makes dropping in an
+unmodified `.mplstyle` work.
+
+Themes set the *defaults* for new artists and the plot's own furniture; an explicit
+`add_curve(color=...)` still wins, and nothing is global — a theme belongs to one `Plot`.
 
 ## 8. Annotations, labels and custom elements
 
@@ -179,7 +231,12 @@ swap happening when `shadersChanged` fires.
 * Everything else is QML: `underlay` / `overlay` are default properties and `mapToScreen()`
   gives the transform — arbitrary QML inside the plot's coordinate space, no Python model.
 
-## 9. Export / screenshots
+## 9. Export / screenshots — **shelved**
+
+> Shelved by the maintainer: the API below stays as the design of record, but nothing is
+> implemented for it in this round.
+
+
 
 ```python
 plot.save_image("out.png", xlim=(-1, 1), ylim=(-1, 1), width=1200, height=400, dpi=1.0)
@@ -253,9 +310,10 @@ first, refuse the second.
 | `MathPlotWidget` | same public shape, backed by `Plot` |
 | `DEFAULT_VIEW` | `Camera.home` (centre/zoom as configured) |
 
-Backwards compatibility: `PlotController` and `MathPlot` stay as thin aliases for one release,
-marked deprecated in their docstrings; the explorers move to `PlotView` so the new path is the
-one that is exercised.
+There is **no compatibility layer**: `PlotController`, `ViewRect` and `MathPlot.qml` were
+deleted and every caller (widget, CLI, demos, tests) migrated in the same change. For a
+single-curve caller the rename is mechanical (`controller.expression` →
+`plot.curves.at(0).expression`), and `Camera` replaces `ViewRect` one-for-one.
 
 ## 13. Host chrome: primitives, not a toolbar
 
@@ -311,9 +369,10 @@ Two consequences worth stating:
 2. `CurveListModel` + `Repeater` → multiple curves, per-curve visibility.
 3. Grid shader + ticks + labels + title.
 4. `AnnotationListModel` + `underlay`/`overlay` + `mapToScreen`.
-5. Offscreen exporter (`to_image` / `save_image`) + its tests (region, size, stretch,
-   transparency).
-6. Deprecation shims removed.
+5. **Themes**: the style properties, `plot.theme`, `themes.resolve()` and the vendored
+   Matplotlib style sheets (done alongside step 1).
+6. Offscreen exporter (`to_image` / `save_image`) — **shelved** (§9).
+7. Deprecation shims removed.
 
 Each step is independently shippable and testable; steps 1–2 change existing files, the rest
 are additive.

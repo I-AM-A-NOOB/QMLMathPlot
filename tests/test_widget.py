@@ -29,7 +29,7 @@ from qmlmathplot import MathPlotWidget
 
 pytestmark = pytest.mark.gui
 
-BACKGROUND = (0x14, 0x14, 0x1E)  # backgroundColor of MathPlot.qml
+BACKGROUND = (0x14, 0x14, 0x1E)  # background of PlotView.qml
 
 
 def _quick(plot: MathPlotWidget) -> QQuickWidget:
@@ -42,6 +42,7 @@ def _quick(plot: MathPlotWidget) -> QQuickWidget:
 def _grab(plot: MathPlotWidget) -> QImage:
     """Grab the current frame of the plot widget."""
     item = _quick(plot).rootObject()
+    QTest.qWait(20)                     # let the scene graph render the latest change
     result = item.grabToImage()
     loop = QEventLoop()
     result.ready.connect(loop.quit)
@@ -168,15 +169,30 @@ def test_plot_does_not_join_tab_focus_chain(app: QApplication) -> None:
     assert _quick(plot).focusPolicy() is Qt.FocusPolicy.ClickFocus
 
 
-def _line_slope(image: QImage) -> float:
-    """Least-squares |dy/dx| of the lit pixels (image rows grow downwards)."""
+def _is_curve_pixel(color: "QColor", hue: str = "blue", delta: int = 100) -> bool:
+    """Whether a pixel belongs to a curve of the given hue.
+
+    The grid, ticks and labels are grey, and the labels are drawn with subpixel antialiasing
+    (which fringes them with colour), so a plain brightness test would see them. The margin is
+    wide enough to exclude that fringing but keeps every solid curve pixel.
+    """
+    red, blue = color.red(), color.blue()
+    return blue - red > delta if hue == "blue" else red - blue > delta
+
+
+def _furniture_off(plot: MathPlotWidget) -> None:
+    """Turn the grid and the ticks off: they smear over the columns the tests measure."""
+    plot.plot.grid = False
+    plot.plot.ticks_visible = False
+
+
+def _line_slope(image: QImage, hue: str = "blue") -> float:
+    """Least-squares |dy/dx| of the curve's own pixels (image rows grow downwards)."""
     xs: list[float] = []
     ys: list[float] = []
     for x in range(image.width()):
         rows = [y for y in range(image.height())
-                if max(abs(image.pixelColor(x, y).red() - BACKGROUND[0]),
-                       abs(image.pixelColor(x, y).green() - BACKGROUND[1]),
-                       abs(image.pixelColor(x, y).blue() - BACKGROUND[2])) > 40]
+                if _is_curve_pixel(image.pixelColor(x, y), hue)]
         if rows:
             xs.append(float(x))
             ys.append(sum(rows) / len(rows))
@@ -196,6 +212,7 @@ def test_fixed_aspect_is_not_distorted_by_the_widget_shape(
     """With ``aspect=1`` a 45-degree line in world units is drawn at 45 degrees in pixels,
     whatever the widget's shape (that is the point of a fixed ratio)."""
     plot = MathPlotWidget("x", aspect=1.0)
+    _furniture_off(plot)                            # the slope is about the curve
     plot.resize(width, height)
     plot.show()
     assert QTest.qWaitForWindowExposed(plot), "no usable display/GPU scene graph"
@@ -205,10 +222,11 @@ def test_fixed_aspect_is_not_distorted_by_the_widget_shape(
     plot.hide()
 
 
-def test_follow_view_mode_distorts_as_before(app: QApplication) -> None:
-    """The default ``"view"`` mode keeps the old behaviour: the two axes scale with the
-    widget, so the same line is not at 45 degrees."""
-    plot = MathPlotWidget("x")                      # aspect defaults to "view"
+def test_auto_aspect_distorts_as_before(app: QApplication) -> None:
+    """The default ``"auto"`` aspect keeps the old behaviour: the two scales stay independent
+    (the widget's shape decides), so the same line is not at 45 degrees."""
+    plot = MathPlotWidget("x")                      # aspect defaults to "auto"
+    _furniture_off(plot)
     plot.resize(640, 400)
     plot.show()
     assert QTest.qWaitForWindowExposed(plot)
@@ -243,4 +261,42 @@ def test_resize_keeps_the_scale_with_a_fixed_aspect(app: QApplication) -> None:
     plot.resize(900, 600)
     _settle(app)
     assert scale() == pytest.approx(start, rel=0.02)     # and it is reversible
+    plot.hide()
+
+
+def _rows_of_colour(image: QImage, hue: str) -> int:
+    """Rows holding a pixel of one curve hue: only the curves count, never the furniture."""
+    rows = 0
+    for y in range(0, image.height(), 2):
+        for x in range(0, image.width(), 2):
+            if _is_curve_pixel(image.pixelColor(x, y), hue):
+                rows += 1
+                break
+    return rows
+
+
+def test_curves_can_be_added_hidden_and_removed_through_the_model(app: QApplication) -> None:
+    """The widget's conveniences cover one curve; the model behind it carries the rest: a
+    second curve is another shader pass, and ``visible`` takes it away again."""
+    plot = MathPlotWidget("sin(x)")                 # the default cycle starts with blue
+    _furniture_off(plot)                            # only the curves should count
+    plot.resize(480, 360)
+    plot.show()
+    assert QTest.qWaitForWindowExposed(plot)
+    _settle(app)
+    assert _rows_of_colour(_grab(plot), "blue") > 20, "the widget's own curve is not drawn"
+
+    extra = plot.plot.add_curve("x", color="#ff8866", line_width=3.0)
+    _settle(app)
+    assert _rows_of_colour(_grab(plot), "red") > 20, "the added curve is not drawn"
+
+    extra.visible = False
+    _settle(app)
+    assert _rows_of_colour(_grab(plot), "red") == 0, "the hidden curve is still drawn"
+    assert _rows_of_colour(_grab(plot), "blue") > 20, "hiding one curve hid the other"
+
+    plot.plot.curves.remove_curve(extra)
+    _settle(app)
+    assert len(plot.plot.curves) == 1
+    assert _rows_of_colour(_grab(plot), "red") == 0, "the removed curve is still drawn"
     plot.hide()
