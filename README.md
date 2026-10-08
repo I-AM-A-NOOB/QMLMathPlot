@@ -88,11 +88,15 @@ the expression/bake failed, empty on success), `lineWidth`, `curveColor`, `aspec
 
 ## Design notes
 
-The planned Matplotlib-flavoured surface — `PlotFigure` / `PlotAxes` / `Curve`, multiple
-curves, ticks/grid/annotations, the Qt property+signal contract and the image export
+The planned surface — an **infinite canvas with a camera** (`Plot` / `Camera` / `Curve`),
+multiple curves, ticks/grid/annotations, the Qt property+signal contract and the image export
 pipeline — is specified in [`docs/api-design.md`](docs/api-design.md). It records what the
-current code becomes and the build order, and it supersedes the aspect decisions here where
-it says so.
+current code becomes and the build order, and it supersedes the aspect decisions here where it
+says so. In short: the Matplotlib *vocabulary* is kept where it is vocabulary (limits, grid,
+title, ticks, annotate), while the *mechanism* is refused — no `Figure`/`Axes`/`subplots`
+(one view per widget, no bounded page), no `FigureCanvas`/`draw()` (the scene is live), no
+toolbar/legend (host chrome), and `save_image()` instead of `savefig()` (an export is a canvas
+region at a pixel size).
 
 ## Aspect ratio
 

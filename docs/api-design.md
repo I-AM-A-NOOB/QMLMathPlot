@@ -1,87 +1,95 @@
-# API design — a Matplotlib-flavoured surface on Qt
+# API design — an infinite canvas on Qt
 
-Status: **decided** (this document overrides the earlier `aspect` design where it says so).
-Audience: whoever adds multiple curves, axes, grid, annotations and custom elements next.
+Status: **decided**. Supersedes the earlier `Figure`/`Axes` framing of this document: those
+exist to serve a *bounded canvas with subplots*, and QMLMathPlot has neither.
 
 ---
 
-## 1. Principles
+## 1. What this thing actually is
 
-1. **Qt is the runtime, not a wrapper.** Every knob is a Qt `Property` with a `notify`
-   signal; every collection is a `QAbstractListModel`; every action is a `Slot`. Changing a
-   property emits exactly one signal and the QML re-renders — no Python call is needed to
-   "update the plot", and nothing is mutated behind Qt's back.
-2. **Expressions, not data.** A curve is `y = f(x)` evaluated *per pixel in a fragment
-   shader*, not a polyline sampled on the CPU. This is the fundamental difference from
-   Matplotlib and it drives everything below: an artist is a shader, "many curves" means
-   several full-screen passes, and the cost is proportional to pixels × curves, never to
-   the function's frequency.
-3. **One world→screen transform, owned by the Axes.** Curves, grid, ticks, labels,
-   annotations and exported images all read the same limits. Nothing keeps a private copy.
-4. **The GPU draws curves and the grid; QML draws text and vector furniture** (ticks,
-   labels, legend, annotations). Text in a shader is a dead end.
-5. **Offscreen rendering is Qt's job** (`QQuickRenderControl`), not a second renderer: the
-   export path instantiates the *same* QML component at the requested size, so what you
-   export is what you see.
+Three facts decide the whole design, and none of them matches Matplotlib's model:
+
+1. **The canvas is infinite.** There is no figure rectangle, no inches, no dpi-bounded page.
+   The state is *where you are looking*, not *what the picture contains*.
+2. **One view per widget, and the widget keeps changing size.** There are no subplots and no
+   axes boxes: several panels are several `Plot` objects in a Qt layout. The visible range is
+   therefore a *consequence* of the camera and the current size — never a stored promise.
+3. **Artists are shaders.** A curve is an expression evaluated per pixel; the grid is a
+   shader; text and vector furniture are QML. There is no artist list to rasterise.
+
+So the model is a **camera on an infinite canvas**, and the Matplotlib flavour is kept only
+where it is vocabulary rather than mechanism (§10).
 
 ## 2. Object model
 
 ```mermaid
 graph TD
-    F[PlotFigure] -->|axes| A[PlotAxes]
-    F -->|curves| C["CurveListModel (QAbstractListModel)"]
-    F -->|annotations| N["AnnotationListModel"]
-    F -->|legend / export settings| S[PlotFigure properties]
-    A -->|xlim, ylim, aspect, ticks, grid, title, labels| A
-    C --> C1["Curve (QObject): expression, color, lineWidth, visible, label, error"]
-    N --> N1["Annotation (QObject): text, xy, xytext, arrow, color"]
-    V["PlotView.qml"] -->|binds| F
-    V --> V1["grid ShaderEffect (static, baked once)"]
-    V --> V2["Repeater over curves -> one ShaderEffect per curve"]
-    V --> V3["Canvas/Text: frame, ticks, labels, legend"]
-    V --> V4["Repeater over annotations -> world-anchored Items"]
-    V --> V5["underlay / overlay default properties (arbitrary QML)"]
+    P[Plot] -->|camera| C["Camera: centre + units/px + aspect"]
+    P -->|curves| L["CurveListModel (QAbstractListModel)"]
+    P -->|annotations| N["AnnotationListModel"]
+    P -->|grid / tick settings| G[Plot properties]
+    L --> L1["Curve: expression, color, lineWidth, visible, label, error"]
+    N --> N1["Annotation: text, xy, xytext, arrow, color"]
+    Q["PlotView.qml"] -->|binds| P
+    Q --> Q1["grid ShaderEffect (static, baked once)"]
+    Q --> Q2["Repeater over curves -> one ShaderEffect per curve"]
+    Q --> Q3["Canvas/Text: ticks, labels, title"]
+    Q --> Q4["Repeater over annotations"]
+    Q --> Q5["underlay / overlay default properties (arbitrary QML)"]
 ```
 
-`PlotFigure` is a plain `QObject` (no QWidget, no window): the same figure can be shown in
-a `QQuickView`, embedded with `MathPlotWidget`, or rendered offscreen for an export. The
+`Plot` is a plain `QObject` (no widget, no window): the same plot can be shown in a
+`QQuickView`, embedded through `MathPlotWidget`, or rendered offscreen for an export. The
 model owns state; `PlotView.qml` owns pixels.
 
-## 3. Python API (the Matplotlib-flavoured surface)
+**Why a camera and not limits.** A camera stores `(centre, units-per-pixel, aspect)` — three
+numbers that do not depend on the widget at all. The visible range is *derived* from the
+camera and the item's own size, which is exactly what an infinite canvas needs:
+
+* resizing shows more or less canvas **at the same zoom** — the natural camera behaviour, not
+  a special rule (an earlier limits-based design needed a "keep the scale" patch plus three
+  ordering fixes for the same effect);
+* the shader derives its mapping from the camera plus its own size, so nothing depends on a
+  size report arriving in the right order;
+* an export is "render this canvas region at this pixel size", which is the same operation
+  with different arguments.
+
+## 3. Python API
 
 ```python
-from qmlmathplot import PlotFigure
+from qmlmathplot import Plot
 
-fig = PlotFigure()                       # owns one PlotAxes; more later (subplots)
+plot = Plot()                          # the canvas + its artists
+cam = plot.camera
+cam.centre = (0.0, 0.0)                # world coordinates at the middle of the view
+cam.zoom = 0.0133                      # world units per pixel (uniform)
+cam.aspect = "auto"                    # "auto" | 1.0 | 2.0 …  (units_x per units_y per pixel)
+cam.xlim = (-6.0, 6.0)                 # convenience view onto the camera; keeps the ratio
+cam.ylim = (-2.0, 2.0)
 
-ax = fig.ax                             # one Figure owns one Axes; fig.axes is the 1-tuple
-ax.xlim = (-6.0, 6.0)                    # visible limits (world units)
-ax.ylim = (-2.0, 2.0)
-ax.aspect = "auto"                       # "auto" | 1.0 | 2.0 ...  (matplotlib convention)
-ax.grid = True
-ax.grid_color = "#2a2a3a"
-ax.title = "sin(1/x)"
-ax.xlabel, ax.ylabel = "x", "y"
-ax.ticks = "auto"                        # "auto" | [(pos, "label"), ...] | None
-ax.legend = True                         # uses Curve.label
+plot.xlim, plot.ylim = (-6.0, 6.0), (-2.0, 2.0)     # same, forwarded for ergonomics
+plot.grid = True
+plot.grid_color = "#2a2a3a"
+plot.title = "sin(1/x)"
+plot.ticks = "auto"                    # "auto" | [(pos, "label"), ...] | None
 
-c1 = fig.add_curve("sin(1/x)", color="#33ccff", line_width=1.5, label="sin(1/x)")
-c2 = fig.add_curve("tan(x)", color="#ff8866", label="tan")
-c1.expression = "sin(2/x)"               # one signal -> re-bake -> QML swaps the shader
+c1 = plot.add_curve("sin(1/x)", color="#33ccff", line_width=1.5, label="sin(1/x)")
+c2 = plot.add_curve("tan(x)", color="#ff8866", label="tan")
+c1.expression = "sin(2/x)"             # one signal -> re-bake -> QML swaps the shader
 c2.visible = False
-fig.remove_curve(c2)
+plot.remove_curve(c2)
 
-ann = fig.annotate("pole", xy=(0.0, 0.0), xytext=(24, -18), arrow=True)
+ann = plot.annotate("pole", xy=(0.0, 0.0), xytext=(24, -18), arrow=True)
 
-fig.savefig("out.png", xlim=(-1, 1), ylim=(-1, 1), width=1200, height=400)
-img = fig.to_image(width=800, height=600)          # -> QImage, same pipeline
+plot.save_image("out.png", xlim=(-1, 1), ylim=(-1, 1), width=1200, height=400)
+img = plot.to_image(width=800, height=600)          # -> QImage
 
-# plt-flavoured one-liner for scripts/notebooks (module-level convenience, no global state):
+# plt-flavoured one-liner for scripts and notebooks (module-level, no global state):
 qmlmathplot.quickplot("sin(1/x)", xlim=(-1, 1), ylim=(-1, 1))
 ```
 
-Every setter above is a `Property` with a `notify` signal, so the same calls work from QML,
-from a Qt Designer slot, or from a `QTimer` at runtime:
+Every setter is a Qt `Property` with a `notify` signal, so the same calls work from QML, from
+a Qt Designer slot or from a `QTimer`:
 
 ```python
 QTimer.singleShot(1000, lambda: setattr(c1, "expression", "sin(3/x)"))
@@ -93,275 +101,219 @@ QTimer.singleShot(1000, lambda: setattr(c1, "expression", "sin(3/x)"))
 import QmlMathPlot 1.0
 
 PlotView {
-    figure: myFigure                 // inject the model (or let it create one)
+    plot: myPlot                     // inject the model (or let it create one)
     anchors.fill: parent
-    underlay: Item { }               // drawn below the curves, world-anchored helpers below
-    overlay: Item { }                // drawn above everything
+    underlay: Item { }               // below the curves; mapToScreen() available
+    overlay: Item { }                // above everything (legends, readouts, badges)
 }
 ```
 
-`PlotView` provides `mapToScreen(x, y) -> point` and `mapFromScreen(point) -> {x, y}` so
-custom QML elements can sit at world coordinates without re-deriving the transform.
+`PlotView` exposes `mapToScreen(x, y)` and `mapFromScreen(point)` so any QML element can sit
+at world coordinates without re-deriving the transform.
 
 ## 5. The Qt contract (what makes runtime changes free)
 
-| Object | Property | Type | Notify | Effect when it changes |
+| Object | Property | Type | Notify | Effect |
 |---|---|---|---|---|
-| `PlotFigure` | `axes` | `PlotAxes*` | `axesChanged` | rebind the whole view |
+| `Plot` | `camera` | `Camera*` | `cameraChanged` | rebind the view |
 | | `curves` | `CurveListModel*` | model signals | `Repeater` adds/removes one ShaderEffect |
 | | `annotations` | `AnnotationListModel*` | model signals | `Repeater` adds/removes one Item |
-| | `legend` | `bool` | `legendChanged` | legend box shown/hidden |
-| `PlotAxes` | `xlim`, `ylim` | `QVector2D` | `limitsChanged` | grid, ticks, labels, all curves, all annotations |
-| | `aspect` | `QVariant` (`"auto"` or number) | `aspectChanged` → also `limitsChanged` | the limits are adjusted in place (§14) |
-| | `grid`, `gridColor`, `gridWidth` | `bool`, `QColor`, `double` | `gridChanged` | the grid shader's uniforms only |
+| | `xlim`, `ylim` | `QVector2D` | forwarded from `camera` | convenience; keeps the aspect ratio |
+| | `grid`, `gridColor`, `gridWidth` | `bool`, `QColor`, `double` | `gridChanged` | grid shader uniforms only |
 | | `ticks` | `QVariant` | `ticksChanged` | tick positions + labels |
-| | `title`, `xlabel`, `ylabel` | `QString` | `labelsChanged` | text items |
+| | `title` | `QString` | `titleChanged` | text item |
+| `Camera` | `centre` | `QVector2D` | `viewChanged` | everything that reads the view |
+| | `zoom` | `double` (units/px) | `viewChanged` | idem |
+| | `aspect` | `QVariant` (`"auto"` or number) | `aspectChanged` | the effective zoom on one axis |
+| | `xlim`, `ylim` | `QVector2D` | `viewChanged` | derived get/set onto the camera |
 | `Curve` | `expression` | `QString` | `expressionChanged` → `shadersChanged` | re-bake (cached), swap `.qsb` |
 | | `color`, `lineWidth` | `QColor`, `double` | `styleChanged` | shader uniforms |
-| | `visible`, `label` | `bool`, `QString` | `visibleChanged`, `labelChanged` | Repeater visibility / legend |
+| | `visible`, `label` | `bool`, `QString` | `visibleChanged`, `labelChanged` | Repeater visibility; host legend |
 | | `error` | `QString` | `errorChanged` | red text; the previous shader stays |
 | `Annotation` | `text`, `xy`, `xytext`, `arrow`, `color` | … | `changed` | that one item |
 
-Rules:
-* Setters are idempotent and emit only on an actual change (no signal storms).
-* A failed expression keeps the last working shader and fills `error` (never a blank plot).
-* The bake is cached by source hash, so re-setting the same expression is free; a new
-  expression is baked on a worker and the swap happens when `shadersChanged` fires, so the
-  GUI thread never blocks on `qsb`.
+Rules: setters are idempotent and emit only on a real change; a failed expression keeps the
+last working shader and fills `error` (never a blank plot); the bake is cached by source hash,
+so re-setting the same expression is free, and a new expression is baked on a worker with the
+swap happening when `shadersChanged` fires.
 
 ## 6. Curves (many of them)
 
 * One `ShaderEffect` per curve, produced by a `Repeater` over `CurveListModel`. Each pass is
-  independent: its own expression, colour, width, visibility, and its own bake.
-* Cost: **one full-screen fragment pass per visible curve** (the per-pixel work of §"cost"
-  in the README, times the number of curves). The existing per-pixel gating keeps each pass
-  cheap where nothing is drawn, but the pass itself is not free — so `visible` is the
-  intended lever, and a future "merge N curves into one generated shader" variant is the
-  documented optimisation if a figure needs many curves at once (it costs one re-bake per
-  curve-count change and a fixed maximum N).
-* Data series (`plot(x, y)` with arrays, like Matplotlib) are a *different* artist: a QML
-  `Shape`/`Canvas` polyline, not a shader. The API reserves `fig.add_series(x, y)` for it so
-  the expression-based `add_curve` never has to pretend to be a data plot.
+  independent: its own expression, colour, width, visibility, bake.
+* Cost: **one full-screen fragment pass per visible curve** (the per-pixel work of the README
+  times the number of curves). Per-pixel gating keeps each pass cheap where nothing is drawn,
+  but the pass is not free, so `visible` is the intended lever; "merge N curves into one
+  generated shader" is the documented optimisation if a figure needs many at once (it costs a
+  re-bake per curve-count change and a fixed maximum N).
+* **Data series are a different artist.** `plot(x, y)` with arrays is a QML-geometry polyline
+  (a `Shape`), not a shader — finite data has no aliasing problem and does not need the
+  per-pixel machinery. `add_series(x, y)` is reserved for it so `add_curve` never has to
+  pretend to accept arrays and silently change how the curve is drawn.
 
-## 7. Axes, ticks, grid, labels
+## 7. The camera, ticks and grid
 
-* One `Figure` owns one `Axes`. Several panels are a Qt layout of `PlotView`s (a
-  `GridLayout` in QML, a `QGridLayout` in widgets), not a `subplots()`/`GridSpec` clone:
-  layouts already solve sizing, spacing and resizing, and a figure-level grid would have to
-  fight them.
-* Limits live in `PlotAxes` and are what pan/zoom mutate (this replaces today's `ViewRect`).
-  They *are* the visible range: the aspect adjustment is written into them (§14), never kept
-  as a separate derived value.
-* `aspect = "auto"` keeps today's default: the limits map straight onto the item, so the
-  shape follows the widget. A number keeps the y-unit/x-unit pixel ratio fixed
-  (matplotlib's convention, `1.0` = square units) by **expanding the limits around their
-  centre — never cropping** — so the plot keeps filling its area.
-* With a numeric aspect, a resize keeps the **scale** (world units per pixel) and lets the
-  limits follow the widget; only the first size report sets the baseline. This is the
-  decision from the previous round, kept deliberately: resizing must not zoom the curve.
-* Tick *values* are computed in Python (`PlotAxes.tick_values()` — nice-number algorithm,
-  pure and unit-tested) and pushed through `ticksChanged`; QML only positions and formats
-  them. Labels are regenerated on limit changes, not per frame.
-* The grid is a **static shader** (tick positions passed as uniforms): crisp at any zoom,
-  no per-frame QML churn, baked once. Tick marks and labels are QML.
+* `zoom` is uniform (world units per pixel) and `aspect` is the ratio of the x unit to the y
+  unit in pixels; together they give the two scales. `"auto"` means the scales are whatever
+  the widget's shape makes them — the shape then follows the widget.
+* `xlim` / `ylim` are *derived* from the camera and the current size, and assigning them
+  moves the camera. What an app reads is always what is on screen (the camera is the single
+  source of truth, so no second hidden range exists).
+* With a numeric `aspect`, changing it **reduces the zoom if necessary so nothing that was
+  visible disappears** (expand, never crop) and keeps the centre.
+* Panning/zooming never touch the size; resizing never touches the camera. That is the whole
+  reason the camera exists.
+* Tick *values* are computed in Python (`Camera.tick_values()` — nice-number algorithm, pure
+  and unit-tested) and pushed through `ticksChanged`; QML only positions and formats them.
+  Labels regenerate on camera changes, not per frame.
+* The grid is a **static shader** (tick positions as uniforms): crisp at any zoom, no
+  per-frame QML churn, baked once. Tick marks and labels are QML.
 
-## 8. Annotations and custom elements
+## 8. Annotations, labels and custom elements
 
-* `fig.annotate(text, xy=..., xytext=..., arrow=...)` — `xy` in world units, `xytext` an
-  offset in pixels, so the label does not move when the view zooms.
-* Anything else is QML: `PlotView.underlay` / `.overlay` are default properties, and
-  `mapToScreen()` gives the transform. This is the escape hatch — arbitrary QML inside the
-  plot's coordinate space, with no Python model needed.
-* The legend is generated from `Curve.label` + `Curve.color`; no per-curve QML.
+* `plot.annotate(text, xy=..., xytext=..., arrow=...)` — `xy` in world units, `xytext` an
+  offset in pixels, so the label does not move when the camera zooms.
+* **No legend is planned, and none is built in.** `Curve.label` exists so a host can build
+  one; the natural place is `PlotView.overlay` (a legend is a screen-space element on an
+  infinite canvas, not something inside the canvas).
+* Everything else is QML: `underlay` / `overlay` are default properties and `mapToScreen()`
+  gives the transform — arbitrary QML inside the plot's coordinate space, no Python model.
 
 ## 9. Export / screenshots
 
 ```python
-fig.savefig("out.png", xlim=(-1, 1), ylim=(-1, 1), width=1200, height=400, dpi=1.0)
-fig.to_image(width=800, height=600)          # -> QImage
+plot.save_image("out.png", xlim=(-1, 1), ylim=(-1, 1), width=1200, height=400, dpi=1.0)
+plot.to_image(width=800, height=600)          # -> QImage
 ```
 
-Semantics (this is the part that differs from Matplotlib on purpose):
+This is *not* `savefig`, and it cannot be: there is no figure to re-render at a new dpi. An
+export is **"render this region of the infinite canvas at this pixel size"**:
 
-* `xlim` / `ylim` default to the axes' current limits; `width` / `height` default to the
-  live view's size; `dpi` scales the pixel size for high-resolution output.
-* **The requested range is framed and stretched onto the requested pixel size.** An export
-  of `xlim=(-1,1), ylim=(-1,1)` at `1200×400` is 4:1 — the export is a *report figure*, not
-  a window, and the aspect setting does not silently letterbox it. If square units are
-  wanted, pass a size with the range's ratio (or set `ax.aspect = 1.0` and let the export
-  stretch, which is the same thing for a matching ratio).
-* Implementation (**verified**, see below): a hidden `QQuickWidget` — `WA_DontShowOnScreen`
-  + `setResizeMode(SizeRootObjectToView)` + `resize(width, height)` + `show()` — with the
-  figure attached and the requested limits set, read back with
-  **`QQuickWidget.grabFramebuffer()`** (synchronous, exact size, no visible window).
-  Verified: `sin(1/x)` with `xlim=ylim=(-1,1)` at 800×200 logical produced a 1200×300
-  image (DPR 1.5) with the curve stretched 4:1.
-  Two dead ends, recorded so they are not retried: `QQuickRenderControl.grab()` is not
-  exposed by PySide6 6.11 (and reading the RHI target by hand is impossible — `QRhi` is not
-  bound), and `QQuickItem.grabToImage()` returns a **null** result on a window that was
-  never exposed (`WA_DontShowOnScreen`), so it cannot be used for a hidden export.
-* `transparent=True` clears to alpha 0 (useful for slides); everything else follows the
-  live styling, so an export can never drift from what the user sees.
+* `xlim` / `ylim` select the canvas region and default to the current view;
+  `width` / `height` are the output pixels and default to the live view's size; `dpi` scales
+  the pixel size for high-resolution output.
+* The requested region is **framed and stretched onto the requested pixel size** — a report
+  figure, not a window. An export of `xlim=ylim=(-1,1)` at `1200×400` is 4:1. For square
+  units pass a size with the region's ratio.
+* Because the region is a parameter, an export can cover *more* canvas than the widget shows
+  — something a bounded figure cannot do.
+* Implementation (**verified**): a hidden `QQuickWidget` (`WA_DontShowOnScreen`, resized to the
+  target, `show()`n offscreen) read back with the synchronous `QQuickWidget.grabFramebuffer()`.
+  Verified: `sin(1/x)`, `xlim=ylim=(-1,1)`, 800×200 logical → 1200×300 device pixels with the
+  curve stretched 4:1. Dead ends (recorded in AGENTS.md item 26): PySide6 6.11 has no
+  `QQuickRenderControl.grab()` and no `QRhi` binding, and `grabToImage()` returns null on a
+  never-exposed window.
+* `transparent=True` clears to alpha 0; everything else follows the live styling, so an
+  export cannot drift from what the user sees.
 
 ## 10. How Matplotlib-familiar should this be?
 
 **Verdict: copy the vocabulary, not the mechanism.** The vocabulary (limits, grid, title,
-legend, `savefig`, `annotate`) is a user-facing language: it costs nothing, reads the same in
-any toolkit, and lets a Matplotlib user guess right on the first try. The mechanism (artists,
-canvas, `draw()`, backends) exists to serve an *imperative rasteriser*; we are a live Qt
-scene, so copying it would add objects that do nothing and methods that lie.
+ticks, `annotate`) is a user-facing language: it costs nothing and lets a Matplotlib user
+guess right on the first try. The mechanism exists to serve a bounded, subplot-hosting,
+imperatively rasterised canvas — none of which we have.
 
 | Matplotlib | Copy? | Why |
 |---|---|---|
-| `xlim` / `ylim` / `grid` / `title` / `legend` / `savefig` / `annotate` | **yes** | pure vocabulary; no mechanism attached |
-| `fig.ax` (+ `fig.axes` as a 1-tuple) | **yes** | `fig, ax = plt.subplots()` is the idiom people's fingers know; the tuple keeps `fig.axes[0]` working |
-| `NavigationToolbar2QT` | **no** | its features assume a rasterising canvas (rubber-band box zoom, per-canvas blitting) and our interaction is different — wheel-anchored zoom plus drag-pan. Shipping a toolbar would also mean maintaining two of them (QWidget *and* QML) and would fight host UI frameworks such as qfluentwidgets or RinUI. Expose primitives instead (§13) |
-| `plot(x, y)` with data arrays | **no** | our native citizen is an expression evaluated per pixel; a data series is a *guest* artist with a different quality path (§6). Pretending `add_curve` accepts arrays would silently change how the curve is drawn |
-| `FigureCanvas` / `FigureCanvasQt` / `draw()` / `draw_idle()` | **no** | a canvas exists to bridge a rasteriser into a toolkit. We *are* the toolkit: the scene is live, Qt invalidates, and `draw()` would be a no-op — an API that lies about how the pixels appear |
-| `Artist` / `Line2D` / `Transform` hierarchy | **no** | those classes exist so a backend can rasterise them. Ours is a shader program plus uniforms: the names would be empty shells |
-| `mpl_connect("button_press_event", …)` | **no** | Qt signals are the runtime's own event system, and are what a Qt app already uses |
-| `subplots()` / `GridSpec` | **no** | a Qt layout *is* the grid. A `Figure` owning many `Axes` would duplicate what `QGridLayout`/`GridLayout` already do, and would fight them |
-| `plt.*` global current figure | **only as `quickplot()`** | scripts and notebooks want it; applications must not have it |
+| `xlim` / `ylim` / `grid` / `title` / `ticks` / `annotate` | **yes** | pure vocabulary; no mechanism attached |
+| `aspect` (+ `adjustable`) | **`aspect` yes, `adjustable` no** | `'box'` letterboxing needs an axes box inside a figure; on an infinite canvas the camera just zooms out instead |
+| `NavigationToolbar2QT` | **no** | its features assume a rasterising canvas (rubber-band box zoom, blitting), it would have to be written twice (QWidget + QML) and would fight host UI frameworks (qfluentwidgets, RinUI). Expose primitives instead (§13) |
+| `Figure` / `Axes` / `subplots()` / `GridSpec` | **no** | they exist to host several axes in one bounded page. We have one view per widget and no page: several panels are a Qt layout of `Plot`s |
+| `legend()` | **not planned** | chrome belongs to the host; `Curve.label` + `overlay` is enough |
+| `savefig()` | **no, but the same spirit** | a bounded figure can be re-rendered at a new dpi; an infinite canvas needs a *region* (§9) |
+| `plot(x, y)` with arrays | **as `add_series`** | a data polyline is a different artist with a different quality path (§6) |
+| `FigureCanvas` / `draw()` / `Artist` / `Transform` | **no** | they serve a rasterising backend; we are a live Qt scene, so these would be empty shells and a `draw()` that lies |
+| `mpl_connect("button_press_event", …)` | **no** | Qt signals are the runtime's own event system |
+| `plt.*` global current figure | **only as `quickplot()`** | scripts want it; applications must not have it |
 
-The litmus test for anything else: *does the name describe a thing the user thinks about
-(limits, a label, a file) or a step our renderer performs (draw, blit, rasterise)?* Copy the
+Litmus test for anything else: *does the name describe a thing the user thinks about (a
+region, a label, a file) or a step our renderer performs (draw, blit, rasterise)?* Copy the
 first, refuse the second.
 
 ## 11. Where we deliberately differ from Matplotlib
 
 | Matplotlib | Here | Why |
 |---|---|---|
-| `plt.*` global current-figure state | explicit `PlotFigure` objects (+ `quickplot()` for scripts) | Qt apps have many figures; global state fights QML |
+| bounded figure at a dpi | infinite canvas + camera | panning off the "page" must work; nothing bounds the world |
+| several axes per figure | one camera per `Plot`; panels are a Qt layout | layouts already do sizing, spacing and resizing |
+| data-space limits as the state | camera (centre/zoom/aspect) as the state, limits derived | the widget resizes constantly; a stored range would have to be patched on every resize |
 | artist list redrawn per figure | one QML item per curve, driven by model signals | no redraw loop; Qt owns invalidation |
-| `plot(x, y)` with data arrays | `add_curve("f(x)")` (shader) / `add_series(x, y)` (QML geometry) | the renderer is per-pixel expression evaluation |
-| transforms stack (data→axes→figure→display) | one world→item mapping on `PlotAxes` | only one coordinate space exists |
-| `savefig(dpi=...)` re-renders the figure | offscreen QML render at the requested size, range stretched | the figure *is* a Qt scene |
-| blocking `show()` | the widget/`PlotView` is a live item; `quickplot()` blocks | Qt's event loop is the app's |
-| `ax.set_*` then `draw()` | properties with notify signals | Signal & Slot, no explicit draw |
+| transforms stack (data→axes→figure→display) | one camera→item mapping | only one coordinate space exists |
+| `savefig(dpi=)` | offscreen render of a canvas region at a size | the plot *is* a Qt scene |
+| blocking `show()` | the widget/`PlotView` is a live item | Qt's event loop is the app's |
 
 ## 12. Migration from today's code
 
 | Today | Becomes |
 |---|---|
-| `PlotController` (expression + shaders + view) | `Curve` (expression + shaders + style) and `PlotAxes` (view) |
-| `ViewRect` | `PlotAxes` limits (+ the same pan/zoom math, kept) |
-| `PlotController.view` (QVector4D) | `PlotAxes.xlim` / `ylim` — the drawn limits themselves (no second, hidden range) |
+| `PlotController` (expression + shaders + view) | `Curve` (expression + shaders + style) and `Camera` (the view) |
+| `ViewRect` | `Camera` (centre/zoom/aspect); `xlim`/`ylim` are derived onto it |
+| `PlotController.setViewport` | gone: the shader derives its mapping from the camera + its own size, so no size round-trip is needed for drawing |
 | `MathPlot.qml` | `PlotView.qml` (grid shader + Repeater + furniture) |
-| `MathPlotWidget` | unchanged public shape, now backed by `PlotFigure` |
-| `PlotController.setViewport` | `PlotAxes.set_viewport` (same scale-preserving rule) |
+| `MathPlotWidget` | same public shape, backed by `Plot` |
+| `DEFAULT_VIEW` | `Camera.home` (centre/zoom as configured) |
 
-Backwards compatibility: `PlotController` and `MathPlot` stay as thin aliases for one
-release, marked deprecated in their docstrings; the explorers move to `PlotView` so the new
-path is the one that is exercised.
+Backwards compatibility: `PlotController` and `MathPlot` stay as thin aliases for one release,
+marked deprecated in their docstrings; the explorers move to `PlotView` so the new path is the
+one that is exercised.
 
 ## 13. Host chrome: primitives, not a toolbar
 
 The library ships **no toolbar and no chrome**. A toolbar belongs to the host application (or
-to a UI framework the host already uses: qfluentwidgets, RinUI, Material, a QML `ToolBar`…),
-and each of those has its own look, its own placement rules and its own idea of what a button
-is. What the library owes the host is the *state and the actions*, in Qt's own vocabulary:
+to a UI framework it already uses: qfluentwidgets, RinUI, Material, a QML `ToolBar`…). What
+the library owes the host is state and actions in Qt's own vocabulary:
 
 | Kind | Members |
 |---|---|
-| Slots (actions) | `axes.reset_view()`, `axes.zoom(delta, u, v)`, `axes.pan_pixels(dx, dy, w, h)`, `figure.savefig(path, …)`, `figure.to_image(…)` |
-| Properties (state) | `axes.xlim`, `axes.ylim`, `axes.aspect`, `axes.grid`, … — readable *and* writable, each with a notify signal |
-| Signals (events) | `limitsChanged`, `aspectChanged`, `gridChanged`, … one per property |
-| Helpers | `PlotView.mapToScreen(x, y)` / `mapFromScreen(point)` for anything that needs the transform |
+| Slots (actions) | `camera.reset()`, `camera.zoom_by(delta, u, v)`, `camera.pan_pixels(dx, dy, w, h)`, `plot.save_image(…)`, `plot.to_image(…)` |
+| Properties (state) | `camera.centre`, `camera.zoom`, `camera.aspect`, `camera.xlim`, `camera.ylim`, `plot.grid`, … — readable *and* writable, each with a notify signal |
+| Signals (events) | `viewChanged`, `aspectChanged`, `gridChanged`, … one per property |
+| Helpers | `PlotView.mapToScreen(x, y)` / `mapFromScreen(point)` |
 
 That set is enough for chrome without the library guessing at it:
 
 ```python
-# host button (any framework): "reset view"
-reset_button.clicked.connect(ax.reset_view)          # PySide signal -> Slot
+home_button.clicked.connect(camera.reset)        # any framework: PySide signal -> Slot
 ```
 
 ```qml
-Button { text: "Reset"; onClicked: axes.resetView() }  // any QML UI framework
+Button { text: "Home"; onClicked: camera.reset() }   // any QML UI framework
 ```
 
 Two consequences worth stating:
 
-* **Box zoom / rubber band is not a library feature, and it needs nothing new from us.** A
-  host that wants a rubber band reads the two corners with `mapFromScreen()` and assigns
-  `ax.xlim` / `ax.ylim`; that *is* the zoom. We ship no mode, overlay or cursor for it,
-  because the host owns its input gestures anyway.
-* **A view history is the host's ten lines.** `xlim` / `ylim` are plain readable properties
-  and `limitsChanged` fires on every change, so back/forward is
-  `stack.append((ax.xlim, ax.ylim))` plus an assignment — no `ViewHistory` object of ours to
-  maintain, bind or style.
+* **Box zoom / rubber band is not a library feature, and needs nothing new.** A host reads the
+  two corners with `mapFromScreen()` and assigns `camera.xlim` / `camera.ylim`; that *is* the
+  zoom. No mode, overlay or cursor is shipped, because the host owns its input gestures.
+* **A view history is the host's ten lines.** `xlim` / `ylim` are readable and `viewChanged`
+  fires on every change, so back/forward is `stack.append((camera.centre, camera.zoom))` plus
+  an assignment.
 
-## 14. Pan/zoom and the limits contract
-
-Matplotlib's visible range is *data limits* set programmatically (`set_xlim`, autoscale from
-the data) with the gestures bolted on by a toolbar. Ours is a **live viewport** with the
-gestures built in. That difference needs one explicit rule, otherwise the two worlds keep
-disagreeing about who owns `xlim`.
-
-### The rule
-
-> **`axes.xlim` / `axes.ylim` are the visible range — always.** Anything the library adjusts
-> (only ever the aspect) is *written back* into them. There is no second, hidden range.
-
-Today's code violates this: it derives an "effective" range for drawing and leaves `xlim`
-alone, so what you read is not what you see. Build step 1 fixes it by moving the aspect
-adjustment from a derived value into the setters (`effective()` becomes the helper those
-setters call). The invariant then is one line, testable, and it makes `view_bounds()`,
-`mapFromScreen()`, the status bar and `savefig()` all trivially consistent.
-
-### The adjustment rules (the only things that ever change the limits besides the user)
-
-| Trigger | Rule | Why |
-|---|---|---|
-| `aspect` set to a number | expand around the centre until the pixel ratio matches — **never crop** | nothing that was visible may disappear; one axis simply shows more world |
-| widget resized (numeric aspect) | keep the **scale** (world units per pixel) and the centre; the range follows the widget | the curve must not zoom while a window or splitter is dragged |
-| widget resized (`aspect="auto"`) | limits unchanged | with no aspect contract the limits are exactly the user's |
-| `reset_view()` | back to **`home`** | see below |
-
-Coherent because both rules "keep what the user is looking at": a resize keeps the *scale*,
-an aspect change keeps the *range*.
-
-### Interaction model (and its knobs)
+## 14. Interaction model
 
 * Wheel = zoom, anchored at the cursor, multiplicative `zoomStep` (0.9/notch, so up and down
   are exact inverses). Drag = pan, 1:1 with the cursor.
 * Both are **on by default** (a plot that works out of the box) and both are switchable:
-  `axes.panEnabled`, `axes.zoomEnabled` (and `zoomStep`). A host that needs the wheel for its
-  own scrolling turns zoom off; a host that wants Ctrl+wheel binds it itself.
-* The anchor is a parameter of the slot (`zoom(delta, u, v)`), so a host can zoom about the
+  `camera.panEnabled`, `camera.zoomEnabled`, plus `zoomStep`. A host that needs the wheel for
+  its own scrolling turns zoom off; a host that wants Ctrl+wheel binds it itself.
+* The anchor is a parameter of the slot (`zoom_by(delta, u, v)`), so a host can zoom about the
   centre or about a keyboard-driven cursor without us inventing a mode.
-
-### What we deliberately do not have
-
-| Matplotlib | Here | Trade-off we accept |
-|---|---|---|
-| autoscale from data | **no** — a documented default window, `home` = the limits at configuration | an *expression* has no sample set to autoscale from; sampling one on the CPU would contradict the per-pixel model. This is the Desmos model: a fixed window you pan and zoom |
-| `reset_view()` to a hard-coded default | **`home`** = whatever the limits were when the figure was configured | one more piece of state; but "home" then means what a user expects |
-| rubber-band box zoom (toolbar) | **host's job**: `mapFromScreen()` the two corners, assign `xlim`/`ylim` | we ship no mode, overlay or cursor — the host owns its input gestures anyway |
-| `adjustable='box'` (letterbox the axes) | **not offered**; a numeric aspect always adjusts the limits (`'datalim'` behaviour) | we cannot shrink the plot inside its widget. The plot fills its area (an explicit earlier requirement), so letterboxing is not available — the only alternatives would be distorting or cropping, and both are worse |
-| `set_xlim(10, 0)` (inverted axes) | **accepted and passed through** (mirrored mapping) | needs a shader test with a negative scale (build step 1); if the distance math misbehaves, normalise and document instead |
-| `NavigationToolbar2QT` | **no** (§13) | two toolkits to maintain, and it clashes with host UI frameworks |
-
-### What a host must do to look Matplotlib-like
-
-| Want | Do |
-|---|---|
-| toolbar with home/back/forward | `stack.append((ax.xlim, ax.ylim))` on `limitsChanged`; buttons assign them back; `home` button calls `reset_view()` |
-| rubber band | a `MouseArea`/`DragHandler` + `mapFromScreen()` + assign `xlim`/`ylim` |
-| "fit to this expression" | assign the limits yourself (or read them from a plot you already made) |
-| wheel scrolls the page instead of zooming | `axes.zoomEnabled = false` |
-
-Everything in the second column is a few lines of host code over slots and properties we
-already expose — which is the point of §13.
+* **No autoscale.** An expression has no sample set to autoscale from, and sampling one on the
+  CPU would contradict the per-pixel model. This is the Desmos model: a fixed home view that
+  you pan and zoom.
+* `camera.reset()` returns to `home` (the camera as configured), not to a hard-coded default.
 
 ## 15. Build order
 
-1. `PlotAxes` (limits/aspect/ticks) + `Curve` split out of `PlotController`; `PlotView.qml`
-   renders one curve. No visual change; all existing tests keep passing.
-2. `CurveListModel` + `Repeater` → multiple curves, legend, per-curve visibility.
+1. `Camera` + `Curve` split out of `PlotController`; `PlotView.qml` renders one curve, the
+   shader takes the camera (no size round-trip for drawing). No visual change; existing tests
+   keep passing.
+2. `CurveListModel` + `Repeater` → multiple curves, per-curve visibility.
 3. Grid shader + ticks + labels + title.
 4. `AnnotationListModel` + `underlay`/`overlay` + `mapToScreen`.
-5. Offscreen exporter (`to_image` / `savefig`) + its tests (size, range, stretch, transparency).
+5. Offscreen exporter (`to_image` / `save_image`) + its tests (region, size, stretch,
+   transparency).
 6. Deprecation shims removed.
 
-Each step is independently shippable and testable; steps 1–2 are the ones that change
-existing files, the rest are additive.
+Each step is independently shippable and testable; steps 1–2 change existing files, the rest
+are additive.
