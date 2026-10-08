@@ -284,3 +284,18 @@ and a fully banded column skips the stroke entirely (mixing with w = 1 discards 
 A pole-gap column draws nothing and skips all of it. Verified pixel-identical (≤1/255 in one
 channel on 2-8 of 1.2 M pixels, i.e. compiler scheduling noise) across 18 expression/view
 combinations, including every zoom level of `sin(1/x)`, deep `log` views and all poles.
+
+34. **QML chains and the component's default child object.** Two traps that bite a host
+    driving `PlotView` from QML:
+    * a *chain* cannot be bound: `plot.camera.aspect: 1.0` is rejected outright ("Cannot assign
+      to non-existent property 'aspect'"), while `plot.aspect = 1.0` inside
+      `Component.onCompleted` works. `Plot` therefore forwards `aspect` (and `xlim`/`ylim`) so
+      the common knobs are direct properties; anything deeper needs `Binding { target: … }`.
+    * `PlotView` declares `property Plot plot: defaultPlot` with `Plot { id: defaultPlot }` as a
+      child object, and QML evaluates some bindings *before* that child exists — a host binding
+      on the injected plot (`plot.aspect: 1.0` at the component level) then produces a burst of
+      `Cannot read property 'camera' of null` from the component's own bindings. Assigning in
+      `Component.onCompleted` is clean. Fixing it properly means making the default model exist
+      before the bindings; the obvious attempt (`property Plot plot: DefaultPlot {}` with an
+      inline component) is rejected by QML with "Property value set multiple times", so this is
+      still open.

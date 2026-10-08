@@ -60,6 +60,7 @@ class Plot(QObject):
     cameraChanged = Signal()
     curvesChanged = Signal()
     viewChanged = Signal()
+    aspectChanged = Signal()        # forwarded from the camera (the forwarded `aspect`)
     themeChanged = Signal()
 
     backgroundChanged = Signal()
@@ -86,6 +87,7 @@ class Plot(QObject):
         self._camera = Camera(self)
         self._curves = CurveListModel(DEFAULT_COLOR_CYCLE, self.line_width, self)
         self._camera.viewChanged.connect(self.viewChanged)
+        self._camera.aspectChanged.connect(self.aspectChanged)
         self.cameraChanged.emit()
         self.curvesChanged.emit()
 
@@ -115,9 +117,18 @@ class Plot(QObject):
     def _set_ylim(self, value: object) -> None:
         self._camera.ylim = value
 
+    def _get_aspect(self) -> str | float:
+        return self._camera.aspect
+
+    def _set_aspect(self, value: object) -> None:
+        self._camera.aspect = value
+
     # Forwarded to the camera; "QVariant" so a plain (lo, hi) pair is accepted as well.
     xlim: QVector2D = Property("QVariant", _get_xlim, _set_xlim, notify=viewChanged)
     ylim: QVector2D = Property("QVariant", _get_ylim, _set_ylim, notify=viewChanged)
+    # `aspect` is forwarded too because a QML *binding* cannot reach through an object chain
+    # (`plot.camera.aspect: 1.0` is rejected by QML), while a direct property binds fine.
+    aspect: str | float = Property("QVariant", _get_aspect, _set_aspect, notify=aspectChanged)
 
     @Slot(str, "QVariant", "QVariant", str, result=QObject)
     @Slot(str, result=QObject)
