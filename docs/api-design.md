@@ -4,9 +4,10 @@ Status: **decided**; supersedes the earlier `Figure`/`Axes` framing of this docu
 exist to serve a *bounded canvas with subplots*, and QMLMathPlot has neither.
 
 **Implemented** (see the build order): §2–§7 — `Plot` / `Camera` / `Curve` / `CurveListModel`,
-multiple curves, grid, axes, ticks, titles, the theme system (§7b) — and §9, the export.
+multiple curves, grid, axes, ticks, titles, the theme system (§7b) — and §9, the export
+including the matplotlib hand-off.
 **Not implemented yet**: §8 annotations and `underlay`/`overlay`, plus the rest of the gap list
-in §11.2 (which is the honest comparison against Matplotlib — verified by grepping the code, not
+in §11.2 (the vector-output row left it when the hand-off landed) (which is the honest comparison against Matplotlib — verified by grepping the code, not
 recalled). Everything else in this document is the plan of record, not a description of the
 current code.
 
@@ -298,6 +299,31 @@ Dead ends, recorded so they are not retried (AGENTS.md item 26): PySide6 6.11 ha
 `transparent=True` clears to alpha 0; everything else follows the live styling, so an export
 cannot drift from what the user sees.
 
+### Hand-off to matplotlib (and sympy's plotting)
+
+The Qt path above is the *only* renderer this library has, and curves are shader-rendered, so
+they have no vector form (§11.3). For vector output and for matplotlib's ecosystem there is a
+second, explicitly separate path:
+
+```python
+fig = plot.to_matplotlib()          # -> matplotlib.figure.Figure, one Axes, headless
+                                    #    (Figure + FigureCanvasAgg: no pyplot, no GUI
+                                    #     backend, so it works with no QApplication at all)
+plot.savefig("out.svg", backend="matplotlib")
+sp = plot.to_sympy()                # -> sympy.plotting.Plot
+```
+
+**matplotlib is not a dependency.** It is an optional extra
+(`pip install qmlmathplot[matplotlib]`), imported lazily by these methods, which raise a clear
+error naming the extra when it is missing — the same arrangement sympy uses for its own
+plotting.
+
+This path **samples** each expression into arrays, so it is a different renderer with different
+guarantees: oscillating functions alias (the very thing the Qt renderer exists to avoid), the
+look will not match (Qt fonts and antialiasing vs matplotlib's), and only the style properties
+that map are carried over. Its value is vector output (SVG/PDF) and matplotlib's ecosystem —
+nothing else.
+
 ## 10. How Matplotlib-familiar should this be?
 
 **Verdict: copy the vocabulary, not the mechanism.** The vocabulary (limits, grid, title,
@@ -363,12 +389,13 @@ that concept), **reasonable gap** (it fits the model and is simply not built), a
 | `bbox_inches="tight"` | trim an export to the drawn extent |
 | more style keys (font family, cycler over line style/marker) | the converter drops what it cannot map |
 | style *stacking* (`with plt.style.context([...])`) | one theme per `Plot` today |
-| vector export (SVG / PDF) | see 11.3 — for curves it cannot be a real vector |
 
 ### 11.3 Fundamental
 
-* **Curves are shader-rendered, so they have no vector form.** An "SVG/PDF export" would embed a
-  raster. Matplotlib's vector output is a real capability this library does not have.
+* **Curves are shader-rendered, so they have no vector form.** An export from the Qt renderer
+  would embed a raster. The way to vector output is the matplotlib hand-off (§9), which samples
+  the expression instead — a different renderer with different guarantees, not the same
+  picture in another format.
 * **Cost is pixels × curves**, not data points: every visible curve is a full-screen pass, so
   many curves at once are expensive and a large window costs more. Matplotlib pays per point.
 * **Data arrays are a guest artist, not the native path** (11.2); expressions are native.

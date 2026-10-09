@@ -306,6 +306,20 @@ histories and numbers belong here.
     covered by `tests/test_export.py::test_a_pure_qml_host_gets_a_clear_error` (a subprocess,
     because the test session owns a `QApplication`).
 
+39. **The matplotlib hand-off: two API traps, measured.** (a) `axes.grid(False, color=…)` does
+    not turn the grid off — matplotlib warns *"First parameter to grid() is false, but line
+    properties are supplied. The grid will be enabled."* and enables it, so the mapping must
+    branch (`grid(True, color=…)` / `grid(False)`); found by exporting a plot with `grid=False`
+    and seeing a grid. (b) With several expressions, `sympy.plotting.plot(..., line_color=[…])`
+    passes the *whole list* to every series (matplotlib then rejects it: *"['#1f77b4', '#ff7f0e']
+    is not a valid value for color"*), `rendering_kw=[{…}, {…}]` is silently ignored, and passing
+    series objects to `plot()` fails in `sympify`; `sympy.plotting.Plot` does not exist in sympy
+    1.14 either (the object `plot(..., show=False)` returns *is* the `MatplotlibBackend`). Fix:
+    build with `plot(*expressions, (x, x0, x1), show=False, nb_of_points=…, label=[…])` and set
+    the per-series style afterwards — `handle[index].line_color = colour` (the handle is
+    indexable) — which is also the documented sympy flow. Minor: a spine's colour reads back as
+    an RGBA tuple (`spine.get_edgecolor()`), not the hex string that was set.
+
 ## Performance (measured)
  ≈ **230 ms** (Windows / D3D11 / 900×600):
 

@@ -12,6 +12,11 @@ dependencies = [
     "PySide6>=6.7",
 ]
 
+[project.optional-dependencies]
+# The matplotlib hand-off (Plot.to_matplotlib / savefig(backend="matplotlib")) is optional:
+# nothing in the package imports matplotlib until that path is used.
+matplotlib = ["matplotlib>=3.8"]
+
 [project.scripts]
 qmlmathplot = "qmlmathplot.app:main"
 
@@ -22,6 +27,7 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "matplotlib>=3.8",      # the hand-off tests need it (the feature itself stays optional)
 ]
 
 [tool.pytest.ini_options]

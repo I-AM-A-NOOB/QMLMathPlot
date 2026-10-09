@@ -176,12 +176,67 @@ class Plot(QObject):
         return render(self, xlim=xlim, ylim=ylim, width=width, height=height, dpi=dpi,
                       adjustable=adjustable, transparent=transparent)
 
+    def to_matplotlib(
+        self,
+        *,
+        xlim: object = None,
+        ylim: object = None,
+        samples: int = 2000,
+        adjustable: str = "box",
+    ) -> object:
+        """Hand this plot to matplotlib and return a ``matplotlib.figure.Figure`` (one Axes).
+
+        This is a **second renderer**, and a *sampled* one: matplotlib draws polylines, so an
+        oscillating function such as ``sin(1/x)`` aliases (exactly what the Qt view avoids by
+        evaluating the expression per pixel), the fonts and antialiasing differ from the Qt
+        view, and the style mapping is partial — background, grid, per-curve colour/width,
+        tick/text colours, font sizes, title, axis colour/width, the limits, the aspect with
+        matplotlib's ``adjustable``, and ``axes_position="zero"`` (spines through the origin).
+        What it buys is vector output and matplotlib's ecosystem, nothing else. Needs the
+        optional ``matplotlib`` extra (``pip install 'qmlmathplot[matplotlib]'``).
+        """
+        from .mpl import figure_for
+
+        return figure_for(self, xlim=xlim, ylim=ylim, samples=samples, adjustable=adjustable)
+
+    def to_sympy(
+        self,
+        *,
+        xlim: object = None,
+        ylim: object = None,
+        samples: int = 2000,
+    ) -> object:
+        """Hand this plot to ``sympy.plotting`` and return the Plot object it builds.
+
+        Through sympy this reaches any of sympy's plotting backends; the sampling is ours
+        (uniform, ``samples`` points), so the same aliasing caveat as :meth:`to_matplotlib`
+        applies — sympy's own adaptive sampler (available on the returned object) warns about
+        oscillating functions for exactly that reason. Hidden curves are skipped, and each
+        curve keeps its colour. Needs the optional ``matplotlib`` extra.
+        """
+        from .mpl import sympy_plot_for
+
+        return sympy_plot_for(self, xlim=xlim, ylim=ylim, samples=samples)
+
     @Slot(str)
-    def savefig(self, path: str, **kwargs: object) -> None:
-        """Write :meth:`to_image` to ``path`` (the format comes from the suffix); QML passes a
-        path only."""
-        if not self.to_image(**kwargs).save(str(path)):
-            raise OSError(f"could not write the export to {path!r}")
+    def savefig(self, path: str, *, backend: str = "qt", **kwargs: object) -> None:
+        """Write the plot to ``path`` (the format comes from the suffix); QML passes a path only.
+
+        ``backend="qt"`` (the default) renders through the offscreen Qt view — device pixels,
+        with :meth:`to_image`'s keywords. ``backend="matplotlib"`` renders a *sampled* figure
+        through :meth:`to_matplotlib` and calls matplotlib's own ``savefig``, so vector formats
+        (``.svg``, ``.pdf``) work and the look is matplotlib's, not the Qt view's.
+        """
+        if backend == "qt":
+            if not self.to_image(**kwargs).save(str(path)):
+                raise OSError(f"could not write the export to {path!r}")
+            return
+        if backend == "matplotlib":
+            from .mpl import save_via_matplotlib
+
+            save_via_matplotlib(self, str(path), **kwargs)
+            return
+        raise ValueError(f'backend must be "qt" or "matplotlib", got {backend!r}')
 
     # -------------------------------------------------------------- styling
     # The fallbacks repeat matplotlib's default style (themes/default.mplstyle, applied in

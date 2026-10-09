@@ -222,6 +222,36 @@ plot.to_image()                                        # the live view, its own 
   drift from what the user sees. Rendering goes through an offscreen `QQuickWidget`, so the
   export needs a `QApplication` (a clear error is raised instead of a crash if there is none).
 
+### Vector output, matplotlib and sympy
+
+`to_matplotlib()` hands the plot to matplotlib (one `Axes`) and `savefig(..., backend="matplotlib")`
+renders through it, so `.svg`/`.pdf` work; `to_sympy()` builds the same figure through
+`sympy.plotting`, which is what you want when the figure should live in sympy's world:
+
+```python
+figure = plot.to_matplotlib(xlim=(-1, 1), ylim=(-1, 1))    # -> matplotlib.figure.Figure
+plot.savefig("out.svg", backend="matplotlib")              # vector, matplotlib's own savefig
+handle = plot.to_sympy(xlim=(-1, 1))
+handle.save("out.png")
+```
+
+matplotlib is an **optional** extra (`pip install "qmlmathplot[matplotlib]"`); nothing in the
+package imports it until one of these is called, and the error names the extra. `sympy` itself is
+a hard dependency, so `to_sympy()` needs matplotlib only because its plotting backend does.
+Neither hand-off needs a Qt application: a `Plot` works in a plain script, which is what makes it
+usable next to a notebook or a matplotlib-only tool.
+
+**This is a second renderer, and a sampled one.** matplotlib draws polylines, so each curve is
+evaluated at `samples` points (default 2000) and an oscillating function such as `sin(1/x)`
+aliases — exactly what the Qt view avoids by evaluating the expression per pixel (sympy's own
+adaptive sampler warns about this for the same reason, and it is available on the object
+`to_sympy()` returns). Fonts and antialiasing are matplotlib's, not the Qt view's, so the two
+renderers cannot look identical, and the style mapping is partial: background, grid (on/off and
+colour/width/alpha/dash), per-curve colour and width, tick and text colours, font sizes, title,
+axis colour/width, the limits, the aspect with matplotlib's own `adjustable`, and
+`axes_position="zero"` (spines through the origin, no box). What it buys is vector output and
+matplotlib's ecosystem — nothing else.
+
 ## RHI backends
 
 `--backend {d3d11,d3d12,vulkan,metal,opengl,null}`; **if unspecified, Qt's default
@@ -241,6 +271,7 @@ backend is used**. The implementation sets `QSG_RHI_BACKEND` before
 | View | `src/qmlmathplot/qml/PlotView.qml` (+ `view.py`) | QML: background, grid, ticks/title, one `ShaderEffect` per curve, pan/zoom input; `view.py` registers the types and yields the component path |
 | Themes | `src/qmlmathplot/themes.py` + `themes/` | the vendored Matplotlib style sheets, resolved onto the `Plot`'s properties |
 | Export | `src/qmlmathplot/export.py` | `Plot.savefig()` / `to_image()`: the canvas region rendered offscreen at a pixel size (QtWidgets is imported lazily) |
+| Hand-off | `src/qmlmathplot/mpl.py` | `Plot.to_matplotlib()` / `to_sympy()` / `savefig(backend="matplotlib")`: a sampled second renderer for vector output (matplotlib is an optional extra, imported lazily) |
 | Bake | `src/qmlmathplot/qsb.py` | GLSL → `.qsb` (PySide6 ships `qsb.exe`), cached by source hash |
 | Widget | `src/qmlmathplot/widget.py` | `MathPlotWidget`: QQuickWidget bridge, drops straight into QtWidgets layouts |
 | Entry | `src/qmlmathplot/app.py` | command line / standalone window (the `qmlmathplot` script, `examples/minimal.py`) |
@@ -302,6 +333,12 @@ QSG_RHI_BACKEND=opengl uv run pytest -m gui
   needs one, and a process may only have one).
 - `test_qtquick_coexistence.py`: the same drag conflict in Qt Quick (a `Flickable`
   must not steal the pan).
+- `test_handoff.py`: the matplotlib/sympy hand-off — the figure reflects the limits, aspect,
+  `adjustable`, grid, title, spines at zero and per-curve style; the sampling is uniform and NaN
+  outside the domain (so `log(x)` breaks); `savefig(backend="matplotlib")` writes real `.svg`,
+  `.pdf` and `.png`; `to_sympy().save()` writes a file and keeps per-curve colours; importing
+  `qmlmathplot` does not import matplotlib, and hiding matplotlib produces an error naming the
+  extra.
 - `test_export.py`: `to_image()`/`savefig()` — the image is exactly the requested device size
   (`dpi` multiplies it), the no-argument form reproduces the live centre and scale, the three
   `adjustable` modes reconcile range and size as documented (a world 45-degree line stays at 45
