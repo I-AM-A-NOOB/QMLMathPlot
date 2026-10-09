@@ -219,6 +219,13 @@ class Camera(QObject):
     xlim: QVector2D = Property("QVariant", _get_xlim, _set_xlim, notify=viewChanged)
     ylim: QVector2D = Property("QVariant", _get_ylim, _set_ylim, notify=viewChanged)
 
+    def _get_viewport(self) -> QVector2D:
+        width, height = self._effective_size()
+        return QVector2D(width, height)
+
+    #: Last reported size in logical pixels (the reference size before the first report).
+    viewport: QVector2D = Property("QVariant", _get_viewport, notify=viewChanged)
+
     # --------------------------------------------------------------- ticks
     def tick_values(self) -> tuple[list[tuple[float, str]], list[tuple[float, str]]]:
         """Ticks for both axes of the visible range, as ``(value, label)`` pairs."""
@@ -279,6 +286,27 @@ class Camera(QObject):
     def _view_changed(self) -> None:
         self.viewChanged.emit()
         self.ticksChanged.emit()
+
+    @Slot(float, float, float, float)
+    def set_view(self, centre_x: float, centre_y: float, scale_x: float, scale_y: float) -> None:
+        """Set the centre and *both* scales at once (world units per logical pixel).
+
+        The camera normally derives the y scale from ``aspect``; this is the primitive for a
+        caller that has two scales in hand — the exporter borrowing the camera for a render,
+        and restoring it afterwards. ``"auto"`` stays "auto" (the scales are simply set), a
+        numeric aspect is re-derived from the pair so the two scales are exactly as asked.
+        """
+        scale_x = min(max(float(scale_x), self.MIN_SCALE), self.MAX_SCALE)
+        scale_y = min(max(float(scale_y), self.MIN_SCALE), self.MAX_SCALE)
+        self._centre = QVector2D(float(centre_x), float(centre_y))
+        self._zoom = scale_x
+        if isinstance(self._aspect, str):
+            self._y_scale = scale_y
+        else:
+            self._aspect = scale_x / scale_y
+            self.aspectChanged.emit()
+        self._home = False
+        self._view_changed()
 
     # --------------------------------------------------------------- slots
     @Slot(float, float)

@@ -281,6 +281,31 @@ histories and numbers belong here.
     edge labels ("-6" at the left) stay fully inside the item. Regression:
     `test_render_smoke.py::test_axis_pins_to_the_edge_when_the_origin_is_off_screen`.
 
+37. **`QQuickWidget.setProperty(name, …)` sets the property on the *widget*, not on the QML
+    root.** The offscreen export injected its plot with `widget.setProperty("plot", plot)`; the
+    widget is a plain `QObject`-derived `QWidget` with no such property, so the call returned
+    False and did nothing, and the render quietly used the component's **own** default model:
+    white background, its own `sin(x)`, the default camera — and it looked almost plausible,
+    because the image size (which the export sets on the widget) was still right, so the bug
+    only showed up in the pixels. Diagnosed by checking the *injected* camera: its viewport
+    stayed at the reference 900×600 (no size report ever reached it) and the frame showed a
+    curve although the injected plot had none. Fix: `widget.rootObject().setProperty("plot",
+    plot)`, exactly as `MathPlotWidget` always did; `QQuickView` was never affected because
+    `rootObject()` was used there from the start. Regression: `tests/test_export.py` renders
+    through the offscreen widget and checks the requested region's pixels.
+
+38. **`QApplication.instance()` is the `QGuiApplication` in a pure-QML host.** The guard that is
+    meant to turn "no QApplication" into a friendly error was written as
+    `QApplication.instance() is None`, which is **False** under a bare `QGuiApplication` (the
+    singleton is returned, just not as a `QApplication`). The check therefore passed and the
+    next line created a `QWidget`, which is **fatal inside Qt**: measured with a
+    QGuiApplication-only script, `QWidget()` printed nothing after it and the process exited
+    with status 9 — no traceback, nothing to debug from. Fix: `isinstance(QApplication
+    .instance(), QApplication)` (the idiom `tests/conftest.py` already used); both
+    `MathPlotWidget` (pre-existing) and `Plot.to_image()` use it now, and the export path is
+    covered by `tests/test_export.py::test_a_pure_qml_host_gets_a_clear_error` (a subprocess,
+    because the test session owns a `QApplication`).
+
 ## Performance (measured)
  ≈ **230 ms** (Windows / D3D11 / 900×600):
 

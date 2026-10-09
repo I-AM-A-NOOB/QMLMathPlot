@@ -155,6 +155,34 @@ class Plot(QObject):
     def remove_curve(self, curve: Curve) -> None:
         self._curves.remove_curve(curve)
 
+    # --------------------------------------------------------------- export
+    @Slot(result="QVariant")
+    def to_image(
+        self,
+        *,
+        xlim: object = None,
+        ylim: object = None,
+        width: float | None = None,
+        height: float | None = None,
+        dpi: float = 1.0,
+        adjustable: str | None = None,
+        transparent: bool = False,
+    ) -> QImage:
+        """Render this canvas region offscreen and return it (device pixels), see
+        ``docs/api-design.md`` §9. QML calls it with no arguments: the live view, its own size.
+        """
+        from .export import render      # lazy: a pure-QML app never needs QtWidgets
+
+        return render(self, xlim=xlim, ylim=ylim, width=width, height=height, dpi=dpi,
+                      adjustable=adjustable, transparent=transparent)
+
+    @Slot(str)
+    def savefig(self, path: str, **kwargs: object) -> None:
+        """Write :meth:`to_image` to ``path`` (the format comes from the suffix); QML passes a
+        path only."""
+        if not self.to_image(**kwargs).save(str(path)):
+            raise OSError(f"could not write the export to {path!r}")
+
     # -------------------------------------------------------------- styling
     # The fallbacks repeat matplotlib's default style (themes/default.mplstyle, applied in
     # __init__) so a plot looks the same whether or not a theme was applied.

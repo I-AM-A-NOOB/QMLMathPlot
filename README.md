@@ -109,7 +109,7 @@ The model:
 
 | Object | Members |
 |---|---|
-| `Plot` | `camera`, `curves`, `xlim`/`ylim`/`aspect` (forwarded), `add_curve()` / `remove_curve()`, `availableThemes`, and the style properties: `background`, `grid`, `grid_color`, `grid_width`, `grid_alpha`, `grid_style`, `axis_color`, `axis_width`, `axes_position`, `color_cycle`, `line_width`, `text_color`, `tick_color`, `tick_length`, `font_size`, `tick_font_size`, `title`, `title_color`, `title_font_size`, `title_bold`, `ticks_visible`, `theme` |
+| `Plot` | `camera`, `curves`, `xlim`/`ylim`/`aspect` (forwarded), `add_curve()` / `remove_curve()`, `available_themes`, and the style properties: `background`, `grid`, `grid_color`, `grid_width`, `grid_alpha`, `grid_style`, `axis_color`, `axis_width`, `axes_position`, `color_cycle`, `line_width`, `text_color`, `tick_color`, `tick_length`, `font_size`, `tick_font_size`, `title`, `title_color`, `title_font_size`, `title_bold`, `ticks_visible`, `theme` |
 | `Camera` | `centre`, `zoom` (world units per logical pixel), `aspect`, `xlim`/`ylim` (derived), `ticks_x`/`ticks_y`, `zoomStep` / `panEnabled` / `zoomEnabled`, slots `setViewport(w, h)` / `zoom_by(delta, u, v, w, h)` / `pan_pixels(dx, dy)` / `reset()` |
 | `Curve` | `expression`, `color`, `lineWidth`, `visible`, `label`, `error` (read-only), the baked `vertexShader` / `fragmentShader` |
 | `CurveListModel` | the curves as a model (`curve`, `expression`, `color`, `lineWidth`, `visible`, `vertexShader`, `fragmentShader` roles) so QML puts one `ShaderEffect` behind each |
@@ -128,8 +128,8 @@ build order — is specified in [`docs/api-design.md`](docs/api-design.md). In s
 Matplotlib *vocabulary* is kept where it is vocabulary (limits, grid, title, ticks, annotate),
 while the *mechanism* is refused — no `Figure`/`Axes`/`subplots` (one view per widget, no
 bounded page), no `FigureCanvas`/`draw()` (the scene is live), no toolbar and no legend (host
-chrome), and an export is a canvas region at a pixel size rather than a re-rendered page (not
-implemented yet).
+chrome), and an export is a canvas region at a pixel size rather than a re-rendered page
+(§9, implemented — see *Export* below).
 
 ## The camera (centre, zoom, aspect)
 
@@ -166,7 +166,7 @@ plot.theme = "ggplot"                # any of the bundled sheets
 plot.theme = "default"               # back to matplotlib's look
 plot.theme = "my-style"              # themes/my-style.mplstyle next to the package
 plot.theme = "path/to/any.mplstyle"  # any file in the same format
-plot.availableThemes                 # the names, for a host's picker (both demos use one)
+plot.available_themes                 # the names, for a host's picker (both demos use one)
 ```
 
 The 26 bundled sheets are Matplotlib's own styles, vendored verbatim into
@@ -185,10 +185,42 @@ theme alone.
   axes** instead of hugging the item's edges. When 0 is off screen the axis sticks to the
   nearest edge, so its labels are never lost (and a label never leaves the item); the grid
   stays where it is. `plot.axes_position = "edge"` restores the edge-pinned behaviour.
+- `camera.viewport` reports the last size the view sent, so a host can size an export from it.
 - The tick *values* are nice numbers computed in Python (`Camera.tick_values()` /
   `nice_ticks()`, steps of 1/2/5 x 10^n) and pushed through `ticksChanged`; QML only positions
   and formats them, so a frame never recomputes ticks.
 - `plot.ticks_visible = False` hides the whole furniture (axes, marks and labels).
+
+## Export
+
+`savefig()` writes a file, `to_image()` returns a `QImage`; both take the same keywords:
+
+```python
+plot.savefig("out.png", xlim=(-1, 1), ylim=(-1, 1), width=1200, height=400)
+plot.savefig("hi.png", dpi=2.0)                        # the live view, twice the pixels
+image = plot.to_image(width=800, height=600)           # -> QImage
+plot.to_image()                                        # the live view, its own size
+```
+
+- `xlim` / `ylim` default to the **camera**: the live centre and scale, extended to the export
+  size. The *region* is a parameter, so an export can cover more canvas than the widget shows.
+- `width` / `height` are **device pixels** and default to the live view's device size; `dpi`
+  multiplies both (`dpi=2.0` doubles the pixels).
+- `adjustable` reconciles a requested range with a requested size when their aspects disagree —
+  Matplotlib's parameter, and its own default:
+
+  | `adjustable` | What happens |
+  |---|---|
+  | `"box"` (**default**) | one scale, taken from the live scale ratio, chosen so the requested range fits: the range is centred and the leftover pixels stay background — *nothing is distorted* |
+  | `"datalim"` | the camera's own scales, with the limits expanding (never cropped) to fill the size |
+  | `"stretch"` | the requested range maps onto the requested size exactly — independent scales, so a mismatched aspect **distorts** (the "report figure" mode) |
+
+  With no explicit range all three agree, because the range derived from the camera already has
+  the export size's aspect.
+- `transparent=True` clears to alpha 0.
+- Everything else follows the live styling (curves, grid, axes, theme), so an export cannot
+  drift from what the user sees. Rendering goes through an offscreen `QQuickWidget`, so the
+  export needs a `QApplication` (a clear error is raised instead of a crash if there is none).
 
 ## RHI backends
 
@@ -208,6 +240,7 @@ backend is used**. The implementation sets `QSG_RHI_BACKEND` before
 | Plot | `src/qmlmathplot/plot.py` | `Plot`: the camera, the curves and the styling the view binds to |
 | View | `src/qmlmathplot/qml/PlotView.qml` (+ `view.py`) | QML: background, grid, ticks/title, one `ShaderEffect` per curve, pan/zoom input; `view.py` registers the types and yields the component path |
 | Themes | `src/qmlmathplot/themes.py` + `themes/` | the vendored Matplotlib style sheets, resolved onto the `Plot`'s properties |
+| Export | `src/qmlmathplot/export.py` | `Plot.savefig()` / `to_image()`: the canvas region rendered offscreen at a pixel size (QtWidgets is imported lazily) |
 | Bake | `src/qmlmathplot/qsb.py` | GLSL → `.qsb` (PySide6 ships `qsb.exe`), cached by source hash |
 | Widget | `src/qmlmathplot/widget.py` | `MathPlotWidget`: QQuickWidget bridge, drops straight into QtWidgets layouts |
 | Entry | `src/qmlmathplot/app.py` | command line / standalone window (the `qmlmathplot` script, `examples/minimal.py`) |
@@ -269,6 +302,11 @@ QSG_RHI_BACKEND=opengl uv run pytest -m gui
   needs one, and a process may only have one).
 - `test_qtquick_coexistence.py`: the same drag conflict in Qt Quick (a `Flickable`
   must not steal the pan).
+- `test_export.py`: `to_image()`/`savefig()` — the image is exactly the requested device size
+  (`dpi` multiplies it), the no-argument form reproduces the live centre and scale, the three
+  `adjustable` modes reconcile range and size as documented (a world 45-degree line stays at 45
+  in `"box"`, with background margins; `"stretch"` fills the frame and distorts), the live
+  camera and background survive an export, and `transparent` clears to alpha 0.
 
 ## Pitfalls near the `sin(1/x)` singularity (fixed — do not repeat)
 
@@ -372,6 +410,9 @@ measurement that settled each one). The Qt/packaging ones that shaped the code:
 - Snap **hairlines** (grid) to a half pixel, but never a **styled** line: rounding the
   axis position put the 1.07 px y-axis half off the centre column, so the line came out
   pale where it should be black.
+- `QQuickWidget.setProperty(name, …)` sets it on the **widget**, not on the QML root (the
+  widget has no such property, so it silently does nothing): inject the model with
+  `widget.rootObject().setProperty("plot", plot)`, as `MathPlotWidget` does.
 
 ## Releasing
 

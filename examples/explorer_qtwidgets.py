@@ -70,7 +70,7 @@ SAMPLES = (
 class ThemeBox(QSpinBox):
     """A spin box over theme names: the value is an index, the text is the theme itself.
 
-    The names come from the plot (``Plot.availableThemes``), so the list and the themes module
+    The names come from the plot (``Plot.available_themes``), so the list and the themes module
     can never drift apart; ``textFromValue``/``valueFromText`` are what QSpinBox calls to show
     and parse the value.
     """
@@ -142,7 +142,7 @@ class Explorer(QMainWindow):
         self.plot.expressionChanged.connect(self.sync_status)
         self.plot.errorChanged.connect(self.sync_status)
         self.plot.plot.camera.viewChanged.connect(self.sync_status)
-        self.themes.setThemes(self.plot.plot.availableThemes, self.plot.plot.theme)
+        self.themes.setThemes(self.plot.plot.available_themes, self.plot.plot.theme)
 
         # overlay: stacked over the plot area, but does not consume mouse events
         self.overlay = QLabel("Overlay QLabel (translucent, click-through)", self.plot)

@@ -4,10 +4,10 @@ Status: **decided**; supersedes the earlier `Figure`/`Axes` framing of this docu
 exist to serve a *bounded canvas with subplots*, and QMLMathPlot has neither.
 
 **Implemented** (see the build order): §2–§7 — `Plot` / `Camera` / `Curve` / `CurveListModel`,
-multiple curves, grid, ticks, titles, and the theme system (§7b). **Not implemented yet**: §8
-annotations and `underlay`/`overlay`, §9 export (shelved), `quickplot()`, `add_series()`,
-`plot.ticks` as a settable property. Everything else in this document is the plan of record,
-not a description of the current code.
+multiple curves, grid, axes, ticks, titles, the theme system (§7b) — and §9, the export.
+**Not implemented yet**: §8 annotations and `underlay`/`overlay`, `quickplot()`, `add_series()`,
+`plot.ticks` as a settable property. Everything else in this document is the plan of record, not
+a description of the current code.
 
 ---
 
@@ -239,25 +239,24 @@ Themes set the *defaults* for new artists and the plot's own furniture; an expli
 * Everything else is QML: `underlay` / `overlay` are default properties and `mapToScreen()`
   gives the transform — arbitrary QML inside the plot's coordinate space, no Python model.
 
-## 9. Export / screenshots — **shelved**
-
-> Shelved by the maintainer. The design below is the plan of record; nothing is implemented
-> for it in this round.
+## 9. Export / screenshots
 
 An export takes **two independent parameter sets** and reconciles them:
 
 ```python
-plot.save_image("out.png", xlim=(-1, 1), ylim=(-1, 1), width=1200, height=400, adjust="stretch")
-img = plot.to_image(width=800, height=600)          # -> QImage
+plot.savefig("out.png", xlim=(-1, 1), ylim=(-1, 1), width=1200, height=400)
+plot.savefig("hi.png", dpi=2.0)                      # the live view, twice the pixels
+img = plot.to_image(width=800, height=600)           # -> QImage
 ```
 
 * **The canvas range** — `xlim` / `ylim` — defaults to the *camera*: the same centre and the
   same scale (world units per pixel) as the live view, extended to the export's size. The
   camera makes this trivial, which is one of the reasons it is the state.
-* **The image size** — `width` / `height` — defaults to the live view's size; `dpi` multiplies
-  it for high-resolution output.
+* **The image size** — `width` / `height` — defaults to the live view's size, and is in *device*
+  pixels: the offscreen view is sized `width / devicePixelRatio` logically so the grabbed image
+  is exactly `width` × `height`. `dpi` multiplies it for high-resolution output.
 
-### Reconciliation (`adjust`)
+### Reconciliation (`adjustable`)
 
 Matplotlib does not have this problem in the same form: a figure has a fixed size, the axes
 occupy a sub-rectangle of it, and the data is mapped into that rectangle — so the range always
@@ -266,17 +265,20 @@ the box or the limits give way. **We have no axes box** (the plot fills its item
 earlier requirement), so the two parameter sets can genuinely disagree and the library must be
 told which one wins:
 
-| `adjust` | What happens | Matplotlib analogue |
-|---|---|---|
-| `"stretch"` (**default**) | the requested range is mapped onto the requested pixel size exactly; the two scales are independent, so a mismatched aspect **distorts** | none — a box model never needs it |
-| `"pad"` | the scale is kept (one scale, from `camera.aspect`), the range fits inside and the leftover pixels stay background | `adjustable="box"` |
-| `"expand"` | the range is *expanded* (never cropped) until it fills the size at that scale | `adjustable="datalim"` |
+The parameter is named after Matplotlib's and its **default is Matplotlib's default**
+(`rcParams["axes.adjustable"]` = `"box"`), because that is the mode that never distorts:
 
-`stretch` is the default because both parameters were given explicitly and it is the only mode
-that honours **both** exactly — it is the "report figure" case (frame this region, produce this
-image). The trap is documented in the parameter's docstring: a mismatched aspect distorts, so
-either pass a size with the range's ratio or use `adjust="pad"`. Cropping is deliberately not
-offered: it silently loses visible content, which no other mode does.
+| `adjustable` | What happens | Matplotlib analogue |
+|---|---|---|
+| `"box"` (**default**) | one scale, taken from the live unit ratio, and the **largest** one for which the requested range still fits: the binding axis is exact, the other keeps background margins. Nothing is ever cropped | `adjustable="box"` (its default) |
+| `"datalim"` | the camera's own scale is used and the limits *expand* (never cropped) to fill the size | `adjustable="datalim"` |
+| `"stretch"` | the requested range maps onto the requested size exactly — the two scales are independent, so a mismatched aspect **distorts** | none; ours, for the "report figure" case |
+
+So the default honours the *aspect* and pads, exactly as Matplotlib does; a report figure that
+must fill the frame asks for `adjustable="stretch"` explicitly and accepts the distortion.
+Cropping is deliberately not offered: it silently loses visible content, which no other mode
+does. With no explicit range all three modes agree — the range is derived from the camera at
+the export size, so it already has that size's aspect.
 
 Because the region is a parameter, an export can cover **more** canvas than the widget shows —
 something a bounded figure cannot do.

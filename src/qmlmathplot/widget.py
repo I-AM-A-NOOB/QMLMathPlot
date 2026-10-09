@@ -60,8 +60,9 @@ class MathPlotWidget(QWidget):
         aspect: str | float = "auto",
     ) -> None:
         # Check before super().__init__(): constructing a QWidget without a
-        # QApplication aborts inside Qt, so the friendly error would never be reached.
-        if QApplication.instance() is None:
+        # QApplication aborts inside Qt, so the friendly error would never be reached (note
+        # that `QApplication.instance()` is the QGuiApplication in a pure-QML host).
+        if not isinstance(QApplication.instance(), QApplication):
             raise RuntimeError("please create a QApplication first — QQuickWidget needs QtWidgets")
         super().__init__(parent)
         register_qml_types()
