@@ -241,35 +241,59 @@ Themes set the *defaults* for new artists and the plot's own furniture; an expli
 
 ## 9. Export / screenshots — **shelved**
 
-> Shelved by the maintainer: the API below stays as the design of record, but nothing is
-> implemented for it in this round.
+> Shelved by the maintainer. The design below is the plan of record; nothing is implemented
+> for it in this round.
 
-
+An export takes **two independent parameter sets** and reconciles them:
 
 ```python
-plot.save_image("out.png", xlim=(-1, 1), ylim=(-1, 1), width=1200, height=400, dpi=1.0)
-plot.to_image(width=800, height=600)          # -> QImage
+plot.save_image("out.png", xlim=(-1, 1), ylim=(-1, 1), width=1200, height=400, adjust="stretch")
+img = plot.to_image(width=800, height=600)          # -> QImage
 ```
 
-This is *not* `savefig`, and it cannot be: there is no figure to re-render at a new dpi. An
-export is **"render this region of the infinite canvas at this pixel size"**:
+* **The canvas range** — `xlim` / `ylim` — defaults to the *camera*: the same centre and the
+  same scale (world units per pixel) as the live view, extended to the export's size. The
+  camera makes this trivial, which is one of the reasons it is the state.
+* **The image size** — `width` / `height` — defaults to the live view's size; `dpi` multiplies
+  it for high-resolution output.
 
-* `xlim` / `ylim` select the canvas region and default to the current view;
-  `width` / `height` are the output pixels and default to the live view's size; `dpi` scales
-  the pixel size for high-resolution output.
-* The requested region is **framed and stretched onto the requested pixel size** — a report
-  figure, not a window. An export of `xlim=ylim=(-1,1)` at `1200×400` is 4:1. For square
-  units pass a size with the region's ratio.
-* Because the region is a parameter, an export can cover *more* canvas than the widget shows
-  — something a bounded figure cannot do.
-* Implementation (**verified**): a hidden `QQuickWidget` (`WA_DontShowOnScreen`, resized to the
-  target, `show()`n offscreen) read back with the synchronous `QQuickWidget.grabFramebuffer()`.
-  Verified: `sin(1/x)`, `xlim=ylim=(-1,1)`, 800×200 logical → 1200×300 device pixels with the
-  curve stretched 4:1. Dead ends (recorded in AGENTS.md item 26): PySide6 6.11 has no
-  `QQuickRenderControl.grab()` and no `QRhi` binding, and `grabToImage()` returns null on a
-  never-exposed window.
-* `transparent=True` clears to alpha 0; everything else follows the live styling, so an
-  export cannot drift from what the user sees.
+### Reconciliation (`adjust`)
+
+Matplotlib does not have this problem in the same form: a figure has a fixed size, the axes
+occupy a sub-rectangle of it, and the data is mapped into that rectangle — so the range always
+fits, at the price of margins, and `set_aspect(..., adjustable='box'|'datalim')` chooses whether
+the box or the limits give way. **We have no axes box** (the plot fills its item, an explicit
+earlier requirement), so the two parameter sets can genuinely disagree and the library must be
+told which one wins:
+
+| `adjust` | What happens | Matplotlib analogue |
+|---|---|---|
+| `"stretch"` (**default**) | the requested range is mapped onto the requested pixel size exactly; the two scales are independent, so a mismatched aspect **distorts** | none — a box model never needs it |
+| `"pad"` | the scale is kept (one scale, from `camera.aspect`), the range fits inside and the leftover pixels stay background | `adjustable="box"` |
+| `"expand"` | the range is *expanded* (never cropped) until it fills the size at that scale | `adjustable="datalim"` |
+
+`stretch` is the default because both parameters were given explicitly and it is the only mode
+that honours **both** exactly — it is the "report figure" case (frame this region, produce this
+image). The trap is documented in the parameter's docstring: a mismatched aspect distorts, so
+either pass a size with the range's ratio or use `adjust="pad"`. Cropping is deliberately not
+offered: it silently loses visible content, which no other mode does.
+
+Because the region is a parameter, an export can cover **more** canvas than the widget shows —
+something a bounded figure cannot do.
+
+### Offscreen rendering
+
+A hidden `QQuickWidget` (`WA_DontShowOnScreen`, `setResizeMode(SizeRootObjectToView)`, resized
+to the target, `show()`n offscreen) with the figure attached and the limits set, read back with
+the synchronous `QQuickWidget.grabFramebuffer()`. Verified: `sin(1/x)`, `xlim=ylim=(-1,1)`,
+800×200 logical → 1200×300 device pixels with the curve stretched 4:1.
+
+Dead ends, recorded so they are not retried (AGENTS.md item 26): PySide6 6.11 has no
+`QQuickRenderControl.grab()` and no `QRhi` binding, and `QQuickItem.grabToImage()` returns
+**null** on a window that was never exposed.
+
+`transparent=True` clears to alpha 0; everything else follows the live styling, so an export
+cannot drift from what the user sees.
 
 ## 10. How Matplotlib-familiar should this be?
 
