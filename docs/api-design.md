@@ -5,9 +5,10 @@ exist to serve a *bounded canvas with subplots*, and QMLMathPlot has neither.
 
 **Implemented** (see the build order): §2–§7 — `Plot` / `Camera` / `Curve` / `CurveListModel`,
 multiple curves, grid, axes, ticks, titles, the theme system (§7b) — and §9, the export.
-**Not implemented yet**: §8 annotations and `underlay`/`overlay`, `quickplot()`, `add_series()`,
-`plot.ticks` as a settable property. Everything else in this document is the plan of record, not
-a description of the current code.
+**Not implemented yet**: §8 annotations and `underlay`/`overlay`, plus the rest of the gap list
+in §11.2 (which is the honest comparison against Matplotlib — verified by grepping the code, not
+recalled). Everything else in this document is the plan of record, not a description of the
+current code.
 
 ---
 
@@ -321,17 +322,70 @@ Litmus test for anything else: *does the name describe a thing the user thinks a
 region, a label, a file) or a step our renderer performs (draw, blit, rasterise)?* Copy the
 first, refuse the second.
 
-## 11. Where we deliberately differ from Matplotlib
+## 11. How this compares to Matplotlib today
+
+Three kinds of difference, and which is which matters: **by design** (the model does not have
+that concept), **reasonable gap** (it fits the model and is simply not built), and
+**fundamental** (the renderer cannot, or the model deliberately has no such thing).
+
+### 11.1 By design
 
 | Matplotlib | Here | Why |
 |---|---|---|
 | bounded figure at a dpi | infinite canvas + camera | panning off the "page" must work; nothing bounds the world |
-| several axes per figure | one camera per `Plot`; panels are a Qt layout | layouts already do sizing, spacing and resizing |
-| data-space limits as the state | camera (centre/zoom/aspect) as the state, limits derived | the widget resizes constantly; a stored range would have to be patched on every resize |
-| artist list redrawn per figure | one QML item per curve, driven by model signals | no redraw loop; Qt owns invalidation |
+| `Figure` / `Axes` / `subplots()` / `GridSpec` | one `Plot` per widget; panels are a Qt layout | there is no page and no axes box; layouts already size, space and resize |
+| data-space limits as the state | camera (centre/zoom/aspect) as the state, limits derived | the widget resizes constantly; a stored range would need a patch per resize |
+| `plt.*` global current figure | explicit objects | a Qt app has many plots and no global state |
+| `plot(x, y)` with data arrays as the native artist | `add_curve("f(x)")` — a fragment shader | the renderer evaluates the expression per pixel |
+| artist list redrawn per figure | one QML item per curve, driven by model signals | Qt owns invalidation; no redraw loop |
 | transforms stack (data→axes→figure→display) | one camera→item mapping | only one coordinate space exists |
-| `savefig(dpi=)` | offscreen render of a canvas region at a size | the plot *is* a Qt scene |
-| blocking `show()` | the widget/`PlotView` is a live item | Qt's event loop is the app's |
+| `savefig(dpi=)` re-rendering the figure | offscreen render of a canvas region at a size | the plot *is* a Qt scene, and the region is a parameter |
+| `NavigationToolbar2QT`, rubber band, box zoom | host chrome: `mapFromScreen()` + `xlim`/`ylim` *is* the zoom | two toolkits to maintain; it clashes with host UI frameworks |
+| legend | `Curve.label` + `PlotView.overlay` | a legend is screen-space chrome |
+| four spines | two axes through the origin, edge-clamped | a function plotter wants the axes where the maths is |
+| `draw()` / `FigureCanvas` / blitting | nothing — the scene is live | an API that lies about how pixels appear |
+| `rcParams` global state | one `Theme` per `Plot`, loaded from Matplotlib's own style sheets | no global state in a Qt app |
+| blocking `show()` | the widget / `PlotView` is a live item | Qt's event loop is the app's |
+
+### 11.2 Reasonable gaps (they fit the model; not built yet)
+
+| Missing | Note |
+|---|---|
+| `xlabel` / `ylabel` | cheap; `title` exists already |
+| `quickplot()` | the `plt.plot`-flavoured one-liner; designed |
+| `add_series(x, y)` | data polylines as a QML-geometry artist; designed (§6) |
+| `annotate()` / `text()` | designed (§8) |
+| settable ticks (`plot.ticks`) | designed; automatic nice-number ticks already work |
+| **log axes** | needs a non-linear camera→item mapping in the shader; common enough to matter |
+| markers / `scatter` | a different artist (points, not a stroke) |
+| minor ticks, tick formatters | the tick machinery is already in Python |
+| `fill_between`, spans, bars | QML geometry, like `add_series` |
+| `bbox_inches="tight"` | trim an export to the drawn extent |
+| more style keys (font family, cycler over line style/marker) | the converter drops what it cannot map |
+| style *stacking* (`with plt.style.context([...])`) | one theme per `Plot` today |
+| vector export (SVG / PDF) | see 11.3 — for curves it cannot be a real vector |
+
+### 11.3 Fundamental
+
+* **Curves are shader-rendered, so they have no vector form.** An "SVG/PDF export" would embed a
+  raster. Matplotlib's vector output is a real capability this library does not have.
+* **Cost is pixels × curves**, not data points: every visible curve is a full-screen pass, so
+  many curves at once are expensive and a large window costs more. Matplotlib pays per point.
+* **Data arrays are a guest artist, not the native path** (11.2); expressions are native.
+* **No 3D, no images, no contours, no statistics** — this is a function plotter.
+
+The other side of the same design: oscillating functions do not alias (the envelope band),
+deep zoom stays exact (no polyline resampling), and a pole is a gap rather than a connector.
+
+### 11.4 What we have that Matplotlib's Qt backend does not
+
+* A Qt property with a notify signal for *every* knob: a change is one signal, there is no
+  `draw()` to call.
+* One live item that embeds both ways — `MathPlotWidget` in QtWidgets, `PlotView` in Qt Quick.
+* Cursor-anchored wheel zoom and 1:1 drag pan out of the box, each with a switch.
+* An infinite canvas: pan/zoom off the page, and an export may cover more canvas than the
+  widget shows.
+* Matplotlib's own style sheets, applied per plot (26 of them, plus its default).
 
 ## 12. Migration from today's code
 
