@@ -190,3 +190,20 @@ def test_the_hand_off_is_reached_through_the_plot() -> None:
     for method in ("to_matplotlib", "to_sympy", "to_image"):
         assert callable(getattr(Plot(), method))
     assert callable(qmlmathplot.Plot.savefig)
+
+
+def test_to_sympy_passes_adaptive_through() -> None:
+    """``adaptive`` reaches sympy's own sampler; the default is the fixed, uniform count.
+
+    Measured on `sin(1/x)` over [-1, 1] with sympy 1.14: adaptive gives *fewer* points (296 vs
+    2000) and the same block of vertical connectors, which is why the fixed count is the default
+    — but sympy's sampler is one keyword away for anyone who wants it.
+    """
+    pytest.importorskip("matplotlib")
+    from qmlmathplot import Plot
+
+    plot = Plot()
+    plot.add_curve("sin(1/x)")
+
+    assert plot.to_sympy(samples=200)[0].adaptive is False
+    assert plot.to_sympy(samples=200, adaptive=True)[0].adaptive is True

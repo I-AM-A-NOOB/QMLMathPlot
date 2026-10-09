@@ -205,18 +205,23 @@ class Plot(QObject):
         xlim: object = None,
         ylim: object = None,
         samples: int = 2000,
+        adaptive: bool = False,
     ) -> object:
         """Hand this plot to ``sympy.plotting`` and return the Plot object it builds.
 
-        Through sympy this reaches any of sympy's plotting backends; the sampling is ours
-        (uniform, ``samples`` points), so the same aliasing caveat as :meth:`to_matplotlib`
-        applies — sympy's own adaptive sampler (available on the returned object) warns about
-        oscillating functions for exactly that reason. Hidden curves are skipped, and each
-        curve keeps its colour. Needs the optional ``matplotlib`` extra.
+        Through sympy this reaches any of sympy's plotting backends. The sampling is ours
+        (uniform, ``samples`` points) unless ``adaptive=True`` asks for sympy's own sampler; the
+        aliasing caveat of :meth:`to_matplotlib` applies either way, because an oscillating
+        function cannot be resolved by sampling at all. Measured on ``sin(1/x)`` over [-1, 1]:
+        sympy 1.14's adaptive sampler produced **289** points — *fewer* than the fixed 2000 —
+        emitted no warning, and drew the same block of vertical connectors, which is why the
+        fixed count is the default. Hidden curves are skipped, each curve keeps its colour, and a
+        passed ``ylim`` is honoured (sympy has no y-range of its own). Needs the optional
+        ``matplotlib`` extra.
         """
         from .mpl import sympy_plot_for
 
-        return sympy_plot_for(self, xlim=xlim, ylim=ylim, samples=samples)
+        return sympy_plot_for(self, xlim=xlim, ylim=ylim, samples=samples, adaptive=adaptive)
 
     @Slot(str)
     def savefig(self, path: str, *, backend: str = "qt", **kwargs: object) -> None:

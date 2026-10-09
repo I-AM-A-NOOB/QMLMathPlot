@@ -198,8 +198,9 @@ def sympy_plot_for(
     xlim: Sequence[float] | None = None,
     ylim: Sequence[float] | None = None,
     samples: int = 2000,
+    adaptive: bool = False,
 ) -> object:
-    """Hand this plot to ``sympy.plotting``, built with the same uniform sampling.
+    """Hand this plot to ``sympy.plotting``, uniform by default (``adaptive`` asks for sympy's.
 
     Returns whatever ``sympy.plotting.plot(..., show=False)`` returns (a matplotlib-backend
     ``Plot`` object in sympy 1.14), so ``handle.save(path)``/``handle.show()`` work, the window
@@ -220,7 +221,7 @@ def sympy_plot_for(
             raise ValueError(f"cannot parse {curve.expression!r}: {exc}") from exc
     handle = sp.plotting.plot(
         *expressions, (symbol, x_range[0], x_range[1]), show=False,
-        adaptive=False,                           # the same uniform sampling as the hand-off
+        adaptive=adaptive,                        # see Plot.to_sympy for why False is the default
         nb_of_points=samples,
         label=[curve.label or curve.expression for curve in curves],
     )
