@@ -60,6 +60,8 @@ _SOURCES: dict[str, tuple[str, ...]] = {
     "grid_alpha": ("grid.alpha",),
     "grid_style": ("grid.linestyle",),
     "color_cycle": ("axes.prop_cycle",),
+    "axis_color": ("axes.edgecolor",),
+    "axis_width": ("axes.linewidth",),
     "line_width": ("lines.linewidth",),
     "text_color": ("text.color", "axes.labelcolor"),
     "tick_color": ("xtick.color", "ytick.color"),
@@ -75,26 +77,29 @@ _SOURCES: dict[str, tuple[str, ...]] = {
 _BOOL_KEYS = frozenset({"axes.grid", "axes.titleweight"})
 #: Keys whose value is a size in points (converted to logical pixels).
 _PT_KEYS = frozenset({
-    "grid.linewidth", "lines.linewidth", "xtick.major.size", "ytick.major.size",
+    "grid.linewidth", "lines.linewidth", "axes.linewidth",
+    "xtick.major.size", "ytick.major.size",
     "font.size", "xtick.labelsize", "ytick.labelsize", "axes.titlesize",
 })
 #: Keys whose value is a colour.
 _COLOR_KEYS = frozenset({
     "xtick.color", "ytick.color", "text.color", "axes.labelcolor", "axes.titlecolor",
-    "grid.color", "axes.facecolor", "figure.facecolor",
+    "grid.color", "axes.facecolor", "figure.facecolor", "axes.edgecolor",
 })
 
 
 def names() -> list[str]:
-    """Names of the bundled themes (file stems), plus ``"default"`` (no overrides)."""
+    """Names of the bundled themes (file stems), ``"default"`` first.
+
+    ``"default"`` is Matplotlib's default style (``themes/default.mplstyle``), which is also
+    what a Plot uses before any theme is applied, so ``plot.theme = "default"`` restores it.
+    """
     stems = sorted(p.stem for p in THEME_DIR.glob("*.mplstyle")) if THEME_DIR.is_dir() else []
-    return ["default", *stems]
+    return ["default", *(s for s in stems if s != "default")]
 
 
 def raw(name: str) -> dict[str, str]:
     """The theme's raw ``rcParams`` (key -> text value), before conversion."""
-    if name == "default":
-        return {}
     path = Path(name)
     if not path.is_file():
         path = THEME_DIR / f"{name}.mplstyle"

@@ -37,9 +37,9 @@ class MathPlotWidget(QWidget):
     """Function plotting widget (QWidget version).
 
     :param expression: expression in sympy syntax, ``"sin(x)"`` by default
-    :param line_width: line width (logical pixels)
-    :param curve_color: curve color (``#rrggbb``)
-    :param background_color: background color (``#rrggbb``)
+    :param line_width: line width (logical pixels); None keeps the plot's own default
+    :param curve_color: curve color (``#rrggbb``); None keeps the plot's own default
+    :param background_color: background color (``#rrggbb``); None keeps the plot's own default
     :param aspect: ``"auto"`` (default) or the ratio of the y scale to the x scale
 
     The signals ``expressionChanged`` / ``errorChanged`` stay in sync with the first curve; a
@@ -54,9 +54,9 @@ class MathPlotWidget(QWidget):
         expression: str = "sin(x)",
         parent: QWidget | None = None,
         *,
-        line_width: float = 1.5,
-        curve_color: str = "#33ccff",
-        background_color: str = "#14141e",
+        line_width: float | None = None,
+        curve_color: str | None = None,
+        background_color: str | None = None,
         aspect: str | float = "auto",
     ) -> None:
         # Check before super().__init__(): constructing a QWidget without a
@@ -79,8 +79,12 @@ class MathPlotWidget(QWidget):
 
         self._root = self._quick.rootObject()   # status is Ready, so this is always valid
         self._plot = Plot(self)
-        self._plot.background = background_color
-        self._plot.line_width = float(line_width)
+        # None for a style argument means "keep the plot's own default" (which the plot takes
+        # from its theme), so the widget does not re-state matplotlib's numbers.
+        if background_color is not None:
+            self._plot.background = background_color
+        if line_width is not None:
+            self._plot.line_width = float(line_width)
         self._curve = self._plot.add_curve(expression, color=curve_color, line_width=line_width)
         self._curve.expressionChanged.connect(self.expressionChanged)
         self._curve.errorChanged.connect(self.errorChanged)

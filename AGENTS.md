@@ -249,10 +249,40 @@ histories and numbers belong here.
     from a `QtObject`-typed forwarder (the render smoke test uses `plot.property("camera")`) or
     keep the Python-side reference you injected.
 
+34. **QML chains and the component's default child object.** Two traps that bite a host
+    driving `PlotView` from QML:
+    * a *chain* cannot be bound: `plot.camera.aspect: 1.0` is rejected outright ("Cannot assign
+      to non-existent property 'aspect'"), while `plot.aspect = 1.0` inside
+      `Component.onCompleted` works. `Plot` therefore forwards `aspect` (and `xlim`/`ylim`) so
+      the common knobs are direct properties; anything deeper needs `Binding { target: … }`.
+    * `PlotView` declares `property Plot plot: defaultPlot` with `Plot { id: defaultPlot }` as a
+      child object, and QML evaluates some bindings *before* that child exists — a host binding
+      on the injected plot (`plot.aspect: 1.0` at the component level) then produces a burst of
+      `Cannot read property 'camera' of null` from the component's own bindings. Assigning in
+      `Component.onCompleted` is clean. Fixing it properly means making the default model exist
+      before the bindings; the obvious attempt (`property Plot plot: DefaultPlot {}` with an
+      inline component) is rejected by QML with "Property value set multiple times", so this is
+      still open.
+
+35. **Snap hairlines to a half pixel, but never a *styled* line.** The grid is a 1 px hairline
+    drawn in the Canvas, so `Math.round(px) + 0.5` is right there; the axis line is 1.07 logical
+    px wide (`axis_width`, 0.8 pt) and applying the same rounding put it half off the centre
+    column — the y-axis came out pale grey where the test expected black, and the axis visibly
+    thinned out when the widget's logical size was odd. Fix: the axis rectangles are positioned
+    at the exact value (`yAxisX - axis_width / 2`), only the hairline grid is snapped.
+    Regression: `test_render_smoke.py::test_grid_ticks_axes_and_title_are_drawn` checks a dark
+    pixel on the centre column and on the middle row.
+
+36. **The axis is clamped to the nearest edge; the tick labels are clamped too.** With the
+    origin off screen the axis sticks to the item's edge (the Desmos behaviour), and the mark
+    and the label are positioned from *that* clamped value — otherwise the labels of a pinned
+    axis leave the item and the panning user loses the scale. Measured on a 900x600 frame panned
+    to y in [-38, -34]: the x-axis sits on the top row with its labels just below it, and the
+    edge labels ("-6" at the left) stay fully inside the item. Regression:
+    `test_render_smoke.py::test_axis_pins_to_the_edge_when_the_origin_is_off_screen`.
 
 ## Performance (measured)
-
-Startup to first frame is ≈ **230 ms** (Windows / D3D11 / 900×600):
+ ≈ **230 ms** (Windows / D3D11 / 900×600):
 
 | Stage | Cost | Note |
 |---|---|---|
@@ -284,18 +314,3 @@ and a fully banded column skips the stroke entirely (mixing with w = 1 discards 
 A pole-gap column draws nothing and skips all of it. Verified pixel-identical (≤1/255 in one
 channel on 2-8 of 1.2 M pixels, i.e. compiler scheduling noise) across 18 expression/view
 combinations, including every zoom level of `sin(1/x)`, deep `log` views and all poles.
-
-34. **QML chains and the component's default child object.** Two traps that bite a host
-    driving `PlotView` from QML:
-    * a *chain* cannot be bound: `plot.camera.aspect: 1.0` is rejected outright ("Cannot assign
-      to non-existent property 'aspect'"), while `plot.aspect = 1.0` inside
-      `Component.onCompleted` works. `Plot` therefore forwards `aspect` (and `xlim`/`ylim`) so
-      the common knobs are direct properties; anything deeper needs `Binding { target: … }`.
-    * `PlotView` declares `property Plot plot: defaultPlot` with `Plot { id: defaultPlot }` as a
-      child object, and QML evaluates some bindings *before* that child exists — a host binding
-      on the injected plot (`plot.aspect: 1.0` at the component level) then produces a burst of
-      `Cannot read property 'camera' of null` from the component's own bindings. Assigning in
-      `Component.onCompleted` is clean. Fixing it properly means making the default model exist
-      before the bindings; the obvious attempt (`property Plot plot: DefaultPlot {}` with an
-      inline component) is rejected by QML with "Property value set multiple times", so this is
-      still open.

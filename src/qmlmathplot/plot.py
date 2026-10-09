@@ -13,6 +13,7 @@ from PySide6.QtGui import QColor, QVector2D
 
 from .camera import Camera
 from .curve import DEFAULT_COLOR_CYCLE, Curve, CurveListModel
+from .themes import names, resolve
 
 __all__ = ["Plot"]
 
@@ -64,6 +65,10 @@ class Plot(QObject):
     themeChanged = Signal()
 
     backgroundChanged = Signal()
+    axisColorChanged = Signal()
+    axisWidthChanged = Signal()
+    axesPositionChanged = Signal()
+    available_themesChanged = Signal()
     gridChanged = Signal()
     gridColorChanged = Signal()
     gridWidthChanged = Signal()
@@ -85,11 +90,15 @@ class Plot(QObject):
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._camera = Camera(self)
+        self._theme = ""
         self._curves = CurveListModel(DEFAULT_COLOR_CYCLE, self.line_width, self)
         self._camera.viewChanged.connect(self.viewChanged)
         self._camera.aspectChanged.connect(self.aspectChanged)
         self.cameraChanged.emit()
         self.curvesChanged.emit()
+        # matplotlib's look out of the box: the theme file is the single source of truth, so
+        # the fallbacks above and the theme agree instead of drifting apart.
+        self._set_theme("default")
 
     # ------------------------------------------------------------- the model
     def _get_camera(self) -> Camera:
@@ -147,22 +156,26 @@ class Plot(QObject):
         self._curves.remove_curve(curve)
 
     # -------------------------------------------------------------- styling
-    background: QColor = _style(QColor, "background", backgroundChanged, QColor("#14141e"))
-    grid: bool = _style(bool, "grid", gridChanged, True)
-    grid_color: QColor = _style(QColor, "grid_color", gridColorChanged, QColor("#2a2a3a"))
-    grid_width: float = _style(float, "grid_width", gridWidthChanged, 1.0)
-    grid_alpha: float = _style(float, "grid_alpha", gridAlphaChanged, 0.5)
+    # The fallbacks repeat matplotlib's default style (themes/default.mplstyle, applied in
+    # __init__) so a plot looks the same whether or not a theme was applied.
+    background: QColor = _style(QColor, "background", backgroundChanged, QColor("white"))
+    grid: bool = _style(bool, "grid", gridChanged, False)
+    grid_color: QColor = _style(QColor, "grid_color", gridColorChanged, QColor("#b0b0b0"))
+    grid_width: float = _style(float, "grid_width", gridWidthChanged, 1.07)
+    grid_alpha: float = _style(float, "grid_alpha", gridAlphaChanged, 1.0)
     #: "-" | "--" | ":" | "-." (QML turns it into a dash pattern).
     grid_style: str = _style(str, "grid_style", gridStyleChanged, "-")
-    text_color: QColor = _style(QColor, "text_color", textColorChanged, QColor("#c8c8d2"))
-    tick_color: QColor = _style(QColor, "tick_color", tickColorChanged, QColor("#6a6a80"))
-    tick_length: float = _style(float, "tick_length", tickLengthChanged, 6.0)
-    font_size: float = _style(float, "font_size", fontSizeChanged, 12.0)
-    tick_font_size: float = _style(float, "tick_font_size", tickFontSizeChanged, 11.0)
+    axis_color: QColor = _style(QColor, "axis_color", axisColorChanged, QColor("black"))
+    axis_width: float = _style(float, "axis_width", axisWidthChanged, 1.07)
+    text_color: QColor = _style(QColor, "text_color", textColorChanged, QColor("black"))
+    tick_color: QColor = _style(QColor, "tick_color", tickColorChanged, QColor("black"))
+    tick_length: float = _style(float, "tick_length", tickLengthChanged, 4.67)
+    font_size: float = _style(float, "font_size", fontSizeChanged, 13.33)
+    tick_font_size: float = _style(float, "tick_font_size", tickFontSizeChanged, 13.33)
     title: str = _style(str, "title", titleChanged, "")
-    title_color: QColor = _style(QColor, "title_color", titleColorChanged, QColor("#e8e8f0"))
-    title_font_size: float = _style(float, "title_font_size", titleFontSizeChanged, 15.0)
-    title_bold: bool = _style(bool, "title_bold", titleBoldChanged, True)
+    title_color: QColor = _style(QColor, "title_color", titleColorChanged, QColor("black"))
+    title_font_size: float = _style(float, "title_font_size", titleFontSizeChanged, 16.0)
+    title_bold: bool = _style(bool, "title_bold", titleBoldChanged, False)
     ticks_visible: bool = _style(bool, "ticks_visible", ticksVisibleChanged, True)
 
     def _get_color_cycle(self) -> list[str]:
@@ -180,7 +193,7 @@ class Plot(QObject):
                                       notify=colorCycleChanged)
 
     def _get_line_width(self) -> float:
-        return float(getattr(self, "_line_width", 1.5))
+        return float(getattr(self, "_line_width", 2.0))
 
     def _set_line_width(self, value: float) -> None:
         value = float(value)
@@ -194,19 +207,46 @@ class Plot(QObject):
     line_width: float = Property(float, _get_line_width, _set_line_width,
                                  notify=lineWidthChanged)
 
+    def _get_axes_position(self) -> str:
+        return getattr(self, "_axes_position", "zero")
+
+    def _set_axes_position(self, value: str) -> None:
+        value = str(value)
+        if value not in ("zero", "edge"):
+            raise ValueError(f'axesPosition must be "zero" or "edge", got {value!r}')
+        if value == self._get_axes_position():
+            return
+        self._axes_position = value
+        self.axesPositionChanged.emit()
+
+    #: Where the ticks ride: the axes through world (0,0), or the item's edges.
+    axes_position: str = Property(str, _get_axes_position, _set_axes_position,
+                                  notify=axesPositionChanged)
+
+    def _get_available_themes(self) -> list[str]:
+        return list(names())
+
+    #: Theme names a host can offer (``themes.names()``); read-only.
+    available_themes: list[str] = Property("QVariant", _get_available_themes,
+                                          notify=available_themesChanged)
+
     def _get_theme(self) -> str:
         return getattr(self, "_theme", "")
 
     def _set_theme(self, name: str) -> None:
-        """Apply a named theme: every entry is a style property of this object."""
-        name = str(name)
-        if name == self._get_theme():
-            return
-        from .themes import resolve      # lazy: a missing themes module must not break import
+        """Apply a named theme: every entry is a style property of this object.
 
-        resolved = resolve(name)         # unknown name -> KeyError, theme unchanged
+        Assigning a theme always applies it — that is what makes ``plot.theme = "default"`` a
+        reset back to matplotlib's look. The style setters emit only on a real change, so a
+        re-application does not churn. An unknown name raises ``KeyError`` before applying
+        anything, leaving the current look alone.
+        """
+        name = str(name)
+        resolved = resolve(name)
         for key, value in resolved.items():
             setattr(self, key, value)
+        if name == self._get_theme():
+            return
         self._theme = name
         self.themeChanged.emit()
 

@@ -141,32 +141,68 @@ Item {
         }
     }
 
-    // Ticks, labels and title: screen-space furniture, so plain items.
+    // Ticks, labels, axes and title: screen-space furniture, so plain items.
     Item {
+        id: furniture
+
         anchors.fill: parent
         visible: root.plot.ticks_visible
+
+        // The axes are the lines through world (0,0). When 0 is off screen the axis sticks to
+        // the nearest edge instead, so its labels are never lost (the grid stays where it is).
+        // "edge" pins both axes to the item's edges and draws no axis line: the old behaviour.
+        readonly property bool atZero: root.plot.axes_position === "zero"
+        readonly property real xAxisY: atZero
+                                       ? Math.max(0, Math.min(height, root.mapToScreen(0, 0).y))
+                                       : height
+        readonly property real yAxisX: atZero
+                                       ? Math.max(0, Math.min(width, root.mapToScreen(0, 0).x))
+                                       : 0
+
+        Rectangle {
+            visible: furniture.atZero
+            x: 0
+            width: parent.width
+            height: root.plot.axis_width
+            y: furniture.xAxisY - height / 2
+            color: root.plot.axis_color
+        }
+        Rectangle {
+            visible: furniture.atZero
+            x: furniture.yAxisX - width / 2
+            y: 0
+            width: root.plot.axis_width
+            height: parent.height
+            color: root.plot.axis_color
+        }
 
         Repeater {
             model: root.plot.camera.ticks_x
 
+            // The mark and the label ride the x axis; both are clamped so they stay on screen
+            // when the axis is pinned to an edge (a label may never leave the item).
             delegate: Item {
                 required property var modelData
 
                 x: Math.round(root.mapToScreen(modelData[0], 0).x)
                 width: 1
-                height: root.plot.tick_length
-                anchors.bottom: parent.bottom
+                height: furniture.height
 
                 Rectangle {
-                    anchors.fill: parent
+                    y: Math.max(0, Math.min(furniture.xAxisY, furniture.height - height))
+                    width: 1
+                    height: root.plot.tick_length
                     color: root.plot.tick_color
                 }
                 Text {
                     text: modelData[1]
                     color: root.plot.text_color
                     font.pixelSize: root.plot.tick_font_size
-                    x: -Math.round(width / 2)
-                    y: -height - 3
+                    // centred on the tick, but never half off the item
+                    x: Math.max(-parent.x, Math.min(-Math.round(width / 2),
+                                                    furniture.width - width - parent.x))
+                    y: Math.max(0, Math.min(furniture.xAxisY + root.plot.tick_length + 3,
+                                            furniture.height - height))
                 }
             }
         }
@@ -177,21 +213,26 @@ Item {
             delegate: Item {
                 required property var modelData
 
+                x: 0
                 y: Math.round(root.mapToScreen(0, modelData[0]).y)
-                width: root.plot.tick_length
+                width: furniture.width
                 height: 1
-                anchors.left: parent.left
 
                 Rectangle {
-                    anchors.fill: parent
+                    x: Math.max(0, Math.min(furniture.yAxisX - width, furniture.width - width))
+                    width: root.plot.tick_length
+                    height: 1
                     color: root.plot.tick_color
                 }
                 Text {
                     text: modelData[1]
                     color: root.plot.text_color
                     font.pixelSize: root.plot.tick_font_size
-                    x: root.plot.tick_length + 3
-                    y: -Math.round(height / 2)
+                    x: Math.max(3, Math.min(furniture.yAxisX - width - 3,
+                                            furniture.width - width - 3))
+                    // centred on the tick, but never half off the item
+                    y: Math.max(-parent.y, Math.min(-Math.round(height / 2),
+                                                    furniture.height - height - parent.y))
                 }
             }
         }

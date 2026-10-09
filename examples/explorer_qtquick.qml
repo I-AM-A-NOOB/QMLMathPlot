@@ -94,6 +94,25 @@ ApplicationWindow {
                     window.logLine("aspect -> " + currentText);
                 }
             }
+            SpinBox {
+                id: themeBox
+                objectName: "themeBox"
+                from: 0
+                to: Math.max(0, view.plot.available_themes.length - 1)
+                value: Math.max(0, view.plot.available_themes.indexOf(view.plot.theme))
+                textFromValue: function (value) {
+                    return view.plot.available_themes[value] !== undefined
+                           ? view.plot.available_themes[value] : "";
+                }
+                valueFromText: function (text) {
+                    const index = view.plot.available_themes.indexOf(text);
+                    return index < 0 ? value : index;
+                }
+                onValueModified: {
+                    view.plot.theme = view.plot.available_themes[value];
+                    window.logLine("theme -> " + view.plot.theme);
+                }
+            }
             Button {
                 text: "Reset view"
                 onClicked: view.plot.camera.reset()
@@ -127,13 +146,13 @@ ApplicationWindow {
                 width: overlayLabel.implicitWidth + 16
                 height: overlayLabel.implicitHeight + 8
                 radius: 4
-                color: "#22ffffff"
-                border.color: "#66ffffff"
+                color: "#18000000"
+                border.color: "#60000000"
 
                 Text {
                     id: overlayLabel
                     anchors.centerIn: parent
-                    color: "#dddddd"
+                    color: "#333333"
                     text: "Overlay Item (translucent, click-through)"
                 }
             }

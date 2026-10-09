@@ -172,8 +172,12 @@ swap happening when `shadersChanged` fires.
 * Tick *values* are computed in Python (`Camera.tick_values()` — nice-number algorithm, pure
   and unit-tested) and pushed through `ticksChanged`; QML only positions and formats them.
   Labels regenerate on camera changes, not per frame.
-* The grid, tick marks and labels are **drawn in QML** (a `Canvas`/`Shape` regenerated when
-  the camera changes). Simple and crisp enough for the tens of lines a grid has; moving it
+* The axes are drawn **through the origin** by default (`axes_position = "zero"`): the x-axis
+  is the horizontal line at world y=0, the y-axis the vertical at x=0, and the tick marks and
+  labels sit on them. When 0 is outside the visible range that axis sticks to the nearest edge,
+  so labels are never lost while panning (`"edge"` restores the old edge-pinned behaviour).
+* The grid, axes, tick marks and labels are **drawn in QML** (a `Canvas`/`Shape` regenerated
+  when the camera changes). Simple and crisp enough for the tens of lines a grid has; moving it
   into a static shader (tick positions as uniforms, baked once) stays the documented
   optimisation if a figure ever needs many lines.
 
@@ -195,13 +199,17 @@ qmlmathplot.themes.names()              # everything available
 ```
 
 The file format is Matplotlib's (`key: value`, `#` comments), so a new style sheet can be
-dropped in without touching code. `themes.resolve(name)` converts `rcParams` into our
+dropped in without touching code. ``"default"`` is Matplotlib's own default style
+(`themes/default.mplstyle`, written out because Matplotlib keeps its defaults in `rcParams`
+rather than in a stylelib file); a plot with no theme applied uses exactly those values, so
+`plot.theme = "default"` is a reset and the out-of-the-box look is a matplotlib look. `themes.resolve(name)` converts `rcParams` into our
 property names:
 
 | Matplotlib | Plot property |
 |---|---|
 | `axes.facecolor` (else `figure.facecolor`) | `background` |
 | `axes.grid` | `grid` |
+| `axes.edgecolor` / `axes.linewidth` | `axisColor` / `axisWidth` (the axes drawn through the origin) |
 | `grid.color` / `grid.linewidth` / `grid.alpha` / `grid.linestyle` | `gridColor` / `gridWidth` / `gridAlpha` / `gridStyle` |
 | `axes.prop_cycle` | `colorCycle` |
 | `lines.linewidth` | `lineWidth` (default for new curves) |

@@ -1,0 +1,26 @@
+# Matplotlib's default style (the values in matplotlib.rcParamsDefault), so a plot with no
+# theme looks like a matplotlib plot out of the box. Written out rather than imported because
+# Matplotlib keeps its defaults in rcParams, not in a stylelib file.
+axes.facecolor: white
+figure.facecolor: white
+axes.edgecolor: black
+axes.linewidth: 0.8
+axes.grid: False
+grid.color: b0b0b0
+grid.linestyle: -
+grid.linewidth: 0.8
+grid.alpha: 1.0
+axes.prop_cycle: cycler('color', ['1f77b4', 'ff7f0e', '2ca02c', 'd62728', '9467bd', '8c564b', 'e377c2', '7f7f7f', 'bcbd22', '17becf'])
+lines.linewidth: 1.5
+text.color: black
+axes.labelcolor: black
+xtick.color: black
+ytick.color: black
+xtick.major.size: 3.5
+ytick.major.size: 3.5
+font.size: 10
+xtick.labelsize: medium
+ytick.labelsize: medium
+axes.titlecolor: black
+axes.titlesize: large
+axes.titleweight: normal

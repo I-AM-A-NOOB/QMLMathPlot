@@ -27,6 +27,10 @@ window.show()
 app.exec()
 ```
 
+An un-themed plot looks like matplotlib (white background, tab10 colours, grey grid, black
+axes through the origin with the tick labels riding them) — the default style sheet is applied
+at construction, so `plot.theme = "default"` is the reset.
+
 `MathPlotWidget` keeps one curve's worth of convenience (`expression`, `error`,
 `line_width`, `curve_color`, `background_color`, `aspect`, `view_bounds()`,
 `reset_view()`, `zoom()`, `pan_pixels()`); everything else lives on the model behind it:
@@ -105,7 +109,7 @@ The model:
 
 | Object | Members |
 |---|---|
-| `Plot` | `camera`, `curves`, `xlim`/`ylim` (forwarded), `add_curve()` / `remove_curve()`, and the style properties: `background`, `grid`, `grid_color`, `grid_width`, `grid_alpha`, `grid_style`, `color_cycle`, `line_width`, `text_color`, `tick_color`, `tick_length`, `font_size`, `tick_font_size`, `title`, `title_color`, `title_font_size`, `title_bold`, `ticks_visible`, `theme` |
+| `Plot` | `camera`, `curves`, `xlim`/`ylim`/`aspect` (forwarded), `add_curve()` / `remove_curve()`, `availableThemes`, and the style properties: `background`, `grid`, `grid_color`, `grid_width`, `grid_alpha`, `grid_style`, `axis_color`, `axis_width`, `axes_position`, `color_cycle`, `line_width`, `text_color`, `tick_color`, `tick_length`, `font_size`, `tick_font_size`, `title`, `title_color`, `title_font_size`, `title_bold`, `ticks_visible`, `theme` |
 | `Camera` | `centre`, `zoom` (world units per logical pixel), `aspect`, `xlim`/`ylim` (derived), `ticks_x`/`ticks_y`, `zoomStep` / `panEnabled` / `zoomEnabled`, slots `setViewport(w, h)` / `zoom_by(delta, u, v, w, h)` / `pan_pixels(dx, dy)` / `reset()` |
 | `Curve` | `expression`, `color`, `lineWidth`, `visible`, `label`, `error` (read-only), the baked `vertexShader` / `fragmentShader` |
 | `CurveListModel` | the curves as a model (`curve`, `expression`, `color`, `lineWidth`, `visible`, `vertexShader`, `fragmentShader` roles) so QML puts one `ShaderEffect` behind each |
@@ -153,12 +157,16 @@ plot.plot.camera.zoom_by(120, 0.5, 0.5, w, h)     # one wheel notch, anchored at
 
 ## Themes
 
-`Plot.theme` applies a style sheet to the style properties above:
+`Plot.theme` applies a style sheet to the style properties above; the default is
+matplotlib's own default style, so an untouched plot already looks like matplotlib and
+`plot.theme = "default"` is the reset:
 
 ```python
 plot.theme = "ggplot"                # any of the bundled sheets
+plot.theme = "default"               # back to matplotlib's look
 plot.theme = "my-style"              # themes/my-style.mplstyle next to the package
 plot.theme = "path/to/any.mplstyle"  # any file in the same format
+plot.availableThemes                 # the names, for a host's picker (both demos use one)
 ```
 
 The 26 bundled sheets are Matplotlib's own styles, vendored verbatim into
@@ -167,6 +175,20 @@ mapped onto this library's property names, and keys describing things this libra
 have (spines, figure size, dpi, legend, marker styles, …) are ignored. `themes.names()` lists
 them (`"default"` plus the 26 sheets). An unknown name raises `KeyError` and leaves the current
 theme alone.
+
+## Axes, grid and ticks
+
+- The **grid** is drawn in QML (a `Canvas`), one line per tick position, in `grid_color` /
+  `grid_width` / `grid_alpha` / `grid_style` (`-`, `--`, `:`, `-.`).
+- The **axes** are the lines through world (0,0) — the x-axis at `y = 0`, the y-axis at
+  `x = 0` — drawn in `axis_color` / `axis_width`, and the **tick marks and labels ride those
+  axes** instead of hugging the item's edges. When 0 is off screen the axis sticks to the
+  nearest edge, so its labels are never lost (and a label never leaves the item); the grid
+  stays where it is. `plot.axes_position = "edge"` restores the edge-pinned behaviour.
+- The tick *values* are nice numbers computed in Python (`Camera.tick_values()` /
+  `nice_ticks()`, steps of 1/2/5 x 10^n) and pushed through `ticksChanged`; QML only positions
+  and formats them, so a frame never recomputes ticks.
+- `plot.ticks_visible = False` hides the whole furniture (axes, marks and labels).
 
 ## RHI backends
 
@@ -226,15 +248,18 @@ QSG_RHI_BACKEND=opengl uv run pytest -m gui
 - `test_curve.py`: a failed expression keeps the last working shaders, the style
   setters are idempotent, and the list model reports the right roles.
 - `test_plot.py`: the plot's properties convert, notify exactly once and are wired
-  (a PySide property with an unresolved notify name silently loses it), the limits
-  are forwarded to the camera, and a theme applies / an unknown name is rejected.
+  (a PySide property with an unresolved notify name silently loses it), the defaults are
+  matplotlib's default style, the limits are forwarded to the camera, and a theme applies
+  (and re-applies as a reset) while an unknown name is rejected.
 - `test_themes.py`: the vendored style sheets resolve to this library's properties.
 - `test_shader_bake.py`: the stage of a baked `.qsb` must match its purpose, and
   the four backend targets GLSL/HLSL/MSL/SPIR-V must all be covered.
 - `test_render_smoke.py`: open a window, render, read pixels; verify the thin-line
   shape, `sin(1/x)` filling its ±1 envelope, no |y|>1 artefacts outside the central
   columns, poles not connected, nothing drawn outside the domain, and the QML
-  furniture (grid lines exactly at the tick positions, ticks/labels, title).
+  furniture (grid lines exactly at the tick positions, the axes crossing at the origin
+  with their labels on them, the axis pinning to the edge once the origin is panned
+  away, the title).
 - `test_widget.py`: `MathPlotWidget` coexisting with neighbouring widgets — the plot
   appearing inside a layout, an expression change / an invalid expression keeping the
   previous graph, curves added/hidden/removed through the model, **the wheel over a
@@ -344,6 +369,9 @@ measurement that settled each one). The Qt/packaging ones that shaped the code:
   same x 9 times, and macros are preprocessor expansion with no call semantics.
 - PySide ties a property's notify signal to the `Signal` **object**; a name string
   silently leaves the property without one (and QML bindings then never refresh).
+- Snap **hairlines** (grid) to a half pixel, but never a **styled** line: rounding the
+  axis position put the 1.07 px y-axis half off the centre column, so the line came out
+  pale where it should be black.
 
 ## Releasing
 

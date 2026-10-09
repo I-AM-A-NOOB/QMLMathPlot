@@ -29,7 +29,7 @@ from qmlmathplot import MathPlotWidget
 
 pytestmark = pytest.mark.gui
 
-BACKGROUND = (0x14, 0x14, 0x1E)  # background of PlotView.qml
+BACKGROUND = (0xFF, 0xFF, 0xFF)  # the plot background (white: matplotlib's default)
 
 
 def _quick(plot: MathPlotWidget) -> QQuickWidget:

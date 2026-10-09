@@ -22,7 +22,7 @@ from qmlmathplot import Plot, qml_component_path
 pytestmark = pytest.mark.gui
 
 WIDTH, HEIGHT = 900, 600
-BACKGROUND = (0x14, 0x14, 0x1E)  # background of PlotView.qml
+BACKGROUND = (0xFF, 0xFF, 0xFF)  # the plot background (white: matplotlib's default)
 HOME = (-6.0, 6.0, -2.0, 2.0)    # the classic view: the pixel positions below assume it
 
 
@@ -47,13 +47,12 @@ def _render_plot(app: QGuiApplication, expression: str | None = None,
         plot = Plot()
         plot.add_curve(expression)
         root.setProperty("plot", plot)
-    # The pixel expectations below measure the *curve*, and the furniture sits exactly on the
-    # columns being measured (the grid at x=0, the tick labels along the bottom edge), so it
-    # stays off except in the test that is about the furniture itself.
-    if plot is not None and not furniture:
-        plot.grid = False
-        plot.ticks_visible = False
     if plot is not None:
+        # The pixel expectations below measure the *curve*, and the furniture sits exactly on
+        # the columns being measured (a grid line, the axis and its labels), so it is switched
+        # on only for the test that is about the furniture itself.
+        plot.grid = furniture
+        plot.ticks_visible = furniture
         plot.title = title
 
     view.show()
@@ -92,6 +91,13 @@ def _lit(image: QImage, x: int, y: int, threshold: int = 20) -> bool:
     color = image.pixelColor(x, y)
     return (abs(color.red() - BACKGROUND[0]) + abs(color.green() - BACKGROUND[1])
             + abs(color.blue() - BACKGROUND[2])) > threshold
+
+
+def _dark(image: QImage, x: int, y: int) -> bool:
+    """Whether a pixel is far darker than the background (an axis line, not a grid line)."""
+    color = image.pixelColor(x, y)
+    return max(BACKGROUND[0] - color.red(), BACKGROUND[1] - color.green(),
+               BACKGROUND[2] - color.blue()) > 120
 
 
 def _lit_count(image: QImage) -> int:
@@ -286,12 +292,12 @@ def test_steep_segments_are_not_fragmented(app: QGuiApplication) -> None:
     assert worst > 0.9, f"vertical stripes should be continuous (longest run / lit rows), worst column only {worst:.2f}"
 
 
-def test_grid_ticks_and_title_are_drawn(app: QGuiApplication) -> None:
-    """The QML furniture: grid lines exactly at the tick positions, tick marks along the
-    bottom edge and the title at the top.
+def test_grid_ticks_axes_and_title_are_drawn(app: QGuiApplication) -> None:
+    """The QML furniture: grid lines exactly at the tick positions, the axes through world
+    (0,0) with the tick labels riding them, and the title.
 
-    The positions are derived from the camera, so the test checks the mapping the view does
-    rather than repeating a hard-coded one.
+    The positions come from the camera, so the test checks the mapping the view does rather
+    than repeating a hard-coded one.
     """
     image, plot = _render_plot(app, "sin(x)", furniture=True, title="QMLMathPlot")
     camera = plot.camera
@@ -301,22 +307,47 @@ def test_grid_ticks_and_title_are_drawn(app: QGuiApplication) -> None:
         return (int(round(((world_x - camera.centre.x()) / camera.scale_x + WIDTH / 2) * dpr)),
                 int(round(((camera.centre.y() - world_y) / camera.scale_y + HEIGHT / 2) * dpr)))
 
-    # a grid line runs through the tick at world x = 4 (its column is lit end to end) and
-    # there is none at x = 5, where only the curve crosses the column
+    # a grid line runs through the tick at world x = 4 (its column is lit end to end) and there
+    # is none at x = 5, where only the curve and the axes cross the column
     grid_x, _ = screen(4.0)
     assert _column_ratio(image, grid_x) > 0.9, "no grid line at the tick x=4"
     between_x, _ = screen(5.0)
     assert _column_ratio(image, between_x) < 0.2, "there should be no grid line between the ticks"
     horizontal_y = screen(0.0, 1.0)[1]
-    lit_rows = sum(_lit(image, x, horizontal_y) for x in range(0, image.width()))
-    assert lit_rows > 0.9 * image.width(), "no grid line at the tick y=1"
+    lit = sum(_lit(image, x, horizontal_y) for x in range(0, image.width()))
+    assert lit > 0.9 * image.width(), "no grid line at the tick y=1"
 
-    # tick marks and labels hug the bottom edge; the title sits at the top centre
+    # the axes are the lines through the origin: dark pixels on the centre column and the
+    # middle row (the curve passes through the origin too, so check away from it)
+    origin_x, origin_y = screen(0.0, 0.0)
+    assert _dark(image, origin_x, screen(0.0, 1.5)[1]), "no y-axis through the centre column"
+    assert _dark(image, screen(3.5, 0.0)[0], origin_y), "no x-axis through the middle row"
+    # and the background is white away from every line
+    assert not _lit(image, *screen(3.0, 1.2)), "background should be white away from the curves and lines"
+
+    # tick marks and labels sit on the axes: the label of the x tick at 2 is right below the
+    # x-axis (between the axis and the bottom edge), not at the bottom edge itself
+    axis_label_y = origin_y + int(6 * dpr)
+    near_axis = sum(_lit(image, x, axis_label_y) for x in range(*sorted((screen(2.0)[0] - 12, screen(2.0)[0] + 12))))
+    assert near_axis > 0, "the x tick labels are not riding the x axis"
+
+    # the title sits at the top centre
     strip = int(16 * dpr)
-    bottom = sum(_lit(image, x, y, threshold=15)
-                 for x in range(0, image.width(), 3) for y in range(image.height() - strip, image.height()))
-    assert bottom > 0, "no tick marks or labels along the bottom edge"
-    top = sum(_lit(image, x, y, threshold=15)
-              for x in range(image.width() // 3, 2 * image.width() // 3)
+    top = sum(_lit(image, x, y) for x in range(image.width() // 3, 2 * image.width() // 3)
               for y in range(0, strip))
     assert top > 0, "the title is not drawn at the top"
+
+
+def test_axis_pins_to_the_edge_when_the_origin_is_off_screen(app: QGuiApplication) -> None:
+    """Panning the origin out of the view must not lose the labels: the axis sticks to the
+    nearest edge (the Desmos behaviour) instead of leaving the item."""
+    image, plot = _render_plot(app, "sin(x)", furniture=True, pan_pixels=-9000.0)
+    height, width = image.height(), image.width()
+    assert plot.camera.ylim.y() < 0.0, "the origin should be out of the view above"
+
+    # the x-axis is now the top edge of the item, and it is still a full-width line
+    row = sum(_lit(image, x, 0) for x in range(width))
+    assert row > 0.9 * width, "the pinned x axis is not drawn along the edge"
+    # the y axis is unchanged (x = 0 is still visible) and the labels are on screen
+    centre_x = width // 2
+    assert _dark(image, centre_x, height // 3), "the y axis at x=0 disappeared"

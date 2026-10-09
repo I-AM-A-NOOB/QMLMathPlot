@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
     QHBoxLayout,
+    QSpinBox,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -66,6 +67,28 @@ SAMPLES = (
 )
 
 
+class ThemeBox(QSpinBox):
+    """A spin box over theme names: the value is an index, the text is the theme itself.
+
+    The names come from the plot (``Plot.availableThemes``), so the list and the themes module
+    can never drift apart; ``textFromValue``/``valueFromText`` are what QSpinBox calls to show
+    and parse the value.
+    """
+
+    _names: list[str] = []
+
+    def setThemes(self, names: list[str], current: str = "default") -> None:  # noqa: N802
+        self._names = list(names)
+        self.setRange(0, max(0, len(self._names) - 1))
+        self.setValue(self._names.index(current) if current in self._names else 0)
+
+    def textFromValue(self, value: int) -> str:      # noqa: N802 (Qt naming)
+        return self._names[value] if 0 <= value < len(self._names) else ""
+
+    def valueFromText(self, text: str) -> int:       # noqa: N802 (Qt naming)
+        return self._names.index(text) if text in self._names else self.value()
+
+
 @final
 class Explorer(QMainWindow):
     """An input box + scroll area + splitter + overlay, ringing the plot widget."""
@@ -95,6 +118,10 @@ class Explorer(QMainWindow):
         reset = QPushButton("Reset view")
         reset.clicked.connect(lambda: self.plot.reset_view())
 
+        self.themes = ThemeBox()
+        self.themes.setToolTip("style sheet applied to the plot (Plot.theme)")
+        self.themes.valueChanged.connect(self.pick_theme)
+
         self.error = QLabel("")
         self.error.setStyleSheet("color: #ff8080")
 
@@ -105,6 +132,8 @@ class Explorer(QMainWindow):
         top.addWidget(self.samples)
         top.addWidget(QLabel("aspect:"))
         top.addWidget(self.aspects)
+        top.addWidget(QLabel("theme:"))
+        top.addWidget(self.themes)
         top.addWidget(reset)
         top.addWidget(self.error, 1)
 
@@ -113,12 +142,13 @@ class Explorer(QMainWindow):
         self.plot.expressionChanged.connect(self.sync_status)
         self.plot.errorChanged.connect(self.sync_status)
         self.plot.plot.camera.viewChanged.connect(self.sync_status)
+        self.themes.setThemes(self.plot.plot.availableThemes, self.plot.plot.theme)
 
         # overlay: stacked over the plot area, but does not consume mouse events
         self.overlay = QLabel("Overlay QLabel (translucent, click-through)", self.plot)
         self.overlay.setStyleSheet(
-            "background: rgba(255,255,255,28); color: #dddddd; padding: 4px 8px;"
-            "border: 1px solid rgba(255,255,255,60); border-radius: 4px;"
+            "background: rgba(0,0,0,24); color: #333333; padding: 4px 8px;"
+            "border: 1px solid rgba(0,0,0,60); border-radius: 4px;"
         )
         self.overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.overlay.move(12, 12)
@@ -158,6 +188,12 @@ class Explorer(QMainWindow):
         value = self.aspects.currentData()
         self.plot.plot.camera.aspect = value      # "auto" | a number
         self.log_line(f"aspect -> {self.aspects.currentText()}")
+        self.sync_status()
+
+    def pick_theme(self) -> None:
+        name = self.themes.text()
+        self.plot.plot.theme = name
+        self.log_line(f"theme -> {name}")
         self.sync_status()
 
     def pick_sample(self) -> None:
