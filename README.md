@@ -243,9 +243,13 @@ usable next to a notebook or a matplotlib-only tool.
 
 **This is a second renderer, and a sampled one.** matplotlib draws polylines, so each curve is
 evaluated at `samples` points (default 2000) and an oscillating function such as `sin(1/x)`
-aliases — exactly what the Qt view avoids by evaluating the expression per pixel (sympy's own
-adaptive sampler warns about this for the same reason, and it is available on the object
-`to_sympy()` returns). Fonts and antialiasing are matplotlib's, not the Qt view's, so the two
+aliases — exactly what the Qt view avoids by evaluating the expression per pixel. SymPy does not
+solve it either, and its adaptive mode does not help: measured on `sin(1/x)` over [-1, 1],
+`sympy.plotting.plot(adaptive=True)` uses **289** points (fewer than a fixed 2000), emits no
+warning in sympy 1.14, and draws the same block of vertical connectors. The difference is how
+the two fail: a sampled renderer draws an artefact, the Qt view draws the envelope the data
+actually supports. (`to_sympy()` returns the object sympy made, so its own `adaptive` mode is
+available there.) Fonts and antialiasing are matplotlib's, not the Qt view's, so the two
 renderers cannot look identical, and the style mapping is partial: background, grid (on/off and
 colour/width/alpha/dash), per-curve colour and width, tick and text colours, font sizes, title,
 axis colour/width, the limits, the aspect with matplotlib's own `adjustable`, and

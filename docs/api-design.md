@@ -321,7 +321,11 @@ plotting.
 This path **samples** each expression into arrays, so it is a different renderer with different
 guarantees: oscillating functions alias (the very thing the Qt renderer exists to avoid), the
 look will not match (Qt fonts and antialiasing vs matplotlib's), and only the style properties
-that map are carried over. Its value is vector output (SVG/PDF) and matplotlib's ecosystem —
+that map are carried over. SymPy does not solve the oscillation either, and its adaptive mode
+does not help: measured on `sin(1/x)` over [-1, 1], `adaptive=True` produced **289** points
+(fewer than a fixed 2000), no warning in sympy 1.14, and the same block of vertical connectors.
+The difference is how the two fail — a sampled renderer draws an artefact, the Qt renderer draws
+the envelope the data supports. Its value is vector output (SVG/PDF) and matplotlib's ecosystem —
 nothing else.
 
 ## 10. How Matplotlib-familiar should this be?
