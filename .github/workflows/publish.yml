@@ -13,6 +13,11 @@ name: Publish to PyPI
 # For a project that does not exist on PyPI yet, use the "pending publisher" form there; the
 # first successful run creates the project.
 #
+# A manual run goes to **test.pypi.org**, so that index needs its own publisher entry — the
+# failure mode when it is missing is `invalid-publisher: valid token, but no corresponding
+# publisher`. The action prints the claims it presented; they must match the entry exactly
+# (`environment: pypi` included, or leave the environment blank on both sides).
+#
 # Releasing: bump `version` in pyproject.toml, commit, then
 #   git tag v0.2.0 && git push origin v0.2.0
 
@@ -39,9 +44,9 @@ jobs:
     # `py3-none-any`, so the platform does not affect what is published.
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10
         with:
           enable-cache: true
 
@@ -73,7 +78,7 @@ jobs:
         shell: bash
         run: ls -l dist/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
@@ -87,7 +92,7 @@ jobs:
     permissions:
       id-token: write # the OIDC token that PyPI exchanges for an upload credential
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist/

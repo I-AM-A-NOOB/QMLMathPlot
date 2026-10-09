@@ -365,6 +365,12 @@ be rehearsed:
 pip install -i https://test.pypi.org/simple/ qmlmathplot
 ```
 
+If the publish step fails with `invalid-publisher: valid token, but no corresponding
+publisher`, the trusted-publisher entry is missing or does not match. The action prints the
+claims it presented (`repository`, `workflow_ref`, `environment`) — the entry must match them
+exactly, **including the environment name**, and it must exist on the index the run targets: a
+manual run goes to **test.pypi.org**, a tag push to **pypi.org**, so both need an entry.
+
 The workflow runs on Windows: that is the platform this library is verified on (the shader baker
 `qsb` ships inside the PySide6 wheel and is only confirmed to be present there, see `qsb.py`),
 and the GUI tests need a GPU scene graph no runner has. The artifact is `py3-none-any`, so the
