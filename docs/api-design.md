@@ -159,6 +159,45 @@ swap happening when `shadersChanged` fires.
   per-pixel machinery. `add_series(x, y)` is reserved for it so `add_curve` never has to
   pretend to accept arrays and silently change how the curve is drawn.
 
+## 6b. Implicit curves (`F(x, y) = 0`) — assessed and prototyped
+
+Feasible, and the renderer is unusually well suited: the coverage is the *same* idea as the 1-D
+stroke, one dimension up.
+
+```glsl
+F       = <the expression>            // one evaluation
+Fx, Fy  = <sympy derivatives>         // inlined by the generator, exactly like DF today
+gx      = Fx * spanx / size.x         // |grad F| per pixel, axis by axis
+gy      = Fy * spany / size.y
+d       = abs(F) / sqrt(gx*gx + gy*gy)   // distance to the level set, in pixels
+cov     = clamp(lineWidth/2 + 0.5 - d, 0, 1)
+```
+
+Prototyped with a hard-coded `x*x + y*y - 1` through the existing bake + ShaderEffect pipeline:
+a clean anti-aliased unit circle, stroke 3 device pixels wide for `lineWidth=2` at DPR 1.5, zero
+coverage at the centre, crossings exactly where the geometry says (rows 186-188 and 561-563 of
+750 for ±1 in a [-2, 2] view).
+
+**Cheap**: the shader (three inlined expressions, about ten lines), the API
+(`add_implicit("x**2 + y**2 - 1")`, taking a string or an `Expr` like `add_curve`), and
+everything around it — camera, themes, export, QML — is already artist-agnostic.
+
+**Where the work is**:
+
+* **Thin features and multiple sheets** — the 2-D analogue of the envelope band. One pixel can be
+  crossed by several branches (`F = sin(1/(x*x + y*y))`), and the first-order `|F|/|grad F|`
+  cannot see them; an honest answer needs several samples per pixel plus a spread test, i.e. a
+  two-dimensional version of the 1-D criteria (a2)/(d).
+* **Domain and poles in 2-D** — the 1-D `DOM`/`POLE` machinery does not generalise directly: a
+  pole is now a curve rather than a point.
+* **Cost** — three evaluations per pixel, cheap next to the 1-D stroke's 1 + 8 + 16, but a bigger
+  shader, since `Fx`/`Fy` are inlined the way `DF` is.
+
+Against Matplotlib: it has no first-class implicit plotter — `contour(X, Y, Z, levels=[0])` on a
+sampled grid is the idiom, grid-resolution limited but **vector** output. Ours would be
+resolution-independent with analytic antialiasing, and raster-only (the §9 hand-off is the
+vector route).
+
 ## 7. The camera, ticks and grid
 
 * `zoom` is uniform (world units per pixel) and `aspect` is the ratio of the x unit to the y
