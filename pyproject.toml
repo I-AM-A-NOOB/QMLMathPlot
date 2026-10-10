@@ -1,12 +1,12 @@
 [project]
 name = "qmlmathplot"
-version = "0.1.0"
+version = "0.2.0"
 description = "Embeddable function plotter for Qt Quick / QtWidgets (implicit per-pixel drawing, MVVM)"
 readme = "README.md"
 authors = [
     { name = "I-AM-A-NOOB", email = "suzc08@outlook.com" }
 ]
-requires-python = ">=3.14"
+requires-python = ">=3.11"
 dependencies = [
     "sympy>=1.14",
     "PySide6>=6.7",
