@@ -46,7 +46,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v10
+      # Pinned to an exact release: setup-uv does not publish a moving `vN` tag, so `@v10`
+      # does not resolve (the actions/* below do publish one, which is why they use it).
+      - uses: astral-sh/setup-uv@v10.2.0
         with:
           enable-cache: true
 

@@ -9,7 +9,7 @@ names — see ``theme``.
 from __future__ import annotations
 
 from PySide6.QtCore import Property, QObject, Signal, Slot
-from PySide6.QtGui import QColor, QVector2D
+from PySide6.QtGui import QColor, QImage, QVector2D
 
 from .camera import Camera
 from .curve import DEFAULT_COLOR_CYCLE, Curve, CurveListModel
@@ -61,7 +61,7 @@ class Plot(QObject):
     cameraChanged = Signal()
     curvesChanged = Signal()
     viewChanged = Signal()
-    aspectChanged = Signal()        # forwarded from the camera (the forwarded `aspect`)
+    aspectChanged = Signal()  # forwarded from the camera (the forwarded `aspect`)
     themeChanged = Signal()
 
     backgroundChanged = Signal()
@@ -137,7 +137,9 @@ class Plot(QObject):
     ylim: QVector2D = Property("QVariant", _get_ylim, _set_ylim, notify=viewChanged)
     # `aspect` is forwarded too because a QML *binding* cannot reach through an object chain
     # (`plot.camera.aspect: 1.0` is rejected by QML), while a direct property binds fine.
-    aspect: str | float = Property("QVariant", _get_aspect, _set_aspect, notify=aspectChanged)
+    aspect: str | float = Property(
+        "QVariant", _get_aspect, _set_aspect, notify=aspectChanged
+    )
 
     @Slot(str, "QVariant", "QVariant", str, result=QObject)
     @Slot(str, result=QObject)
@@ -171,10 +173,18 @@ class Plot(QObject):
         """Render this canvas region offscreen and return it (device pixels), see
         ``docs/api-design.md`` §9. QML calls it with no arguments: the live view, its own size.
         """
-        from .export import render      # lazy: a pure-QML app never needs QtWidgets
+        from .export import render  # lazy: a pure-QML app never needs QtWidgets
 
-        return render(self, xlim=xlim, ylim=ylim, width=width, height=height, dpi=dpi,
-                      adjustable=adjustable, transparent=transparent)
+        return render(
+            self,
+            xlim=xlim,
+            ylim=ylim,
+            width=width,
+            height=height,
+            dpi=dpi,
+            adjustable=adjustable,
+            transparent=transparent,
+        )
 
     def to_matplotlib(
         self,
@@ -197,7 +207,9 @@ class Plot(QObject):
         """
         from .mpl import figure_for
 
-        return figure_for(self, xlim=xlim, ylim=ylim, samples=samples, adjustable=adjustable)
+        return figure_for(
+            self, xlim=xlim, ylim=ylim, samples=samples, adjustable=adjustable
+        )
 
     def to_sympy(
         self,
@@ -221,7 +233,9 @@ class Plot(QObject):
         """
         from .mpl import sympy_plot_for
 
-        return sympy_plot_for(self, xlim=xlim, ylim=ylim, samples=samples, adaptive=adaptive)
+        return sympy_plot_for(
+            self, xlim=xlim, ylim=ylim, samples=samples, adaptive=adaptive
+        )
 
     @Slot(str)
     def savefig(self, path: str, *, backend: str = "qt", **kwargs: object) -> None:
@@ -246,9 +260,13 @@ class Plot(QObject):
     # -------------------------------------------------------------- styling
     # The fallbacks repeat matplotlib's default style (themes/default.mplstyle, applied in
     # __init__) so a plot looks the same whether or not a theme was applied.
-    background: QColor = _style(QColor, "background", backgroundChanged, QColor("white"))
+    background: QColor = _style(
+        QColor, "background", backgroundChanged, QColor("white")
+    )
     grid: bool = _style(bool, "grid", gridChanged, False)
-    grid_color: QColor = _style(QColor, "grid_color", gridColorChanged, QColor("#b0b0b0"))
+    grid_color: QColor = _style(
+        QColor, "grid_color", gridColorChanged, QColor("#b0b0b0")
+    )
     grid_width: float = _style(float, "grid_width", gridWidthChanged, 1.07)
     grid_alpha: float = _style(float, "grid_alpha", gridAlphaChanged, 1.0)
     #: "-" | "--" | ":" | "-." (QML turns it into a dash pattern).
@@ -261,8 +279,12 @@ class Plot(QObject):
     font_size: float = _style(float, "font_size", fontSizeChanged, 13.33)
     tick_font_size: float = _style(float, "tick_font_size", tickFontSizeChanged, 13.33)
     title: str = _style(str, "title", titleChanged, "")
-    title_color: QColor = _style(QColor, "title_color", titleColorChanged, QColor("black"))
-    title_font_size: float = _style(float, "title_font_size", titleFontSizeChanged, 16.0)
+    title_color: QColor = _style(
+        QColor, "title_color", titleColorChanged, QColor("black")
+    )
+    title_font_size: float = _style(
+        float, "title_font_size", titleFontSizeChanged, 16.0
+    )
     title_bold: bool = _style(bool, "title_bold", titleBoldChanged, False)
     ticks_visible: bool = _style(bool, "ticks_visible", ticksVisibleChanged, True)
 
@@ -277,8 +299,9 @@ class Plot(QObject):
         self._curves.set_color_cycle(tuple(cycle))
         self.colorCycleChanged.emit()
 
-    color_cycle: list[str] = Property("QVariant", _get_color_cycle, _set_color_cycle,
-                                      notify=colorCycleChanged)
+    color_cycle: list[str] = Property(
+        "QVariant", _get_color_cycle, _set_color_cycle, notify=colorCycleChanged
+    )
 
     def _get_line_width(self) -> float:
         return float(getattr(self, "_line_width", 2.0))
@@ -288,12 +311,13 @@ class Plot(QObject):
         if value == self._get_line_width():
             return
         self._line_width = value
-        self._curves.set_default_line_width(value)   # default for the curves added later
+        self._curves.set_default_line_width(value)  # default for the curves added later
         self.lineWidthChanged.emit()
 
     #: Default line width of new curves (logical pixels).
-    line_width: float = Property(float, _get_line_width, _set_line_width,
-                                 notify=lineWidthChanged)
+    line_width: float = Property(
+        float, _get_line_width, _set_line_width, notify=lineWidthChanged
+    )
 
     def _get_axes_position(self) -> str:
         return getattr(self, "_axes_position", "zero")
@@ -308,15 +332,17 @@ class Plot(QObject):
         self.axesPositionChanged.emit()
 
     #: Where the ticks ride: the axes through world (0,0), or the item's edges.
-    axes_position: str = Property(str, _get_axes_position, _set_axes_position,
-                                  notify=axesPositionChanged)
+    axes_position: str = Property(
+        str, _get_axes_position, _set_axes_position, notify=axesPositionChanged
+    )
 
     def _get_available_themes(self) -> list[str]:
         return list(names())
 
     #: Theme names a host can offer (``themes.names()``); read-only.
-    available_themes: list[str] = Property("QVariant", _get_available_themes,
-                                          notify=available_themesChanged)
+    available_themes: list[str] = Property(
+        "QVariant", _get_available_themes, notify=available_themesChanged
+    )
 
     def _get_theme(self) -> str:
         return getattr(self, "_theme", "")
