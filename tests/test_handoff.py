@@ -178,6 +178,24 @@ def test_to_sympy_returns_a_plot_whose_save_writes_a_file(tmp_path) -> None:
     assert tuple(float(value) for value in handle.ax.get_ylim()) == (-1.0, 1.0)
 
 
+def test_the_hand_off_does_not_reparse_the_expression(monkeypatch) -> None:
+    """Both hand-offs use the expression the curve cached: no ``sympify`` on the string."""
+    import sympy as sp
+
+    calls: list[object] = []
+    real = sp.sympify
+
+    def counting(value, *args, **kwargs):
+        calls.append(value)
+        return real(value, *args, **kwargs)
+
+    plot = _plot()
+    monkeypatch.setattr(sp, "sympify", counting)
+    plot.to_matplotlib(samples=20)
+    plot.to_sympy(samples=20)
+    assert calls == [], "the hand-off must not re-parse the expression string"
+
+
 def test_to_sympy_needs_a_visible_curve() -> None:
     plot = Plot()
     with pytest.raises(ValueError, match="no visible curve"):

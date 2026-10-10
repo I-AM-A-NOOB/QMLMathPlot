@@ -320,6 +320,16 @@ histories and numbers belong here.
     indexable) — which is also the documented sympy flow. Minor: a spine's colour reads back as
     an RGBA tuple (`spine.get_edgecolor()`), not the hex string that was set.
 
+40. **A `Property(str, …)` stringifies before the setter sees it.** `Curve.expression` had to
+    accept both `"sin(x)"` and `sp.sin(x)`; with the property declared as `str`, PySide converts
+    the value *before* calling the setter, so an `sp.Expr` arrived as text and the curve had to
+    `sympify` it back (an `Expr -> str -> Expr` round trip on every assignment, and another one in
+    `mpl.py`). Declaring the property as `"QVariant"` hands the value over unconverted. Measured
+    with a counting `sp.sympify` monkeypatch: `Curve(sp.sin(x))` 0 calls, a string 1, re-setting
+    the same expression (string or object) 0 more, `to_matplotlib()`/`to_sympy()` 0.
+    `tests/test_curve.py::test_expression_accepts_a_string_and_a_sympy_expression` is the
+    regression.
+
 ## Performance (measured)
  ≈ **230 ms** (Windows / D3D11 / 900×600):
 

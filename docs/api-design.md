@@ -429,9 +429,9 @@ deep zoom stays exact (no polyline resampling), and a pole is a gap rather than 
 | `MathPlotWidget` | same public shape, backed by `Plot` |
 | `DEFAULT_VIEW` | `Camera.home` (centre/zoom as configured) |
 
-There is **no compatibility layer**: `PlotController`, `ViewRect` and `MathPlot.qml` were
-deleted and every caller (widget, CLI, demos, tests) migrated in the same change. For a
-single-curve caller the rename is mechanical (`controller.expression` →
+There is **no compatibility layer and there will not be one**: `PlotController`, `ViewRect` and
+`MathPlot.qml` were deleted and every caller (widget, CLI, demos, tests) migrated in the same
+change. For a single-curve caller the rename is mechanical (`controller.expression` →
 `plot.curves.at(0).expression`), and `Camera` replaces `ViewRect` one-for-one.
 
 ## 13. Host chrome: primitives, not a toolbar
@@ -490,7 +490,7 @@ Two consequences worth stating:
 4. `AnnotationListModel` + `underlay`/`overlay` + `mapToScreen`.
 5. **Themes**: the style properties, `plot.theme`, `themes.resolve()` and the vendored
    Matplotlib style sheets (done alongside step 1).
-6. Offscreen exporter (`to_image` / `save_image`) — **shelved** (§9).
+6. Offscreen exporter (`to_image` / `save_image`) — done, with the matplotlib hand-off (§9).
 7. Deprecation shims removed.
 
 Each step is independently shippable and testable; steps 1–2 change existing files, the rest

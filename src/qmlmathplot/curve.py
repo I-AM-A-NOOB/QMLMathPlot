@@ -49,7 +49,7 @@ class Curve(QObject):
 
     def __init__(
         self,
-        expression: str = "sin(x)",
+        expression: str | sp.Expr = "sin(x)",
         color: str | QColor = DEFAULT_COLOR,
         line_width: float = 1.5,
         label: str = "",
@@ -57,7 +57,8 @@ class Curve(QObject):
     ) -> None:
         super().__init__(parent)
         self._symbol = sp.Symbol("x")
-        self._expression = str(expression)
+        self._expression = ""
+        self._expr: sp.Expr = sp.Integer(0)      # replaced by the first assignment below
         self._color = _color(color)
         self._line_width = float(line_width)
         self._label = str(label)
@@ -65,23 +66,53 @@ class Curve(QObject):
         self._error = ""
         self._vertex = QUrl()
         self._fragment = QUrl()
-        self._compile(self._expression)
+        self._set_expression(expression)
 
     # ---------------------------------------------------------------- Expression
     def _get_expression(self) -> str:
         return self._expression
 
-    def _set_expression(self, source: str) -> None:
-        source = str(source)
-        if source == self._expression:
+    def _set_expression(self, source: str | sp.Expr) -> None:
+        """Set the expression from a string (parsed here, once) or from a sympy expression.
+
+        The canonical **string** is what identifies the expression — ``sp.sin(x)`` and
+        ``"sin(x)"`` are the same, and re-setting either is free — while the parsed
+        ``sp.Expr`` is cached for the bake and for the matplotlib hand-off, so neither ever
+        stringifies and re-parses again.
+        """
+        canonical = source if isinstance(source, str) else str(source)
+        if canonical == self._expression:
             return
-        self._expression = source
+        if isinstance(source, sp.Basic):          # already an expression: use it as it is
+            expr: sp.Expr = source
+        else:
+            try:
+                expr = sp.sympify(source, locals={"x": self._symbol})
+            except Exception as exc:
+                # Keep the last parsed expression: the shaders stay, `expression` is what was
+                # typed and `error` says why.
+                self._expression = str(canonical)
+                self._error = f"{type(exc).__name__}: {exc}"
+                self.expressionChanged.emit()
+                self.errorChanged.emit()
+                return
+        self._expression = str(canonical)
+        self._expr = expr
         self.expressionChanged.emit()
-        self._compile(source)
+        self._compile(expr)
 
     # Annotate the value type (PySide6 idiom): Property is a descriptor, so without the
     # annotation a type checker only sees the Property object and flags every read and write.
-    expression: str = Property(str, _get_expression, _set_expression, notify=expressionChanged)
+    # Declared "QVariant" so an ``sp.Expr`` reaches the setter unconverted; the getter is always
+    # the canonical string (QML, a project file and the text field all want one).
+    expression: str | sp.Expr = Property("QVariant", _get_expression, _set_expression,
+                                         notify=expressionChanged)
+
+    def _get_expr(self) -> sp.Expr:
+        return self._expr
+
+    #: The parsed expression currently drawn (read-only): the object form the setter accepts.
+    expr: sp.Expr = Property("QVariant", _get_expr, notify=expressionChanged)
 
     # ------------------------------------------------------------------ Style
     def _get_color(self) -> QColor:
@@ -147,11 +178,10 @@ class Curve(QObject):
 
     error: str = Property(str, _get_error, notify=errorChanged)
 
-    def _compile(self, source: str) -> None:
-        """expression -> GLSL -> .qsb; on failure keep the last working shaders and write the
-        reason into ``error``."""
+    def _compile(self, expr: sp.Expr) -> None:
+        """expr -> GLSL -> .qsb; on failure keep the last working shaders and write the reason
+        into ``error``. The expression is parsed by the setter, never here."""
         try:
-            expr = sp.sympify(source, locals={"x": self._symbol})
             vert_src, frag_src = shader_sources(expr)
             vertex = bake(vert_src, "vert")
             fragment = bake(frag_src, "frag")
@@ -245,11 +275,12 @@ class CurveListModel(QAbstractListModel):
         curve.visibleChanged.connect(lambda c=curve: self._notify(c, (self.VisibleRole,)))
 
     # ---------------------------------------------------------------- public
-    @Slot(str, "QVariant", "QVariant", str, result=QObject)
-    @Slot(str, result=QObject)
+    # "QVariant" so a sympy expression is not stringified on the way in (see Plot.add_curve).
+    @Slot("QVariant", "QVariant", "QVariant", str, result=QObject)
+    @Slot("QVariant", result=QObject)
     def add_curve(
         self,
-        expression: str,
+        expression: "str | sp.Expr",
         color: object = None,
         line_width: object = None,
         label: str = "",

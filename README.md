@@ -31,6 +31,18 @@ An un-themed plot looks like matplotlib (white background, tab10 colours, grey g
 axes through the origin with the tick labels riding them) — the default style sheet is applied
 at construction, so `plot.theme = "default"` is the reset.
 
+`add_curve()` (and `Curve.expression`) accept the expression **either as a string or as a sympy
+expression**: `plot.add_curve(sp.sin(1 / sp.Symbol("x")))` is the same curve as
+`plot.add_curve("sin(1/x)")`. The stored and reported form is always the canonical string — QML,
+a project file and the text field want one — while the parsed expression is cached and exposed as
+`Curve.expr`, which is what re-baking and the matplotlib hand-off use. The object form exists so a
+curve can be composed without string interpolation:
+
+```python
+curve = plot.add_curve("sin(x)")
+plot.add_curve(sp.diff(sp.sympify(curve.expression, locals={"x": sp.Symbol("x")})), label="f'")
+```
+
 `MathPlotWidget` keeps one curve's worth of convenience (`expression`, `error`,
 `line_width`, `curve_color`, `background_color`, `aspect`, `view_bounds()`,
 `reset_view()`, `zoom()`, `pan_pixels()`); everything else lives on the model behind it:

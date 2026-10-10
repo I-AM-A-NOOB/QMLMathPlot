@@ -6,6 +6,7 @@ No GUI: a curve is a plain QObject and the shaders are baked (cached) by ``qsb``
 from __future__ import annotations
 
 import pytest
+import sympy as sp
 from PySide6.QtCore import QModelIndex
 from PySide6.QtGui import QColor
 
@@ -64,9 +65,53 @@ def test_curve_signals_fire_on_real_changes_only() -> None:
     assert seen["style"] == 2                                 # …and nothing on a repeat
 
 
+def test_expression_accepts_a_string_and_a_sympy_expression(monkeypatch) -> None:
+    """The parse happens once, at assignment: an ``Expr`` is never stringified and re-parsed,
+    the canonical string is what identifies the expression, and a real change still re-bakes."""
+    calls: list[object] = []
+    real = sp.sympify
+
+    def counting(value, *args, **kwargs):
+        calls.append(value)
+        return real(value, *args, **kwargs)
+
+    monkeypatch.setattr(sp, "sympify", counting)
+    x = sp.Symbol("x")
+
+    curve = Curve(sp.sin(x))                          # an expression: no parse at all
+    assert calls == [], "an Expr input must not be stringified and re-parsed"
+    assert curve.expression == "sin(x)" and curve.expr == sp.sin(x)
+
+    curve.expression = "cos(x)"                       # a string: exactly one parse
+    assert calls == ["cos(x)"]
+    after_string = curve.fragmentShader
+
+    curve.expression = sp.cos(x)                      # the same expression, as an object
+    assert calls == ["cos(x)"], "the canonical string already matches"
+    assert curve.fragmentShader == after_string, "and nothing re-bakes"
+    curve.expression = "cos(x)"                       # and a repeated string is free too
+    assert calls == ["cos(x)"]
+
+    curve.expression = sp.sin(2 * x)                  # a real change: one string conversion
+    assert calls == ["cos(x)"], "still no parse"
+    assert curve.expression == "sin(2*x)" and curve.fragmentShader != after_string, \
+        "a real change still re-bakes"
+
+    curve.expression = "sin("                         # unparsable: one attempt, shaders kept
+    assert calls == ["cos(x)", "sin("]
+    assert curve.error and curve.expression == "sin(" and curve.expr == sp.sin(2 * x)
+    assert curve.fragmentShader == curve.fragmentShader
+
+    plot = Plot()                                     # the entry point too: `add_curve(expr)`
+    added = plot.add_curve(sp.tan(x))                 # must not stringify on the way in
+    assert calls == ["cos(x)", "sin("], "add_curve(Expr) parsed"
+    assert added.expression == "tan(x)" and added.expr == sp.tan(x)
+
+
 def test_model_roles_and_data() -> None:
     model = CurveListModel()
     curve = model.add_curve("sin(1/x)", color="#ff0000", line_width=3.0, label="pole")
+    assert curve.expr == sp.sin(1 / sp.Symbol("x"))   # the parsed form is cached
     names = model.roleNames()
     assert set(names.values()) == {b"curve", b"expression", b"color", b"lineWidth", b"visible",
                                    b"vertexShader", b"fragmentShader"}

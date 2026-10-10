@@ -27,6 +27,8 @@ if TYPE_CHECKING:  # pragma: no cover - typing only; the real imports stay lazy
 
 __all__ = ["figure_for", "save_via_matplotlib", "sympy_plot_for"]
 
+#: The free symbol every curve is written in (see ``Curve``).
+_SYMBOL = sp.Symbol("x")
 #: Logical pixels to points (96 px/inch, 72 pt/inch): our sizes are in px, matplotlib's in pt.
 PX_TO_PT = 72.0 / 96.0
 #: The DPI the hand-off assumes for sizes that only exist in pixels (the live viewport).
@@ -62,26 +64,27 @@ def _visible_curves(plot: Plot) -> list[Curve]:
             if plot.curves.at(index).visible]
 
 
-def _sample(expression: str, x0: float, x1: float, samples: int) -> tuple[object, object]:
+def _sample(curve: Curve, x0: float, x1: float, samples: int) -> tuple[object, object]:
     """Uniform samples of one curve; NaN where the function is outside its domain.
 
     matplotlib breaks the line at NaN, which is how the hand-off keeps ``log(x)`` from being
     drawn for x < 0. Infinities (poles, ``1/x`` at 0) are turned into NaN as well, so a pole
     breaks the line instead of drawing a connector across it.
+
+    The expression comes from ``Curve.expr``: the curve parsed it once, so no string is parsed
+    again here.
     """
     import numpy
 
-    symbol = sp.Symbol("x")
     try:
-        function = sp.lambdify(symbol, sp.sympify(expression, locals={"x": symbol}),
-                               modules=["numpy"])
+        function = sp.lambdify(_SYMBOL, curve.expr, modules=["numpy"])
         with numpy.errstate(all="ignore"):        # log(x<0) etc.: NaN, not a warning storm
             xs = numpy.linspace(x0, x1, samples)
             ys = numpy.asarray(function(xs), dtype=float)
     except Exception as exc:
-        # Broad on purpose: sympify, lambdify and the evaluation itself all report by raising,
-        # and the caller wants one clear message naming the expression.
-        raise ValueError(f"cannot sample {expression!r}: {exc}") from exc
+        # Broad on purpose: lambdify and the evaluation itself report by raising, and the
+        # caller wants one clear message naming the expression.
+        raise ValueError(f"cannot sample {curve.expression!r}: {exc}") from exc
     if ys.ndim == 0:                              # a constant expression evaluates to a scalar
         ys = numpy.full(xs.shape, float(ys))
     ys[~numpy.isfinite(ys)] = numpy.nan
@@ -162,7 +165,7 @@ def figure_for(
                        fontweight="bold" if plot.title_bold else "normal")
 
     for curve in _visible_curves(plot):
-        xs, ys = _sample(curve.expression, x_range[0], x_range[1], samples)
+        xs, ys = _sample(curve, x_range[0], x_range[1], samples)
         axes.plot(xs, ys, color=curve.color.name(), linewidth=curve.lineWidth * PX_TO_PT,
                   label=curve.label or curve.expression)
     return figure
@@ -207,20 +210,14 @@ def sympy_plot_for(
     is the same one the matplotlib hand-off would show, and every curve keeps its colour.
     """
     _require()                                    # sympy's plotting backend is matplotlib too
-    symbol = sp.Symbol("x")
     curves = _visible_curves(plot)
     if not curves:
         raise ValueError("nothing to hand to sympy: the plot has no visible curve")
     x_range = _pair(xlim, "xlim") if xlim is not None else (plot.xlim.x(), plot.xlim.y())
     y_range = _pair(ylim, "ylim") if ylim is not None else (plot.ylim.x(), plot.ylim.y())
-    expressions = []
-    for curve in curves:
-        try:
-            expressions.append(sp.sympify(curve.expression, locals={"x": symbol}))
-        except Exception as exc:
-            raise ValueError(f"cannot parse {curve.expression!r}: {exc}") from exc
     handle = sp.plotting.plot(
-        *expressions, (symbol, x_range[0], x_range[1]), show=False,
+        *(curve.expr for curve in curves),        # parsed once, by the curve
+        (_SYMBOL, x_range[0], x_range[1]), show=False,
         adaptive=adaptive,                        # see Plot.to_sympy for why False is the default
         nb_of_points=samples,
         label=[curve.label or curve.expression for curve in curves],

@@ -11,6 +11,8 @@ from __future__ import annotations
 from PySide6.QtCore import Property, QObject, Signal, Slot
 from PySide6.QtGui import QColor, QImage, QVector2D
 
+import sympy as sp
+
 from .camera import Camera
 from .curve import DEFAULT_COLOR_CYCLE, Curve, CurveListModel
 from .themes import names, resolve
@@ -141,11 +143,14 @@ class Plot(QObject):
         "QVariant", _get_aspect, _set_aspect, notify=aspectChanged
     )
 
-    @Slot(str, "QVariant", "QVariant", str, result=QObject)
-    @Slot(str, result=QObject)
+    # "QVariant" for the expression so a sympy expression arrives *unconverted*: a `str` slot
+    # would have PySide stringify it first, i.e. the very Expr -> str -> Expr round trip this
+    # signature exists to avoid (QML passes a string, which is unchanged).
+    @Slot("QVariant", "QVariant", "QVariant", str, result=QObject)
+    @Slot("QVariant", result=QObject)
     def add_curve(
         self,
-        expression: str,
+        expression: "str | sp.Expr",
         color: object = None,
         line_width: object = None,
         label: str = "",
