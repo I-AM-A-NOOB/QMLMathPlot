@@ -278,6 +278,14 @@ backend is used**. The implementation sets `QSG_RHI_BACKEND` before
 
 ## Structure (model / view)
 
+The layers are strict about Qt. **`model.py` (expression → GLSL), `themes.py` (style-sheet
+conversion) and `mpl.py` (the sampled hand-off) import no Qt at all** — they are unit-testable
+without a `QApplication`. `Camera`, `Curve` and `Plot` are the **ViewModel**: `QObject`s whose
+`Property`es carry notify signals, which is precisely what the QML component binds to — and why
+a Python-side assignment updates the view with no call in between. `view.py`, `PlotView.qml`,
+`export.py` and `widget.py` are the View/embedding layer and do need Qt; `export.py` and
+`widget.py` import QtWidgets lazily, so a pure-QML host never loads it.
+
 | Layer | File | Responsibility |
 |---|---|---|
 | Model | `src/qmlmathplot/model.py` | expression → GLSL, shader source template (no Qt dependency, unit-testable) |
