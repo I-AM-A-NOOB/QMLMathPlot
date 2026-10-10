@@ -10,7 +10,7 @@ import sympy as sp
 from PySide6.QtCore import QModelIndex
 from PySide6.QtGui import QColor
 
-from qmlmathplot import Curve, CurveListModel
+from qmlmathplot import Curve, CurveListModel, Plot
 
 
 def test_curve_bakes_its_shaders() -> None:
