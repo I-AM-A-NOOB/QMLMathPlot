@@ -155,8 +155,32 @@ class Plot(QObject):
         line_width: object = None,
         label: str = "",
     ) -> Curve:
-        """Add a curve (colour and width default to the plot's cycle and ``lineWidth``)."""
+        """Add a curve (colour and width default to the plot's cycle and ``lineWidth``).
+
+        The artist follows the expression's free symbols: ``x`` (or none) is a 1-D curve
+        ``y = f(x)``, ``x`` **and** ``y`` is an implicit curve — the level set ``F(x, y) = 0``,
+        so ``add_curve("x**2 + y**2 - 1")`` is a circle — and any other free symbol raises
+        ``ValueError`` (substitute parameters first).
+        """
         return self._curves.add_curve(expression, color, line_width, label)
+
+    @Slot("QVariant", "QVariant", "QVariant", str, result=QObject)
+    @Slot("QVariant", result=QObject)
+    def add_implicit(
+        self,
+        expression: str | sp.Expr,
+        color: object = None,
+        line_width: object = None,
+        label: str = "",
+    ) -> Curve:
+        """Add an implicit curve — the level set ``F(x, y) = 0`` — explicitly, whatever the
+        expression's free symbols (``x`` alone gives vertical lines).
+
+        Drawn per pixel like the other artists, with no sampling: ``|F|`` divided by ``|grad F|``
+        in pixels is the distance to the level set. Smooth, single-sheet level sets only for now
+        — thin features and several branches through one pixel are not handled yet.
+        """
+        return self._curves.add_implicit(expression, color, line_width, label)
 
     @Slot(QObject)
     def remove_curve(self, curve: Curve) -> None:

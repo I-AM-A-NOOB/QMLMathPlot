@@ -59,9 +59,15 @@ def _pair(value: Sequence[float], name: str) -> tuple[float, float]:
 
 
 def _visible_curves(plot: Plot) -> list[Curve]:
-    """The curves the Qt view would draw (a hidden curve is not handed over)."""
+    """The curves the Qt view would draw (a hidden curve is not handed over).
+
+    Implicit curves (the level set ``F(x, y) = 0``) are **skipped**: a sampled polyline cannot
+    come from an implicit expression (the faithful route would be a ``contour`` on a grid, i.e. a
+    different renderer with a grid resolution), and this hand-off refuses to pretend. A plot made
+    of implicit curves only is therefore empty here — use the Qt export for it.
+    """
     return [plot.curves.at(index) for index in range(len(plot.curves))
-            if plot.curves.at(index).visible]
+            if plot.curves.at(index).visible and not plot.curves.at(index).implicit]
 
 
 def _sample(curve: Curve, x0: float, x1: float, samples: int) -> tuple[object, object]:

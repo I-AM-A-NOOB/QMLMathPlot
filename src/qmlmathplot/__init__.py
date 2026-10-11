@@ -51,7 +51,7 @@ Demos: ``examples/minimal.py``, ``examples/explorer_qtwidgets.py``,
 from typing import TYPE_CHECKING
 
 from .camera import HOME_SIZE, HOME_VIEW, Camera, nice_ticks
-from .curve import Curve, CurveListModel
+from .curve import Curve, CurveListModel, ImplicitCurve
 from .plot import Plot
 from .view import QML_MAJOR, QML_MINOR, QML_URI, qml_component_path, register_qml_types
 
@@ -64,6 +64,7 @@ __all__ = [
     "CurveListModel",
     "HOME_SIZE",
     "HOME_VIEW",
+    "ImplicitCurve",
     "MathPlotWidget",
     "nice_ticks",
     "Plot",

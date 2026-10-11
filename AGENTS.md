@@ -330,6 +330,29 @@ histories and numbers belong here.
     `tests/test_curve.py::test_expression_accepts_a_string_and_a_sympy_expression` is the
     regression.
 
+41. **In the 1-D shader, `y` is the pixel's own coordinate — so `x**2 + y**2 - 1` was silently a
+    different curve.** The 1-D fragment template declares `float y` (the pixel's vertical
+    position) and strokes `y = F(x_i)`, so an expression with *both* symbols was evaluated as
+    `F(x, y_pixel)`: the level set of `y - F = 0`. Measured before the fix: `x**2 + y**2 - 1`
+    drew a circle centred at **y = +1/2** (`y² - y + x² - 1 = 0` → `(y-½)² + x² = 5/4`),
+    `x²/4 + y²/3 - 1` at **y = +3/2**, `x²/4 - y²/3 - 1` at **y = -3/2** — and the stroke width
+    varied with the slope of that pseudo-conic. The fix is the template following the expression: `{x}`
+    (or nothing) is the 1-D stroke, `{x, y}` is the level set, for both `add_curve` and an
+    assignment to `expression` (the explorers' text field turns a function into a circle in
+    place), with `ImplicitCurve`/`add_implicit` forcing the level-set template and any other free
+    symbol refused (`ValueError` from the API, the same message through `Curve.error` on
+    assignment, keeping the curve that was drawn). The implicit template prints the expression with
+    two macro parameters — `#define F(x, y) (…)` — which means printing it with
+    `func_glsl(expr, "x")` (the `name` argument *substitutes* a single symbol, so passing "x" for
+    an expression that already uses x and y is the no-substitution case) and calling the macro
+    with the plain pixel coordinates, so no extra parentheses are needed (item 1 is about
+    *offset* arguments). Measured after the fix, unit circle in a [-2, 2]² view (900×900 device
+    px, DPR 1.5, 1 world unit = 225 px): the centre column lights rows 223..676 (expected 225 and
+    675), the 9×9 centre block is blank, and the stroke measures 3.00 / 2.96 / 3.00 / 2.96 device
+    pixels at 0°/45°/90°/135° (nominal 3.0, spread 0.04) by the coverage-integral method of item
+    24. The Qt export needed no change; the matplotlib hand-off skips implicit curves (a level
+    set has no polyline) and says so.
+
 ## Performance (measured)
  ≈ **230 ms** (Windows / D3D11 / 900×600):
 

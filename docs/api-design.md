@@ -159,9 +159,14 @@ swap happening when `shadersChanged` fires.
   per-pixel machinery. `add_series(x, y)` is reserved for it so `add_curve` never has to
   pretend to accept arrays and silently change how the curve is drawn.
 
-## 6b. Implicit curves (`F(x, y) = 0`) — assessed and prototyped
+## 6b. Implicit curves (`F(x, y) = 0`) — implemented
 
-Feasible, and the renderer is unusually well suited: the coverage is the *same* idea as the 1-D
+`add_curve` routes by the expression's free symbols — `{x}` (or none) to the 1-D stroke,
+`{x, y}` to the level set, anything else raises ("must be substituted first") — and
+`add_implicit(...)` forces the level-set artist. Assignment re-routes the same curve, so the
+explorers' text field and `MathPlotWidget.expression` turn `sin(x)` into a circle in place.
+
+The renderer is unusually well suited to this: the coverage is the *same* idea as the 1-D
 stroke, one dimension up.
 
 ```glsl
@@ -173,10 +178,17 @@ d       = abs(F) / sqrt(gx*gx + gy*gy)   // distance to the level set, in pixels
 cov     = clamp(lineWidth/2 + 0.5 - d, 0, 1)
 ```
 
-Prototyped with a hard-coded `x*x + y*y - 1` through the existing bake + ShaderEffect pipeline:
-a clean anti-aliased unit circle, stroke 3 device pixels wide for `lineWidth=2` at DPR 1.5, zero
-coverage at the centre, crossings exactly where the geometry says (rows 186-188 and 561-563 of
-750 for ±1 in a [-2, 2] view).
+Measured after implementing it (900x900 device pixels, one world unit = 225 px, the unit circle
+in a [-2, 2]² view): the centre column lights rows 223..676 — the geometry says 225 and 675, i.e.
+the crossings at ±1/4 of the height — the middle 9x9 block is blank, the extent is 223..676 on
+both axes, and the stroke width by the coverage integral (AGENTS item 24's method) is
+**3.00 / 2.96 / 3.00 / 2.96** device pixels at 0°/45°/90°/135° for a nominal 3.0, a spread of
+0.04.
+
+Before this, `x**2+y**2-1` went to the 1-D renderer, where `y` is the *pixel's* coordinate, so it
+stroked the solution set of `y = F(x, y)` — a different conic. That is exactly what the
+maintainer reported: centres at y = 1/2, 3/2 and −3/2 for `x**2+y**2-1`, `(x**2)/4+(y**2)/3-1`
+and `(x**2)/4-(y**2)/3-1`, which are the y-vertices `-b/(2a)` of `y - F = 0` (AGENTS item 41).
 
 **Cheap**: the shader (three inlined expressions, about ten lines), the API
 (`add_implicit("x**2 + y**2 - 1")`, taking a string or an `Expr` like `add_curve`), and

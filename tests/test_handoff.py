@@ -178,6 +178,21 @@ def test_to_sympy_returns_a_plot_whose_save_writes_a_file(tmp_path) -> None:
     assert tuple(float(value) for value in handle.ax.get_ylim()) == (-1.0, 1.0)
 
 
+def test_the_hand_off_skips_implicit_curves() -> None:
+    """A level set has no polyline: the sampled hand-off skips it (documented in mpl.py) rather
+    than pretending, and a plot made only of implicit curves is empty there."""
+    plot = _plot()
+    plot.add_curve("x**2 + y**2 - 1")
+    axes = plot.to_matplotlib(xlim=(-2, 2), ylim=(-2, 2)).axes[0]
+    assert [line.get_label() for line in axes.lines] == ["sin(1/x)"]
+
+    implicit_only = Plot()
+    implicit_only.add_curve("x**2 + y**2 - 1")
+    assert len(implicit_only.to_matplotlib().axes[0].lines) == 0
+    with pytest.raises(ValueError, match="no visible curve"):
+        implicit_only.to_sympy()
+
+
 def test_the_hand_off_does_not_reparse_the_expression(monkeypatch) -> None:
     """Both hand-offs use the expression the curve cached: no ``sympify`` on the string."""
     import sympy as sp

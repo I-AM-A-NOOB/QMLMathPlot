@@ -21,9 +21,11 @@ from sympy.printing.precedence import PRECEDENCE
 
 __all__ = [
     "FRAGMENT_TEMPLATE",
+    "IMPLICIT_FRAGMENT_TEMPLATE",
     "VERTEX_SHADER",
     "dfunc_glsl",
     "func_glsl",
+    "implicit_shader_sources",
     "shader_sources",
 ]
 
@@ -513,6 +515,74 @@ void main() {
 }
 """
 
+
+# Implicit curves: the level set F(x, y) = 0, stroked by the same first-order idea as the 1-D
+# stroke, one dimension up. One evaluation of F and its two partials give the distance to the
+# level set in pixels:
+#
+#     d = |F| / |grad F in pixels|,  cov = clamp(lineWidth/2 + 0.5 - d, 0, 1)
+#
+# No sampling loop and no envelope band: this is the single-sheet, smooth case (thin features and
+# several branches of F through one pixel, e.g. sin(1/(x*x + y*y)), are a separate problem —
+# docs/api-design.md §6b). Out-of-domain pixels (log(x), sqrt, …) come out NaN and are dropped,
+# so there is no DOM/POLE machinery here either.
+IMPLICIT_FRAGMENT_TEMPLATE = """#version 440
+layout(location = 0) in vec2 vUV;
+layout(location = 0) out vec4 fragColor;
+layout(std140, binding = 0) uniform buf {
+    mat4 qt_Matrix;
+    float qt_Opacity;
+    vec4 camera;      // centre.x, centre.y, world units per logical pixel (x, y)
+    vec2 size;        // viewport size (logical pixels)
+    float lineWidth;  // line width (logical pixels)
+    vec4 color;       // non-premultiplied rgba
+};
+
+// Argument reduction: the GPU's built-in sin/cos are unreliable for large arguments;
+// fold into [0,2π) before calling
+#define TAU 6.283185307179586
+float _wrap(float t) { return t - TAU * floor(t * (1.0 / TAU)); }
+#define SIN(t) sin(_wrap(t))
+#define COS(t) cos(_wrap(t))
+
+// F is a macro with two parameters (text substitution; the call always passes the plain pixel
+// coordinates, so no extra parentheses are needed — see the note in the 1-D template).
+#define F(x, y) (@FUNC@)
+#define FX @DFUNCX@
+#define FY @DFUNCY@
+
+void main() {
+    float x = camera.x + (vUV.x - 0.5) * size.x * camera.z;
+    float y = camera.y + (0.5 - vUV.y) * size.y * camera.w;
+
+    float f = F(x, y);
+    // |grad F| in pixels: the partial derivative per world unit times the world units per pixel
+    float gx = FX * camera.z;
+    float gy = FY * camera.w;
+    // Distance from this pixel to the level set, in pixels. The floor keeps a critical point of
+    // F (grad F = 0, e.g. the apex of a degenerate level set) from dividing by zero.
+    float d = abs(f) / max(sqrt(gx * gx + gy * gy), 1e-9);
+
+    float cov = clamp(lineWidth * 0.5 + 0.5 - d, 0.0, 1.0);
+    float a = cov * color.a * qt_Opacity;
+    if (isnan(f) || isinf(f)) {
+        a = 0.0;                       // pixels where F itself is undefined
+    }
+    fragColor = vec4(color.rgb * a, a);   // premultiplied alpha
+}
+"""
+
+
+def implicit_shader_sources(expr: sp.Expr) -> tuple[str, str]:
+    """Vertex/fragment shader sources for an implicit curve (the level set ``F(x, y) = 0``).
+
+    Same uniform block as the 1-D shader, so the QML side and the curve model need no special
+    case: only the expressions differ.
+    """
+    return (VERTEX_SHADER, IMPLICIT_FRAGMENT_TEMPLATE
+            .replace("@FUNC@", func_glsl(expr, "x"))
+            .replace("@DFUNCX@", func_glsl(sp.diff(expr, sp.Symbol("x")), "x"))
+            .replace("@DFUNCY@", func_glsl(sp.diff(expr, sp.Symbol("y")), "x")))
 
 def shader_sources(expr: sp.Expr) -> tuple[str, str]:
     """Vertex/fragment shader sources for the QML front end (implicit model)."""

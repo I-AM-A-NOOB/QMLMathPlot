@@ -121,9 +121,9 @@ The model:
 
 | Object | Members |
 |---|---|
-| `Plot` | `camera`, `curves`, `xlim`/`ylim`/`aspect` (forwarded), `add_curve()` / `remove_curve()`, `available_themes`, and the style properties: `background`, `grid`, `grid_color`, `grid_width`, `grid_alpha`, `grid_style`, `axis_color`, `axis_width`, `axes_position`, `color_cycle`, `line_width`, `text_color`, `tick_color`, `tick_length`, `font_size`, `tick_font_size`, `title`, `title_color`, `title_font_size`, `title_bold`, `ticks_visible`, `theme` |
+| `Plot` | `camera`, `curves`, `xlim`/`ylim`/`aspect` (forwarded), `add_curve()` / `add_implicit()` / `remove_curve()`, `available_themes`, and the style properties: `background`, `grid`, `grid_color`, `grid_width`, `grid_alpha`, `grid_style`, `axis_color`, `axis_width`, `axes_position`, `color_cycle`, `line_width`, `text_color`, `tick_color`, `tick_length`, `font_size`, `tick_font_size`, `title`, `title_color`, `title_font_size`, `title_bold`, `ticks_visible`, `theme` |
 | `Camera` | `centre`, `zoom` (world units per logical pixel), `aspect`, `xlim`/`ylim` (derived), `ticks_x`/`ticks_y`, `zoomStep` / `panEnabled` / `zoomEnabled`, slots `setViewport(w, h)` / `zoom_by(delta, u, v, w, h)` / `pan_pixels(dx, dy)` / `reset()` |
-| `Curve` | `expression`, `color`, `lineWidth`, `visible`, `label`, `error` (read-only), the baked `vertexShader` / `fragmentShader` |
+| `Curve` | `expression` (string or sympy expression), `expr` (the parsed expression, read-only), `implicit`, `color`, `lineWidth`, `visible`, `label`, `error` (read-only), the baked `vertexShader` / `fragmentShader` |
 | `CurveListModel` | the curves as a model (`curve`, `expression`, `color`, `lineWidth`, `visible`, `vertexShader`, `fragmentShader` roles) so QML puts one `ShaderEffect` behind each |
 
 Every setter is a Qt `Property` with a notify signal, so the same calls work from QML, from a
@@ -142,6 +142,35 @@ while the *mechanism* is refused — no `Figure`/`Axes`/`subplots` (one view per
 bounded page), no `FigureCanvas`/`draw()` (the scene is live), no toolbar and no legend (host
 chrome), and an export is a canvas region at a pixel size rather than a re-rendered page
 (§9, implemented — see *Export* below).
+
+## Implicit curves
+
+An expression whose free symbols are `x` **and** `y` is drawn as the level set `F(x, y) = 0`.
+The artist follows the expression, whoever sets it: `add_curve` routes it by itself, assigning to
+`curve.expression` re-routes the same curve (so a text field can turn `sin(x)` into a circle),
+and `add_implicit` asks for the level-set artist explicitly — also for a function of `x` alone,
+which is a pair of vertical lines. Only a *third* free symbol is refused: substitute parameters
+first.
+
+```python
+plot.add_curve("x**2 + y**2 - 1")        # a circle: {x, y} routes to the level-set artist
+plot.add_implicit("x*y - 1")             # the same artist, asked for by name
+plot.curves.at(0).expression = "x**2 + y**2 - 4"   # re-routes the curve that is already there
+plot.add_curve("a*sin(x)")               # ValueError: substitute `a` first
+```
+
+The renderer is the same idea as the 1-D stroke, one dimension up: one evaluation of `F` and its
+two partials per pixel give the distance to the level set in *pixels*,
+`d = |F| / sqrt((Fx·dx)² + (Fy·dy)²)`, and the coverage is `clamp(lineWidth/2 + 0.5 - d, 0, 1)` —
+analytic antialiasing and a stroke width that does not depend on the angle, with no sampling grid
+(the unit circle measures the same 3 device pixels at 0°, 45°, 90° and 135° for `lineWidth=2` at
+DPR 1.5).
+
+Known limit: **smooth, single-sheet level sets**. Thin features and several branches through one
+pixel (`sin(1/(x*x + y*y))`), and 2-D domains/poles, are not handled yet — the assessment is
+`docs/api-design.md` §6b; pixels where `F` is undefined are dropped. The matplotlib hand-off
+skips implicit curves (a level set has no polyline to sample), while the Qt export renders them
+like anything else.
 
 ## The camera (centre, zoom, aspect)
 
@@ -334,7 +363,12 @@ QSG_RHI_BACKEND=opengl uv run pytest -m gui
   (the home view at the first size, resize keeping the scale, an anchored zoom that
   is exactly reversible, the aspect expanding but never cropping, ticks).
 - `test_curve.py`: a failed expression keeps the last working shaders, the style
-  setters are idempotent, and the list model reports the right roles.
+  setters are idempotent, and the list model reports the right roles — plus the
+  `Expr`/string round-trip accounting (a string is parsed once, an expression never).
+- `test_implicit.py`: the routing by free symbols (and the `ValueError` for a third symbol), the
+  level-set shader text (same uniform block as the 1-D one, no sampling loop), and the rendered
+  geometry of a unit circle: crossings a quarter of the height from each edge, a blank middle,
+  radius 1 on both axes, and a stroke of the same width at 0°/45°/90°/135°.
 - `test_plot.py`: the plot's properties convert, notify exactly once and are wired
   (a PySide property with an unresolved notify name silently loses it), the defaults are
   matplotlib's default style, the limits are forwarded to the camera, and a theme applies
