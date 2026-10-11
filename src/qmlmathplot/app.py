@@ -1,7 +1,10 @@
-"""MVP entry point: wraps the component into a minimal verifiable window (called by `main.py` /
-`uv run qmlmathplot`).
+"""MVP entry point: wraps the component into a minimal verifiable window.
 
-    python main.py --backend d3d11 "sin(1/x)"
+Reachable as the installed ``qmlmathplot`` console script, as ``python -m qmlmathplot``, and as
+``examples/minimal.py``:
+
+    python -m qmlmathplot --backend d3d11 "sin(1/x)"
+    uv run qmlmathplot "tan(x)"
 
 The RHI backend comes from the launch argument; without it, Qt's default backend is used. When
 specified it must be written to ``QSG_RHI_BACKEND`` *before* ``QGuiApplication`` — Qt reads it
