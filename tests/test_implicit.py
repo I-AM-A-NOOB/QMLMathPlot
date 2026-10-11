@@ -262,3 +262,26 @@ def test_implicit_circle_reaches_its_radius(app: QGuiApplication) -> None:
     assert max(columns) - centre_x == pytest.approx(radius, abs=4 * ratio)
     assert centre_y - min(rows) == pytest.approx(radius, abs=4 * ratio)
     assert max(rows) - centre_y == pytest.approx(radius, abs=4 * ratio)
+
+
+@pytest.mark.gui
+def test_a_partial_that_is_not_a_single_term_still_strokes(app: QGuiApplication) -> None:
+    """d/dx (x-1)**2 = 2*x - 2 is a *sum*, so an unparenthesized ``FX`` macro splices into
+    ``gx = FX * camera.z`` as ``2*x - 2 * camera.z``: the gradient loses the per-pixel scale and
+    the coverage becomes ``|f|/2``, which lights the whole disc (measured 16221 of ~40000
+    sampled pixels, i.e. a disc of radius ~2 instead of the radius-1 ring). A real stroke covers
+    the circumference times the width — about 1 % of the image — so a few percent is the line
+    between a stroke and a fill.
+    """
+    plot = Plot()
+    plot.grid = False
+    plot.ticks_visible = False
+    plot.line_width = 2.0
+    plot.add_curve("(x-1)**2+y**2-1")          # centred at (1, 0), radius 1
+    image = _render(plot, app)
+
+    lit = sum(1 for x in range(0, image.width(), 2) for y in range(0, image.height(), 2)
+              if _lit(image, x, y))
+    total = (image.width() // 2 + 1) * (image.height() // 2 + 1)
+    assert lit > 0, "nothing is drawn"
+    assert lit < 0.05 * total, f"{lit}/{total} pixels lit: the disc filled instead of stroking"

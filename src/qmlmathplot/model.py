@@ -546,10 +546,14 @@ float _wrap(float t) { return t - TAU * floor(t * (1.0 / TAU)); }
 #define COS(t) cos(_wrap(t))
 
 // F is a macro with two parameters (text substitution; the call always passes the plain pixel
-// coordinates, so no extra parentheses are needed — see the note in the 1-D template).
+// coordinates, so no extra parentheses are needed on the arguments — see the note in the 1-D
+// template). FX/FY are *object-like* macros, i.e. the definition is spliced into a product
+// (`gx = FX * camera.z`), so the definition itself must be parenthesized: a partial that is not
+// a single term, e.g. d/dx (x-1)^2 = 2*x - 2, otherwise expands to `2*x - 2 * camera.z` and the
+// gradient (hence the coverage) comes out wrong.
 #define F(x, y) (@FUNC@)
-#define FX @DFUNCX@
-#define FY @DFUNCY@
+#define FX (@DFUNCX@)
+#define FY (@DFUNCY@)
 
 void main() {
     float x = camera.x + (vUV.x - 0.5) * size.x * camera.z;
