@@ -325,26 +325,22 @@ vec2 _edge_du(float ex) {
 
 // Distance (logical px) from a pixel to the boundary ray: the polyline's infinite extension
 // along a slowly diverging domain boundary (log(x) as x→0+), which a fixed-width sampling
-// window can never reach. nl/nh are the column's sampled extremes; a sentinel means "no valid
-// sample here", which still needs the ray — a pixel just outside the domain (left of log(x)'s
-// boundary) has no samples of its own but lies inside the stroke's band, which is centred on
-// the boundary; the ray then starts at the viewport edge, enough to cover anything visible.
-// The ray is only drawn when the samples have *not* already reached that viewport edge: if the
-// polyline already leaves the viewport it covers the visible part on its own, and extending it
-// would be a connector.
+// window can never reach. nl/nh are the column's extremes — its own valid samples, or the
+// probe taken just inside the domain when the column has none (see main). The ray is drawn
+// only when those samples have *not* already reached that viewport edge: if the polyline
+// already leaves the viewport it covers the visible part on its own, and extending it would
+// be a connector.
 float _ray_dist(vec2 p, float ex, vec2 du, float nl, float nh,
                 float y_top, float y_bot, float sx, float sy) {
     float d = 1e30;
-    if (ex >= 1e29) {
+    if (ex >= 1e29 || nl >= 1e29) {
         return d;
     }
-    if (du.x != 0.0 && (nl >= 1e29 || nl > y_bot)) {
-        float start = nl < 1e29 ? nl : y_top;
-        d = min(d, _seg_dist(p, vec2(ex * sx, start * sy), vec2(ex * sx, -1e12)));
+    if (du.x != 0.0 && nl > y_bot) {
+        d = min(d, _seg_dist(p, vec2(ex * sx, nl * sy), vec2(ex * sx, -1e12)));
     }
-    if (du.y != 0.0 && (nh <= -1e29 || nh < y_top)) {
-        float start = nh > -1e29 ? nh : y_bot;
-        d = min(d, _seg_dist(p, vec2(ex * sx, start * sy), vec2(ex * sx, 1e12)));
+    if (du.y != 0.0 && nh > -1e29 && nh < y_top) {
+        d = min(d, _seg_dist(p, vec2(ex * sx, nh * sy), vec2(ex * sx, 1e12)));
     }
     return d;
 }
@@ -385,10 +381,31 @@ void main() {
     float edge_r = (lineWidth * 0.5 + 0.5) * dx;   // stroke radius, world units
     float ex_ = _edge_hit(x - 0.9375 * dx - edge_r, x + 0.8125 * dx + edge_r);
     vec2 du_ = (ex_ < 1e29) ? _edge_du(ex_) : vec2(0.0, 0.0);
+    // A column with no valid sample (a pixel just outside the domain) still lies inside the
+    // stroke's band around the boundary, so the band must be evaluated there too — but its
+    // extent has to come from the function itself, probed just inside the domain, since every
+    // sample of such a column is out of domain. Judging it by the sentinel alone drew a
+    // full-height line at `log(x-1)`'s boundary in a shallow view (where the visible curve is
+    // nowhere near the boundary), while ignoring those pixels altogether cost the descent its
+    // whole outer half (1.00-1.67 of the nominal 3.00 device px) in a deep one.
+    float edge_nl = 1e30;
+    float edge_nh = -1e30;
+    if (ex_ < 1e29) {
+        float probe_r = F(ex_ + 0.25 * dx);
+        float probe_l = F(ex_ - 0.25 * dx);
+        if (probe_r == probe_r && abs(probe_r) < 1e30) {
+            edge_nl = min(edge_nl, probe_r);
+            edge_nh = max(edge_nh, probe_r);
+        }
+        if (probe_l == probe_l && abs(probe_l) < 1e30) {
+            edge_nl = min(edge_nl, probe_l);
+            edge_nh = max(edge_nh, probe_l);
+        }
+    }
 
     if (!DOM(x)) {
         float cov = clamp(lineWidth * 0.5 + 0.5
-                          - _ray_dist(vec2(x * sx, y * sy), ex_, du_, 1e30, -1e30,
+                          - _ray_dist(vec2(x * sx, y * sy), ex_, du_, edge_nl, edge_nh,
                                       y_top, y_bot, sx, sy),
                           0.0, 1.0);
         fragColor = vec4(color.rgb * cov * color.a * qt_Opacity, cov * color.a * qt_Opacity);
@@ -543,8 +560,10 @@ void main() {
             }
             // Infinite extension along a slowly diverging boundary (log(x) as x→0+): the ray
             // lies on the boundary x, so the width stays constant and the columns align. See
-            // _ray_dist for when it is drawn.
-            dmin = min(dmin, _ray_dist(p, ex_, du_, nl, nh, y_top, y_bot, sx, sy));
+            // _ray_dist for when it is drawn. A column whose own samples are all out of domain
+            // borrows the probe taken above, so the band keeps its width there too.
+            dmin = min(dmin, _ray_dist(p, ex_, du_, nl < 1e29 ? nl : edge_nl,
+                                       nh > -1e29 ? nh : edge_nh, y_top, y_bot, sx, sy));
             cov = clamp(lineWidth * 0.5 + 0.5 - dmin, 0.0, 1.0);
         }
         if (w > 0.0) {

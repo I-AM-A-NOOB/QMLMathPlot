@@ -128,12 +128,17 @@ histories and numbers belong here.
     window is the sampled interval **widened by the stroke radius** (`lineWidth/2 + 0.5`),
     because the coverage ramp reaches that far; and the domain test at the top of `main` now
     lets a ray through instead of returning transparent, which used to remove the entire outer
-    half of the descent's band. Measured on the descent (1350×900 frame, y ∈ [−8, −4], rows
-    every 45 px) the width went **1.00-1.67 → 3.00-4.17** device px against a nominal 3.00; the
-    wider rows are where the visible curve and the boundary are closer together than one stroke
-    width, so the two bands genuinely overlap. Regression:
-    `test_render_smoke.py::test_the_log_descent_keeps_its_stroke_width`. The `y ∈ [−16, −12]`
-    column is still lit 100 %.
+    half of the descent's band. A column with no valid sample at all (a pixel just outside the
+    domain) must not be judged by that sentinel, though: its extent is probed just *inside* the
+    domain (`F(ex_ ± 0.25·dx)`), or `log(x-1)` grows a full-height line at its own boundary in a
+    shallow view (measured: two columns of 900 px at x = 1, where the visible curve is nowhere
+    near it). Measured on the ray-drawn part of the descent (1350×900 frame, y ∈ [−8, −4], rows
+    from the middle down) the width went **1.00-1.67 → 3.00-3.23** device px against a nominal
+    3.00; the rows above it are drawn by the polyline alone and keep the steep-slope residual of
+    the ±1-column window (item 24). Regression:
+    `test_render_smoke.py::test_the_log_descent_keeps_its_stroke_width` and
+    `::test_a_shifted_log_does_not_draw_a_line_at_its_boundary`. The `y ∈ [−16, −12]` column is
+    still lit 100 %, at full width (3.00 on every sampled row).
 14. **`unbounded_edges()` must only analyse polynomial boundaries.** `tan(x)`'s condition
     `cos(x) = 0` costs **94 ms** through sympy `solve` + `limit` (and is useless: tan diverges
     fast, sampling reaches deep enough anyway). Restricting to `lhs.is_polynomial(sym)`

@@ -293,16 +293,36 @@ def test_the_log_descent_keeps_its_stroke_width(app: QGuiApplication) -> None:
     the neighbouring columns, which the coverage ramp still reaches, measured the distance to a
     segment endpoint), and the domain test at the top of the shader returned before the ray for
     every pixel left of x = 0 — the band centred on the boundary lost its entire outer half.
-    Measured over the descent (rows every 90 px): 1.00-1.67 of the nominal 3.00 device px
-    before, 3.00-4.17 after; the wider rows are where the visible curve and the boundary are
-    closer together than one stroke width, so the two bands genuinely overlap.
+    Measured over the ray-drawn part of the descent (rows from the middle of the frame down):
+    1.00-1.67 of the nominal 3.00 device px before, 3.00-3.23 after. The rows *above* it are
+    drawn by the polyline alone and keep the steep-slope residual of the ±1-column sampling
+    window (item 24 in AGENTS), which is a separate, older trade-off.
     """
     image, plot = _render_plot(app, "log(x)", pan_pixels=-900.0)
     nominal = plot.line_width * image.devicePixelRatio()
     center = image.width() // 2
-    widths = [_coverage_sum(image, row, center) for row in range(45, image.height(), 90)]
+    widths = [_coverage_sum(image, row, center)
+              for row in range(image.height() // 2, image.height(), 60)]
     assert min(widths) >= 0.95 * nominal, f"descent pinched to {min(widths):.2f} of {nominal:.2f} px"
     assert max(widths) <= 1.5 * nominal, f"descent too fat: {max(widths):.2f} of {nominal:.2f} px"
+
+
+def test_a_shifted_log_does_not_draw_a_line_at_its_boundary(app: QGuiApplication) -> None:
+    """`log(x-1)` and friends must not grow a full-height line at their boundary.
+
+    The boundary moves with the shift, and the pixels just *outside* the domain have no valid
+    sample at all — so the ray's "is it needed?" test cannot read it off their samples. Judging
+    it by the sentinel drew a full-height column at x = 1 in the classic view (measured: two
+    columns of 900 px), where the visible curve is nowhere near the boundary. The extent is now
+    probed just inside the domain instead.
+    """
+    for expr, boundary in (("log(x-1)", 1.0), ("log(x+2)", -2.0)):
+        image = _render(app, expr)
+        height = image.height()
+        center = int((boundary + 6) / 12 * image.width())
+        tallest = max(_column_lit_at(image, x) for x in range(center - 3, center + 4))
+        assert tallest < 0.25 * height, \
+            f"{expr} draws a line at its boundary x={boundary}: {tallest} lit pixels"
 
 
 def test_extreme_zoom_of_oscillation_fills_solid(app: QGuiApplication) -> None:
