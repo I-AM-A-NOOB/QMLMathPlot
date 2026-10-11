@@ -249,6 +249,59 @@ def test_implicit_curve_exports_through_the_qt_path(app: QGuiApplication) -> Non
     assert not _lit(image, image.width() // 2, image.height() // 2), "the middle must be blank"
 
 
+#: The view the blank exports were reported at, and the device pixel size they asked for.
+EXPORT_VIEW = 2.5
+EXPORT_SIZE = 400
+
+
+def _export_plot(expression: str) -> Plot:
+    """The reported configuration: a camera told it is 400 logical px wide, showing ±2.5."""
+    plot = Plot()
+    plot.grid = False
+    plot.ticks_visible = False
+    plot.line_width = 2.0
+    plot.add_curve(expression)
+    plot.camera.setViewport(EXPORT_SIZE, EXPORT_SIZE)
+    plot.xlim = (-EXPORT_VIEW, EXPORT_VIEW)
+    plot.ylim = (-EXPORT_VIEW, EXPORT_VIEW)
+    return plot
+
+
+def _lit_samples(image: QImage) -> int:
+    return sum(1 for x in range(0, image.width(), 2) for y in range(0, image.height(), 2)
+               if _lit(image, x, y))
+
+
+@pytest.mark.gui
+def test_the_default_export_range_is_the_camera_view(app: QGuiApplication) -> None:
+    """The minimal pair — ``x**2/4 + y**2/3 - 1`` (ellipse) vs ``x**2/4 - y**2/3 - 1``
+    (hyperbola), one sign apart — exported with **no explicit range**, the path the reported
+    blank image took.
+
+    Root cause, measured: ``export.render`` derived the default range from the offscreen
+    widget's *logical* size, ``width / devicePixelRatio``, while the camera's scale is world
+    units per logical pixel *of the live view*. At DPR 1.5 a 400x400 device-pixel export is a
+    267-logical-pixel widget, so the camera's ±2.5 view came out as ±1.67: the hyperbola's
+    entire visible arc (|x| >= 2) fell outside the image (0 lit samples, against 673 for the
+    ellipse, which still crosses ±1.67). The shader was never at fault — painting the
+    fragment's own ``camera.z`` and ``size.x`` instead of the curve showed 0.0125 and **267**
+    for that export. The camera's view cannot depend on how many pixels are asked for: the
+    same camera at half the pixels must show the same region, which is also what fails on a
+    DPR-1 screen, where the two only coincide at 400x400.
+    """
+    lit = {}
+    for expression in ("x**2/4+y**2/3-1", "x**2/4-y**2/3-1"):
+        for size in (EXPORT_SIZE, EXPORT_SIZE // 2):
+            image = _export_plot(expression).to_image(width=size, height=size)
+            lit[expression, size] = _lit_samples(image)
+    # 958 / 461 sampled pixels measured at 400 (the ellipse crosses the smaller range too, so
+    # it was never blank — the control of the pair), 480 / 233 at 200.
+    assert lit["x**2/4+y**2/3-1", EXPORT_SIZE] > 400, lit
+    assert lit["x**2/4-y**2/3-1", EXPORT_SIZE] > 200, lit
+    assert lit["x**2/4+y**2/3-1", EXPORT_SIZE // 2] > 100, lit
+    assert lit["x**2/4-y**2/3-1", EXPORT_SIZE // 2] > 100, lit
+
+
 @pytest.mark.gui
 def test_implicit_circle_reaches_its_radius(app: QGuiApplication) -> None:
     """The crossings are where the geometry says: radius 1 in a [-2, 2] view, both axes."""

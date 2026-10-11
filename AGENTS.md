@@ -86,10 +86,29 @@ histories and numbers belong here.
 
 ## Domain, poles, unbounded edges
 
-12. **Pole gaps are analytic, not pixel-guessed.** `POLE(u)` (denominator sign change, world
-    units) plus "value far beyond the viewport" leaves a gap exactly at the pole, so `1/x`
-    and `tan(x)` do not draw vertical connectors, while their branches still reach the
-    asymptote.
+12. **Pole connectors come from three places; each needs its own guard.** `tan(x)` and `1/x`
+    must not draw a line across a pole, and the old single guard — the "value far beyond the
+    viewport" gap, `(nh - nl) > 32 × viewport` — is not enough once the `log(x)` ray exists
+    (item 13): measured, `tan(x)` drew **5 full-height columns** (900 of 900 px) at x ≈ ±1.55
+    and ±4.7, and `1/x` two at x ≈ ±0.02. Three separate causes, three fixes, all decided in
+    world units (pole-denominator sign changes) so they do not drift with zoom:
+    * the **stroke** joined the two samples that straddle the pole → a polyline segment whose
+      endpoints' pole-denominator product is ≤ 0 is skipped (`POLE(prev) * POLE(next) > 0`).
+    * the **band** filled the pole column: the 16-point turn count read the jump as a turn —
+      measured `turns16 = 2`, i.e. the jump itself *and* the following pair, whose difference
+      has the opposite sign because the jump also seeded the comparison. Excluding straddling
+      pairs from the count *and* clearing the previous difference takes it to 0 → `w = 0`.
+    * the **boundary ray** (item 13) fired one sample-span outside the pole: `_edge_hit` was
+      queried over the wider ±h window, so a column whose samples all sat on *one* side still
+      "hit" the boundary and the ray ran from that one-sided extreme through the viewport
+      (measured: a pale column at x = ±0.014 of `1/x`, where nl and nh were both beyond ±6).
+      The query now uses the interval the samples actually cover (`[-0.9375h, +0.8125h]`), and
+      the ray additionally requires the samples to be short of that viewport edge.
+    Measured after: the tallest column near a pole is **28 px** (tan) / **23 px** (1/x) of 900,
+    the branches still reach the asymptote, and `sin(1/x)`'s band is untouched (24 columns at
+    50 %, the ±1 envelope). The 32 × viewport gap is kept as a second line of defence, but it
+    is not what removes the connectors — at tan's pole column the spread was 115 world units
+    against the 128 threshold, so it never fired.
 13. **`log(x)`'s descent vanishes in deep views.** `log` diverges *slowly* (logarithmically),
     so a fixed-width sampling window never reaches deep enough values: in a deep viewport the
     visible curve sits at `x ≈ e^y` (e.g. `y ∈ [−16, −12]` ⇒ `x ∈ [1e-7, 6e-6]`), while the
@@ -97,8 +116,10 @@ histories and numbers belong here.
     `unbounded_edges()` (sympy one-sided limits) extends the polyline along the boundary `x`
     as a vertical ray to ±1e12. The ray lies exactly on the boundary x, so line width stays
     constant and columns stay aligned; the `x < 0` half is cut by the domain.
-    Fast-diverging functions (`1/x`, `tan`) need no ray (samples already leave any viewport),
-    and `sqrt` (limit 0) / `sin(1/x)` (no limit) are not listed.
+    Fast-diverging functions (`1/x`, `tan`) need no ray: `1/x`'s boundary *is* polynomial so it
+    would get one, but a pole's samples already leave the viewport — the ray is drawn only when
+    they have not (item 12), which is exactly its reason to exist. Verified: `y ∈ [−16, −12]`
+    still lights the centre column 100 %, and `y ∈ [−8, −4]` still reaches the bottom edge.
 14. **`unbounded_edges()` must only analyse polynomial boundaries.** `tan(x)`'s condition
     `cos(x) = 0` costs **94 ms** through sympy `solve` + `limit` (and is useless: tan diverges
     fast, sampling reaches deep enough anyway). Restricting to `lhs.is_polynomial(sym)`
@@ -351,7 +372,46 @@ histories and numbers belong here.
     675), the 9×9 centre block is blank, and the stroke measures 3.00 / 2.96 / 3.00 / 2.96 device
     pixels at 0°/45°/90°/135° (nominal 3.0, spread 0.04) by the coverage-integral method of item
     24. The Qt export needed no change; the matplotlib hand-off skips implicit curves (a level
-    set has no polyline) and says so.
+    set has no polyline) and says so. (Item 42 later found the export's *default range* — not
+    its shader path — did have to change.)
+
+42. **An export's default range must come from the camera, not from the offscreen widget's
+    logical size.** `export.render` derived it as `live ± 0.5 · logical · scale`, with
+    `logical = width / devicePixelRatio`. The camera's scale is world units per logical pixel
+    *of the live view*, so on a scaled display the export was silently **cropped** by the DPR:
+    `to_image(width=400, height=400)` of a camera told `setViewport(400, 400)` and given
+    `xlim = ylim = (-2.5, 2.5)` (DPR 1.5 → a 267-logical-pixel widget) showed ±1.67, not ±2.5.
+    Found through the *implicit* renderer, which is all shader and has no geometry to blame:
+    `x**2/4 - y**2/3 - 1` exported **blank** (0 non-white pixels in the whole 400×400 canvas)
+    while `x**2/4 + y**2/3 - 1` drew 673, and the two shaders differ by one sign — a hyperbola's
+    visible arc needs |x| >= 2, the ellipse's waist reaches |x| = 1.31. The live `QQuickView`
+    path drew all three reported failures, so shader and bake were never at fault: patching the
+    fragment template to paint its own uniforms showed `camera.z = 0.0125` (right) and
+    `size.x = 267` (the widget, right) — the mapping was honest, the *region* was wrong.
+    Diagnostics that do **not** work here: `qsb.bake` succeeds for the failing source, and
+    `fragColor = vec4(1, 0, 0, 1); return;` fills the export red (the pass runs; the curve's
+    `cov` is 0 everywhere because the arc is off screen). Fix: default the range to
+    `live_size`, the camera's reported viewport — i.e. exactly `camera.xlim` / `ylim` — so
+    `width` / `height` / `dpi` change the resolution only, which is what
+    `savefig("hi.png", dpi=2.0)  # the live view, twice the pixels` always claimed and what
+    `test_no_arguments_reproduces_the_live_view` pins. Measured after (DPR 1.5, the ±2.5 view at
+    400×400, sampled every 2nd pixel): the three failures 461 / 305 / 461; the previously
+    "working" ones 513 / 958 / 912 / 862 / 776 / 696 / 1084. Regression:
+    `tests/test_implicit.py::test_the_default_export_range_is_the_camera_view` — the sign pair,
+    exported at 400×400 *and* at half the pixels, which is the assertion that fails on a DPR-1
+    screen too (there the two ranges coincide at 400×400).
+
+43. **pytest's own faulthandler plugin wedges this repo's GUI tests on this machine.**
+    `uv run pytest -q` hung indefinitely — six runs (one of them with the shader changes
+    stashed), no output at all, no traceback, and a manual
+    `faulthandler.dump_traceback_later(75, exit=True)` inside the run never fired either. The
+    same render path driven from a plain script (`QQuickView` + `grabToImage`, calling the test
+    module's own `_render` helper) finished in ~5 s, and `pytest -p no:faulthandler` passed in
+    1.3 s; the full suite then passed (124 tests, 27.7 s) with that flag. So it is the plugin,
+    not the shader or Qt: `-p no:faulthandler` is the workaround. A wedged run also leaves
+    orphaned `python.exe`/`uv.exe` pairs behind, which then block every later `uv run` — kill
+    them with `powershell -Command "Stop-Process -Id <pid> -Force"` (`taskkill` rejects its
+    `/F` switch in this MSYS shell).
 
 ## Performance (measured)
  ≈ **230 ms** (Windows / D3D11 / 900×600):

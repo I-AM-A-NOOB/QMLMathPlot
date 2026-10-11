@@ -432,11 +432,15 @@ extrema/zeros by bisection. The same approach is used here:
   perpendicular foot lands on a segment (on a sloped line it is displaced along x
   by `m·d/√(1+m²)`); with a narrower window the distance degraded to "distance to
   the nearest endpoint" and steep parts looked thin and ragged.
-- **Break on jumps**: via the **analytic pole gap** (denominator sign change, world
-  units) — no vertical connector is drawn at the asymptotes of `1/x`, `tan(x)`.
-  (An earlier "adjacent samples differ by more than 4 viewport heights" criterion
-  was pixel-/viewport-relative, so under magnification it also cut legitimate steep
-  segments; it was removed.)
+- **Break on jumps**: a denominator sign change (world units) decides, in three places,
+  that nothing joins the branches — the polyline segment that straddles the pole is not
+  stroked, a straddling pair does not count as a turn in the band's turn count (it used to
+  fill the pole column solid), and the unbounded-boundary ray is not drawn there. No vertical
+  connector at the asymptotes of `1/x`, `tan(x)`. (An earlier "adjacent samples differ by
+  more than 4 viewport heights" criterion was pixel-/viewport-relative, so under magnification
+  it also cut legitimate steep segments; it was removed. The remaining "spread beyond 32
+  viewport heights" gap is a second line of defence only — at `tan`'s pole column the spread
+  is ~15 viewports, so it never fires there.)
 - **Domain** (derived by sympy, injected as `DOM`): denominator ≠ 0, `log` argument
   > 0, `sqrt` argument ≥ 0, `asin/acos` argument ∈ [−1,1]; pixels outside the domain
   are discarded outright. NaN/inf samples take part in neither the envelope nor

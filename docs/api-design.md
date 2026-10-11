@@ -302,12 +302,20 @@ plot.savefig("hi.png", dpi=2.0)                      # the live view, twice the 
 img = plot.to_image(width=800, height=600)           # -> QImage
 ```
 
-* **The canvas range** — `xlim` / `ylim` — defaults to the *camera*: the same centre and the
-  same scale (world units per pixel) as the live view, extended to the export's size. The
-  camera makes this trivial, which is one of the reasons it is the state.
+* **The canvas range** — `xlim` / `ylim` — defaults to the *camera*: the region the live view
+  shows, i.e. its centre and scales applied to the size the camera was told it has (that *is*
+  `camera.xlim` / `ylim`). The camera makes this trivial, which is one of the reasons it is the
+  state.
 * **The image size** — `width` / `height` — defaults to the live view's size, and is in *device*
   pixels: the offscreen view is sized `width / devicePixelRatio` logically so the grabbed image
   is exactly `width` × `height`. `dpi` multiplies it for high-resolution output.
+
+The two are independent: a requested pixel size (and `dpi`) changes the number of pixels, never
+the region — `dpi=2.0` is the live view at twice the pixels — and in particular the region never
+depends on the screen's `devicePixelRatio`. Deriving it from the export's *logical* size
+(`width / dpr`) crops the view by that factor, silently: at DPR 1.5 a `±2.5` view exported at
+400×400 came out as `±1.67`, so a level set whose visible arc sat at `|x| > 1.67` was not drawn
+at all. A caller who wants another region passes `xlim` / `ylim`.
 
 ### Reconciliation (`adjustable`)
 
@@ -330,8 +338,9 @@ The parameter is named after Matplotlib's and its **default is Matplotlib's defa
 So the default honours the *aspect* and pads, exactly as Matplotlib does; a report figure that
 must fill the frame asks for `adjustable="stretch"` explicitly and accepts the distortion.
 Cropping is deliberately not offered: it silently loses visible content, which no other mode
-does. With no explicit range all three modes agree — the range is derived from the camera at
-the export size, so it already has that size's aspect.
+does. With no explicit range the three modes agree whenever the export size has the camera
+view's aspect — the common case, since the size defaults to the live view's and `dpi` scales it
+uniformly.
 
 Because the region is a parameter, an export can cover **more** canvas than the widget shows —
 something a bounded figure cannot do.

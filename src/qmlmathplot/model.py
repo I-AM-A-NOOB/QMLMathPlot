@@ -406,24 +406,38 @@ void main() {
                 bool have = false;
                 float ps = 0.0;
                 float pd = 0.0;
+                float px = 0.0;
                 for (int k = 0; k < 16; k++) {
+                    float xk;
                     float s;
                     bool ok;
                     if (k - (k / 2) * 2 == 0) {         // even slot: reuse a narrow-window sample
+                        xk = smp_x[k / 2];
                         s = smp[k / 2];
                         ok = smp_ok[k / 2];
                     } else {                             // odd slot: sample additionally
-                        float xi = x + (-1.0 + (float(k) + 0.5) / 8.0) * h;
-                        s = F(xi);
-                        ok = DOMS(xi) && (s == s) && (abs(s) < 1e30);
+                        xk = x + (-1.0 + (float(k) + 0.5) / 8.0) * h;
+                        s = F(xk);
+                        ok = DOMS(xk) && (s == s) && (abs(s) < 1e30);
                     }
                     if (ok) {
                         if (have) {
-                            float d = s - ps;
-                            if (pd * d < 0.0) { turns16 += 1.0; }
-                            pd = d;
+                            // A pair that straddles a pole is a jump, not a turn — and it must
+                            // not seed the next comparison either: its huge difference has the
+                            // opposite sign to the following pair's, which then reads as a
+                            // second, fake turn. Measured at tan(x)'s pole: turns16 = 2 and
+                            // w = 1 (the band filled the column solid, the connector); with the
+                            // jump excluded turns16 = 0 and the column draws nothing.
+                            if (POLE(px) * POLE(xk) <= 0.0) {
+                                pd = 0.0;
+                            } else {
+                                float d = s - ps;
+                                if (pd * d < 0.0) { turns16 += 1.0; }
+                                pd = d;
+                            }
                         }
                         ps = s;
+                        px = xk;
                         have = true;
                     }
                 }
@@ -458,7 +472,14 @@ void main() {
             bool prev_oki = false;
             for (int i = 0; i < 8; i++) {
                 if (smp_ok[i]) {
-                    if (prev_oki) {
+                    // A segment that crosses a pole is not part of the curve: the two
+                    // branches diverge to ±∞ there, and joining them draws the vertical
+                    // connector. Decided by the denominator's sign change (world units, so
+                    // it does not drift with zoom) rather than by the "gap" test below,
+                    // which needs the sampled values to exceed the viewport by 32× — the
+                    // pole column of a shallow view only reaches ~15×, and tan(x) then drew
+                    // its connector (measured: a full-height column at x=±π/2).
+                    if (prev_oki && POLE(prev_xi) * POLE(smp_x[i]) > 0.0) {
                         dmin = min(dmin, _seg_dist(p, vec2(prev_xi * sx, prev_si * sy),
                                                       vec2(smp_x[i] * sx, smp[i] * sy)));
                     }
@@ -472,13 +493,29 @@ void main() {
             // valid sample along the boundary to ±1e12, so a slowly diverging branch
             // (log(x) as x→0+) is drawn to any depth. The ray lies on the boundary x, so the
             // width stays constant and the columns align.
-            float ex_ = _edge_hit(x - h, x + h);
+            //
+            // Only when the samples have *not* already reached that viewport edge: the ray
+            // exists because a fixed-width window cannot sample deep enough, so if the
+            // polyline already leaves the viewport it covers the visible part on its own —
+            // and a ray there is the very connector we are removing (1/x at a normal view
+            // samples ±hundreds around x=0). For a fast pole the ray therefore disappears at
+            // ordinary zooms and comes back only when the viewport is deeper than the
+            // window can reach.
+            // The boundary must lie inside the interval the samples actually cover, not the
+            // wider ±h query window: a column whose samples all sit on one side never reaches
+            // the divergence, and extending it would draw a spurious line along the boundary.
+            // Measured for 1/x (pole at 0): the query window ±h caught x = ±0.014, where every
+            // sample is one-sided (nl and nh both beyond ±6), and the ray then ran from that
+            // one-sided extreme through the whole viewport — the pale vertical line this fixes.
+            // The constants are the sample offsets of the loop above (-1 + 0.25/4 and
+            // -1 + 7.25/4).
+            float ex_ = _edge_hit(x - 0.9375 * h, x + 0.8125 * h);
             if (ex_ < 1e29 && nl < 1e29) {
                 vec2 du_ = _edge_du(ex_);
-                if (du_.x != 0.0) {
+                if (du_.x != 0.0 && nl > camera.y - 0.5 * spany) {
                     dmin = min(dmin, _seg_dist(p, vec2(ex_ * sx, nl * sy), vec2(ex_ * sx, -1e12)));
                 }
-                if (du_.y != 0.0) {
+                if (du_.y != 0.0 && nh < camera.y + 0.5 * spany) {
                     dmin = min(dmin, _seg_dist(p, vec2(ex_ * sx, nh * sy), vec2(ex_ * sx, 1e12)));
                 }
             }

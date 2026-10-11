@@ -188,20 +188,35 @@ def test_smooth_column_stays_thin(app: QGuiApplication) -> None:
     assert ratio < 0.05, f"sin(x) should still be a thin line at x=0, got {ratio:.2f}"
 
 
+def _column_lit_at(image: QImage, x: int) -> int:
+    """Number of lit pixels in the pixel column ``x``."""
+    x = min(image.width() - 1, max(0, x))
+    return sum(_lit(image, x, y) for y in range(image.height()))
+
+
 def _column_lit(image: QImage, world_x: float) -> int:
     """Number of lit pixels in the column at the given world x."""
-    x = min(image.width() - 1, max(0, int((world_x + 6) / 12 * image.width())))
-    return sum(_lit(image, x, y) for y in range(image.height()))
+    return _column_lit_at(image, int((world_x + 6) / 12 * image.width()))
 
 
 def test_asymptote_is_not_connected(app: QGuiApplication) -> None:
     """1/x and tan(x) must not draw a vertical connecting line at their poles
-    (a jump over a ±inf range)."""
-    for expr, poles in (("1/x", [0.0]), ("tan(x)", [1.5708])):
+    (a jump over a ±inf range).
+
+    Every pole in the view is checked, and a small neighbourhood rather than the pole's own
+    column: the connector lands on whichever column straddles the pole, which need not be
+    the pole's column (measured before the fix: full-height columns at x = ±0.02 for 1/x and
+    at x ≈ -1.55 and ±4.7 for tan(x), while the single column the earlier version checked was
+    blank — it passed by luck).
+    """
+    for expr, poles in (("1/x", [0.0]), ("tan(x)", [-4.7124, -1.5708, 1.5708, 4.7124])):
         image = _render(app, expr)
+        height = image.height()
         for pole in poles:
-            lit = _column_lit(image, pole)
-            assert lit < 30, f"{expr} should have no connecting line at x={pole}, got {lit} lit pixels"
+            center = int((pole + 6) / 12 * image.width())
+            lit = max(_column_lit_at(image, x) for x in range(center - 3, center + 4))
+            assert lit < 0.25 * height, \
+                f"{expr} draws a connecting line at x={pole}: {lit} lit pixels"
 
 
 def test_out_of_domain_is_blank(app: QGuiApplication) -> None:

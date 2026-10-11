@@ -70,9 +70,11 @@ def render(
 ) -> QImage:
     """Render ``plot`` offscreen and return the grabbed image, in device pixels.
 
-    ``xlim`` / ``ylim`` default to the camera (the live centre and scale, extended to the export
-    size), ``width`` / ``height`` default to the live view's device size (``dpi`` multiplies
-    both), and ``adjustable`` reconciles the two parameter sets.
+    ``xlim`` / ``ylim`` default to the camera's own view (its centre and scales applied to the
+    size it was told it has — that is exactly ``camera.xlim`` / ``ylim``), ``width`` /
+    ``height`` default to the live view's device size (``dpi`` multiplies both), and
+    ``adjustable`` reconciles the two parameter sets. The pixel size changes the resolution,
+    never the region: the region cannot depend on the screen's ``devicePixelRatio``.
     """
     dpi = float(dpi)
     if not dpi > 0:
@@ -122,11 +124,19 @@ def render(
         widget.resize(round(logical[0]), round(logical[1]))
         widget.show()                       # offscreen: WA_DontShowOnScreen, never exposed
 
-        # The range: the camera, extended to the export size, unless the caller asked for one
+        # The range: the camera's own view — its centre and scales applied to the size it was
+        # told it has, which is exactly ``camera.xlim``/``ylim`` — unless the caller asked for
+        # one. Not ``logical`` (the export's size): the scale is world units per logical pixel
+        # *of the live view*, so deriving the range from the offscreen widget's logical size
+        # made the region depend on the screen's devicePixelRatio and silently cropped it by
+        # that factor (at DPR 1.5 a ±2.5 view came out as ±1.67 at 400×400 device pixels, and a
+        # level set whose visible arc sat at |x| > 1.67 was not drawn at all). ``width``,
+        # ``height`` and ``dpi`` change the number of pixels, never the region; a caller that
+        # wants a different region passes ``xlim``/``ylim``.
         range_x = _pair(xlim, "xlim") if xlim is not None else (
-            live[0] - 0.5 * logical[0] * live[2], live[0] + 0.5 * logical[0] * live[2])
+            live[0] - 0.5 * live_size[0] * live[2], live[0] + 0.5 * live_size[0] * live[2])
         range_y = _pair(ylim, "ylim") if ylim is not None else (
-            live[1] - 0.5 * logical[1] * live[3], live[1] + 0.5 * logical[1] * live[3])
+            live[1] - 0.5 * live_size[1] * live[3], live[1] + 0.5 * live_size[1] * live[3])
         span_x, span_y = range_x[1] - range_x[0], range_y[1] - range_y[0]
         centre = (0.5 * (range_x[0] + range_x[1]), 0.5 * (range_y[0] + range_y[1]))
 
