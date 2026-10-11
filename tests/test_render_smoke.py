@@ -271,6 +271,40 @@ def test_log_descends_into_deep_views(app: QGuiApplication) -> None:
     assert col > 0.5 * height, f"in a deep viewport log(x) should have a full column of descent hugging x=0, got {col} pixels"
 
 
+#: Full ink of the curve colour (#1f77b4) on the white background, summed over RGB.
+FULL_INK = 435.0
+
+
+def _coverage_sum(image: QImage, row: int, center: int, half: int = 12) -> float:
+    """Total ink in a row window, i.e. the width of a nearly vertical stroke, in device px."""
+    total = 0.0
+    for x in range(max(0, center - half), min(image.width(), center + half + 1)):
+        color = image.pixelColor(x, row)
+        total += min(1.0, ((255 - color.red()) + (255 - color.green())
+                           + (255 - color.blue())) / FULL_INK)
+    return total
+
+
+def test_the_log_descent_keeps_its_stroke_width(app: QGuiApplication) -> None:
+    """The descent must be as wide as every other stroke, not fade into a hairline.
+
+    Two things used to clip it, both about the ray's *coverage* rather than its geometry: the
+    ray was evaluated only by the pixels whose own sampled interval straddled the boundary (so
+    the neighbouring columns, which the coverage ramp still reaches, measured the distance to a
+    segment endpoint), and the domain test at the top of the shader returned before the ray for
+    every pixel left of x = 0 — the band centred on the boundary lost its entire outer half.
+    Measured over the descent (rows every 90 px): 1.00-1.67 of the nominal 3.00 device px
+    before, 3.00-4.17 after; the wider rows are where the visible curve and the boundary are
+    closer together than one stroke width, so the two bands genuinely overlap.
+    """
+    image, plot = _render_plot(app, "log(x)", pan_pixels=-900.0)
+    nominal = plot.line_width * image.devicePixelRatio()
+    center = image.width() // 2
+    widths = [_coverage_sum(image, row, center) for row in range(45, image.height(), 90)]
+    assert min(widths) >= 0.95 * nominal, f"descent pinched to {min(widths):.2f} of {nominal:.2f} px"
+    assert max(widths) <= 1.5 * nominal, f"descent too fat: {max(widths):.2f} of {nominal:.2f} px"
+
+
 def test_extreme_zoom_of_oscillation_fills_solid(app: QGuiApplication) -> None:
     """Extreme zoom on sin(1/x): once the oscillation is far faster than the sampling rate
     the screen should fill solid, not be a screen full of vertical stripes.

@@ -154,6 +154,7 @@ def unbounded_edges(expr: sp.Expr, name: str = "x") -> list[tuple[float, bool, b
     either).
     """
     sym = sp.Symbol(name)
+    poles = _pole_factors(expr)
     out: list[tuple[float, bool, bool]] = []
     for cond in _domain_conditions(expr):
         lhs = cond.lhs if isinstance(cond, (sp.Gt, sp.Ge, sp.Ne)) else None
@@ -170,6 +171,14 @@ def unbounded_edges(expr: sp.Expr, name: str = "x") -> list[tuple[float, bool, b
             continue
         for point in points:
             if not point.is_number:
+                continue
+            # A boundary that is also a *pole* (a sign-changing denominator vanishes there)
+            # needs no ray: its samples already exceed any viewport, and a ray would draw the
+            # very connector the pole rules remove. This is the difference the module docstring
+            # always claimed ("1/x and tan diverge fast") — it held for tan only because its
+            # boundary is non-polynomial, while `1/x`'s x=0 boundary is polynomial and got a
+            # ray, which drew a pale line across the viewport (measured at x = ±0.014).
+            if any(sp.simplify(f.subs(sym, point)) == 0 for f in poles):
                 continue
             down = up = False
             for side in ("+", "-"):
@@ -314,6 +323,32 @@ vec2 _edge_du(float ex) {
     return vec2(0.0, 0.0);
 }
 
+// Distance (logical px) from a pixel to the boundary ray: the polyline's infinite extension
+// along a slowly diverging domain boundary (log(x) as x→0+), which a fixed-width sampling
+// window can never reach. nl/nh are the column's sampled extremes; a sentinel means "no valid
+// sample here", which still needs the ray — a pixel just outside the domain (left of log(x)'s
+// boundary) has no samples of its own but lies inside the stroke's band, which is centred on
+// the boundary; the ray then starts at the viewport edge, enough to cover anything visible.
+// The ray is only drawn when the samples have *not* already reached that viewport edge: if the
+// polyline already leaves the viewport it covers the visible part on its own, and extending it
+// would be a connector.
+float _ray_dist(vec2 p, float ex, vec2 du, float nl, float nh,
+                float y_top, float y_bot, float sx, float sy) {
+    float d = 1e30;
+    if (ex >= 1e29) {
+        return d;
+    }
+    if (du.x != 0.0 && (nl >= 1e29 || nl > y_bot)) {
+        float start = nl < 1e29 ? nl : y_top;
+        d = min(d, _seg_dist(p, vec2(ex * sx, start * sy), vec2(ex * sx, -1e12)));
+    }
+    if (du.y != 0.0 && (nh <= -1e29 || nh < y_top)) {
+        float start = nh > -1e29 ? nh : y_bot;
+        d = min(d, _seg_dist(p, vec2(ex * sx, start * sy), vec2(ex * sx, 1e12)));
+    }
+    return d;
+}
+
 #define F(u) (@FUNC@)
 #define DF @DFUNC@
 // Domain predicate (pixels outside the domain are not drawn) and "pole denominators"
@@ -330,17 +365,35 @@ void main() {
     float x = camera.x + (vUV.x - 0.5) * size.x * camera.z;
     float y = camera.y + (0.5 - vUV.y) * size.y * camera.w;
 
-    // Domain: pixels outside are not drawn (x<0 for log(x), x<0 for sqrt(x), |x|>1 for
-    // asin, …)
-    if (!DOM(x)) {
-        fragColor = vec4(0.0);
-        return;
-    }
-
+    // Domain: pixels outside are not drawn (x<0 for log(x), x<0 for sqrt(x), |x|>1 for asin, …)
+    // — with one exception, the unbounded-boundary ray. The stroke is a *band* centred on the
+    // boundary, and for a slowly diverging edge (log(x) as x→0+) that band hugs x = 0, so the
+    // half of it lying outside the domain must still be painted. Discarding those pixels
+    // outright left the descent with its right half only (measured: 1.5 of the nominal 3.0
+    // device px, and the missing side was exactly the x < 0 half).
     float spany = size.y * camera.w;   // visible y span (world units)
     float dx = camera.z;               // world x per pixel
     float sx = 1.0 / camera.z;         // pixels per world x
     float sy = 1.0 / camera.w;         // pixels per world y
+    float y_top = camera.y + 0.5 * spany;
+    float y_bot = camera.y - 0.5 * spany;
+    // The boundary query is the sampled interval **widened by the stroke radius**
+    // (lineWidth/2 + 0.5): the coverage ramp reaches that far, so a narrower window clips the
+    // ray's own stroke (measured: the ray was evaluated only by the ±1-column band of pixels
+    // and the descent's neighbours got distance to an endpoint — 1.00 device px instead of
+    // 3.00). The constants are the sample offsets of the loop below (-1 + 0.25/4, -1 + 7.25/4).
+    float edge_r = (lineWidth * 0.5 + 0.5) * dx;   // stroke radius, world units
+    float ex_ = _edge_hit(x - 0.9375 * dx - edge_r, x + 0.8125 * dx + edge_r);
+    vec2 du_ = (ex_ < 1e29) ? _edge_du(ex_) : vec2(0.0, 0.0);
+
+    if (!DOM(x)) {
+        float cov = clamp(lineWidth * 0.5 + 0.5
+                          - _ray_dist(vec2(x * sx, y * sy), ex_, du_, 1e30, -1e30,
+                                      y_top, y_bot, sx, sy),
+                          0.0, 1.0);
+        fragColor = vec4(color.rgb * cov * color.a * qt_Opacity, cov * color.a * qt_Opacity);
+        return;
+    }
 
     float f0 = F(x);
     float d1 = DF;
@@ -488,37 +541,10 @@ void main() {
                 }
                 prev_oki = smp_ok[i];
             }
-            // Infinite extension at unbounded boundaries: when the window crosses a domain
-            // boundary where the function tends to ±∞, pull a vertical ray from the nearest
-            // valid sample along the boundary to ±1e12, so a slowly diverging branch
-            // (log(x) as x→0+) is drawn to any depth. The ray lies on the boundary x, so the
-            // width stays constant and the columns align.
-            //
-            // Only when the samples have *not* already reached that viewport edge: the ray
-            // exists because a fixed-width window cannot sample deep enough, so if the
-            // polyline already leaves the viewport it covers the visible part on its own —
-            // and a ray there is the very connector we are removing (1/x at a normal view
-            // samples ±hundreds around x=0). For a fast pole the ray therefore disappears at
-            // ordinary zooms and comes back only when the viewport is deeper than the
-            // window can reach.
-            // The boundary must lie inside the interval the samples actually cover, not the
-            // wider ±h query window: a column whose samples all sit on one side never reaches
-            // the divergence, and extending it would draw a spurious line along the boundary.
-            // Measured for 1/x (pole at 0): the query window ±h caught x = ±0.014, where every
-            // sample is one-sided (nl and nh both beyond ±6), and the ray then ran from that
-            // one-sided extreme through the whole viewport — the pale vertical line this fixes.
-            // The constants are the sample offsets of the loop above (-1 + 0.25/4 and
-            // -1 + 7.25/4).
-            float ex_ = _edge_hit(x - 0.9375 * h, x + 0.8125 * h);
-            if (ex_ < 1e29 && nl < 1e29) {
-                vec2 du_ = _edge_du(ex_);
-                if (du_.x != 0.0 && nl > camera.y - 0.5 * spany) {
-                    dmin = min(dmin, _seg_dist(p, vec2(ex_ * sx, nl * sy), vec2(ex_ * sx, -1e12)));
-                }
-                if (du_.y != 0.0 && nh < camera.y + 0.5 * spany) {
-                    dmin = min(dmin, _seg_dist(p, vec2(ex_ * sx, nh * sy), vec2(ex_ * sx, 1e12)));
-                }
-            }
+            // Infinite extension along a slowly diverging boundary (log(x) as x→0+): the ray
+            // lies on the boundary x, so the width stays constant and the columns align. See
+            // _ray_dist for when it is drawn.
+            dmin = min(dmin, _ray_dist(p, ex_, du_, nl, nh, y_top, y_bot, sx, sy));
             cov = clamp(lineWidth * 0.5 + 0.5 - dmin, 0.0, 1.0);
         }
         if (w > 0.0) {

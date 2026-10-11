@@ -94,15 +94,19 @@ def test_unbounded_edges():
     log(x) tends to -inf as x->0+, but the sampling window has a fixed width and cannot
     reach that deep, so in a deep viewport the whole curve would vanish and has to be
     added back by the analytically derived boundary ray. sqrt(x) is bounded at 0 (0), and
-    sin(1/x) has no limit at 0, so neither needs it; 1/x diverges fast and sampling is
-    naturally deep enough, but marking both directions analytically does no harm.
+    sin(1/x) has no limit at 0, so neither needs it. A boundary that is *also a pole* gets no
+    ray either: its samples already exceed any viewport, and the ray would draw exactly the
+    connector the pole rules remove — measured, `1/x` grew a pale vertical line at x = ±0.014
+    when it did get one (AGENTS item 12).
     """
     assert model.unbounded_edges(sp.log(X)) == [(0.0, True, False)]
     assert model.unbounded_edges(sp.sqrt(X)) == []
     assert model.unbounded_edges(sp.sin(1 / X)) == []
     assert model.unbounded_edges(X**2) == []
-    assert sorted(model.unbounded_edges(1 / X)) == [(0.0, True, True)]
-    assert model.unbounded_edges(1 / X**2) == [(0.0, False, True)]
+    assert model.unbounded_edges(1 / X) == []
+    assert model.unbounded_edges(1 / X**2) == []
+    # ... while a log-type boundary next to a pole still gets its ray.
+    assert [point for point, _down, _up in model.unbounded_edges(sp.log(X) + 1 / (X - 1))] == [0.0]
 
 
 # --------------------------------------------------------------------------

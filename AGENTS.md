@@ -98,12 +98,13 @@ histories and numbers belong here.
       measured `turns16 = 2`, i.e. the jump itself *and* the following pair, whose difference
       has the opposite sign because the jump also seeded the comparison. Excluding straddling
       pairs from the count *and* clearing the previous difference takes it to 0 → `w = 0`.
-    * the **boundary ray** (item 13) fired one sample-span outside the pole: `_edge_hit` was
-      queried over the wider ±h window, so a column whose samples all sat on *one* side still
-      "hit" the boundary and the ray ran from that one-sided extreme through the viewport
-      (measured: a pale column at x = ±0.014 of `1/x`, where nl and nh were both beyond ±6).
-      The query now uses the interval the samples actually cover (`[-0.9375h, +0.8125h]`), and
-      the ray additionally requires the samples to be short of that viewport edge.
+    * the **boundary ray** (item 13) existed at all: `unbounded_edges()` analysed `1/x`'s
+      polynomial boundary x = 0 and emitted one, and the shader drew a pale column at
+      x = ±0.014 (the query window ±h hit the boundary from a one-sided column, and the ray
+      then ran from that column's positive extreme through the viewport). Fixed at the source:
+      a boundary where a *pole* factor vanishes gets no edge at all — measured,
+      `unbounded_edges(1/x)` went from `[(0, down, up)]` to `[]`. The shader then needs none of
+      the guards that had been clipping the ray's own stroke.
     Measured after: the tallest column near a pole is **28 px** (tan) / **23 px** (1/x) of 900,
     the branches still reach the asymptote, and `sin(1/x)`'s band is untouched (24 columns at
     50 %, the ±1 envelope). The 32 × viewport gap is kept as a second line of defence, but it
@@ -115,11 +116,24 @@ histories and numbers belong here.
     leftmost sample only reaches `log ≈ −7` → the whole segment disappears. Fix:
     `unbounded_edges()` (sympy one-sided limits) extends the polyline along the boundary `x`
     as a vertical ray to ±1e12. The ray lies exactly on the boundary x, so line width stays
-    constant and columns stay aligned; the `x < 0` half is cut by the domain.
-    Fast-diverging functions (`1/x`, `tan`) need no ray: `1/x`'s boundary *is* polynomial so it
-    would get one, but a pole's samples already leave the viewport — the ray is drawn only when
-    they have not (item 12), which is exactly its reason to exist. Verified: `y ∈ [−16, −12]`
-    still lights the centre column 100 %, and `y ∈ [−8, −4]` still reaches the bottom edge.
+    constant and columns stay aligned. (The `x < 0` half is *not* cut by the domain: the stroke
+    is a band centred on the boundary, so the ray is painted there too — see the width note
+    below.)
+    Fast-diverging functions (`1/x`, `tan`) get no ray at all: a boundary that is also a pole is
+    dropped by `unbounded_edges()` (item 12). The ray is drawn only when the samples have not
+    already reached that viewport edge — its reason to exist — starting at the column's own
+    extreme, or at the viewport edge when the column has no valid sample: a pixel just *outside*
+    the domain is still inside the stroke's band, which is centred on the boundary.
+    That band is where the width lives, and it used to be clipped twice. `_ray_dist`'s query
+    window is the sampled interval **widened by the stroke radius** (`lineWidth/2 + 0.5`),
+    because the coverage ramp reaches that far; and the domain test at the top of `main` now
+    lets a ray through instead of returning transparent, which used to remove the entire outer
+    half of the descent's band. Measured on the descent (1350×900 frame, y ∈ [−8, −4], rows
+    every 45 px) the width went **1.00-1.67 → 3.00-4.17** device px against a nominal 3.00; the
+    wider rows are where the visible curve and the boundary are closer together than one stroke
+    width, so the two bands genuinely overlap. Regression:
+    `test_render_smoke.py::test_the_log_descent_keeps_its_stroke_width`. The `y ∈ [−16, −12]`
+    column is still lit 100 %.
 14. **`unbounded_edges()` must only analyse polynomial boundaries.** `tan(x)`'s condition
     `cos(x) = 0` costs **94 ms** through sympy `solve` + `limit` (and is useless: tan diverges
     fast, sampling reaches deep enough anyway). Restricting to `lhs.is_polynomial(sym)`

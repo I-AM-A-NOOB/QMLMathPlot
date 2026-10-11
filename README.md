@@ -443,8 +443,10 @@ extrema/zeros by bisection. The same approach is used here:
   is ~15 viewports, so it never fires there.)
 - **Domain** (derived by sympy, injected as `DOM`): denominator ≠ 0, `log` argument
   > 0, `sqrt` argument ≥ 0, `asin/acos` argument ∈ [−1,1]; pixels outside the domain
-  are discarded outright. NaN/inf samples take part in neither the envelope nor
-  segment joining.
+  are discarded outright — except for the **boundary ray** of a slowly diverging edge
+  (`log(x)` as x→0+), which is a band centred *on* the boundary and therefore paints the few
+  pixels outside the domain that it covers (the whole outer half of that band, otherwise).
+  NaN/inf samples take part in neither the envelope nor segment joining.
 - **Undersampled columns** (several oscillations inside one column) are replaced
   wholesale by the envelope band: a polyline is random sawtooth in such columns.
   There are two criteria, both **scale-independent**: (a) ≥ 2 direction reversals
