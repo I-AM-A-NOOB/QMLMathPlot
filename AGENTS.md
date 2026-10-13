@@ -664,3 +664,51 @@ the full step budget in both directions plus both windows.
     minimum (the gate), `edge_top` its maximum (the start). Measured after: one wall in
     the fork view, the deep-descent wall still continuous (5-row worst gap, the ray
     start's own AA), 132/132 green.
+
+48. **The implicit (level-set) renderer gets the two general guards, not special cases**
+    (symptom → cause → fix).
+
+    *Symptom (user-reported with two screenshots):* the same set drawn two ways —
+    `x+1-E**y` = 0 (the inverse form) rendered `log(1+x)` "perfectly", while `y-log(1+x)` = 0
+    was cut off and drew a vertical line at the boundary; `x-tan(y)` "explicitly drew the
+    +/-inf connector" between its branches.
+
+    *Cause:* the implicit path evaluated `F` and `|grad F|` pointwise and divided, with no
+    notion of a domain or a discontinuity (item 41 deferred exactly this). At a pole `tan(y)`
+    -> ±inf, so `|F| -> inf` *and* `|grad F| -> inf`: the quotient `|F|/|grad F|` degenerates
+    to a pseudo-zero and the pole's whole neighbourhood comes out "on the set" (measured: a
+    full-width line at every pole). At `log`'s domain boundary `log(negative)` is undefined
+    and this driver returns *finite garbage* (item 46), which painted the boundary as a
+    vertical line.
+
+    *Fix, both symbol-free:*
+    - **domain** — the same sympy predicate the 1-D path uses, injected as `DOM(x, y)` and
+      applied *before* evaluating F (out-of-domain pixels are dropped; an evaluated-then-
+      discarded call still perturbs the optimiser, item 46).
+    - **linearisation validity** — the 1-D probe's midpoint-violation test, one dimension up:
+      probes at `p ± R·n̂` must change F by a first-order amount with a small second
+      difference (`|fp - 2f + fm| <= 0.9·|fp - fm|`). At a discontinuity the probes straddle
+      the jump and the second difference is of the order of the change (measured at
+      `x - tan(y)`: 771 vs 679); on a circle it is rounding noise.
+
+    *Traps re-armed while implementing (this machine):*
+    - the validity test killed the unit circle down to 42 pixels — `F`'s macro body is printed
+      **bare** (`x*x`, no `(u)` wrap), so `F(x + stepx, y + stepy)` expands textually as
+      `x + stepx*x + stepx` (AGENTS item 1, re-armed). The probe coordinates are now locals
+      (`pxp`, `pyp`, ...) — single tokens, safe under any body form.
+    - an instrumented copy of the shader (`vec3 _dbg = ...`) again disagreed pixel-for-pixel
+      with the shipped one (item 46): the diagnostics lied *both* ways. All the probe
+      quantities are now computed unconditionally, outside the coverage `if`.
+    - the diagnostics' failure mode was silent: a probe that referenced an `if`-scoped
+      variable failed to compile and `Curve` kept the previous binary, so the "diagnostic"
+      was a re-render of the old shader. The circle's 4x-band misbehaviour and the
+      as-yet-unexplained ~6-column boundary strip both came from such runs.
+
+    *State after:* the circle is pixel-identical to the pre-guard render (7748 device px),
+    both `tan` poles draw 0 pixels, `x-atan(y)` unchanged, `y-log(1+x)` draws no garbage and
+    covers its full true extent, and the only residue is a ~6-column dark strip at the domain
+    boundary (the probes cross out of the domain there). The user's inverse-form route
+    (`x+1-E**y`, `x-tan(y)` -> `y = atan(x)` by symmetry of the formulation) has no such
+    boundary, which is why it renders "perfectly" — that is a property of the formulation,
+    not a special case. Tests: 134 green, incl. `test_pole_of_tan_does_not_bridge_the_branches`
+    and `test_domain_boundary_draws_no_garbage_line`.

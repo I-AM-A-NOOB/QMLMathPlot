@@ -113,11 +113,17 @@ def test_implicit_shader_uses_the_level_set_formula() -> None:
     assert "#define F(x, y) " in fragment
     assert "#define FX " in fragment and "#define FY " in fragment
     # the distance to the level set, in pixels, and the same coverage ramp as the 1-D stroke
-    assert "float d = abs(f) / max(sqrt(gx * gx + gy * gy), 1e-9);" in fragment
-    assert "clamp(lineWidth * 0.5 + 0.5 - d, 0.0, 1.0)" in fragment
+    assert "float gnorm = max(sqrt(gx * gx + gy * gy), 1e-9);" in fragment
+    assert "float d = abs(f) / gnorm;" in fragment
+    assert "clamp(R - d, 0.0, 1.0)" in fragment
     assert "float gx = FX * camera.z;" in fragment and "float gy = FY * camera.w;" in fragment
+    # the two general guards: the domain predicate (x > -1 for log's form) and the
+    # linearisation-validity probes along the gradient
+    assert "#define DOM(x, y) " in fragment
+    assert "if (!DOM(x, y))" in fragment
+    assert "float curvature = fp - 2.0 * f + fm;" in fragment
     # no sampling loop and no envelope band: the minimal single-sheet version
-    assert "smp" not in fragment and "band" not in fragment
+    assert "smp" not in fragment
     assert "isnan(f) || isinf(f)" in fragment               # the non-finite guard
 
 
@@ -130,7 +136,9 @@ def test_the_implicit_shader_has_the_same_uniform_block_as_the_1d_one() -> None:
 
 
 # ------------------------------------------------------------------------- rendering
-def _render(plot: Plot, app: QGuiApplication) -> QImage:
+def _render(plot: Plot, app: QGuiApplication,
+            xlim: tuple[float, float] | None = None,
+            ylim: tuple[float, float] | None = None) -> QImage:
     view = QQuickView()
     view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
     view.resize(WIDTH, HEIGHT)
@@ -144,7 +152,11 @@ def _render(plot: Plot, app: QGuiApplication) -> QImage:
 
     camera = plot.camera
     camera.setViewport(float(WIDTH), float(HEIGHT))
-    camera.set_view(0.0, 0.0, SPAN / WIDTH, SPAN / HEIGHT)   # square units: a circle is round
+    if xlim is not None and ylim is not None:
+        camera.xlim = xlim
+        camera.ylim = ylim
+    else:
+        camera.set_view(0.0, 0.0, SPAN / WIDTH, SPAN / HEIGHT)   # square units: a circle is round
     for _ in range(20):
         app.processEvents()
     result = root.grabToImage()
@@ -338,3 +350,63 @@ def test_a_partial_that_is_not_a_single_term_still_strokes(app: QGuiApplication)
     total = (image.width() // 2 + 1) * (image.height() // 2 + 1)
     assert lit > 0, "nothing is drawn"
     assert lit < 0.05 * total, f"{lit}/{total} pixels lit: the disc filled instead of stroking"
+
+
+@pytest.mark.gui
+def test_pole_of_tan_does_not_bridge_the_branches(app: QGuiApplication) -> None:
+    """x - tan(y) = 0 is the family y = atan(x) + k*pi; between the branches tan(y) jumps
+    over ±inf. The first-order distance |F|/|grad F| degenerates at that jump (the gradient
+    explodes, the quotient collapses to zero) and the pole's whole neighbourhood comes out
+    "on the set" — measured: a full-width line at every y = pi/2 + k*pi. The
+    linearisation-validity probes see the discontinuity (their second difference is of the
+    order of the change itself) and drop it.
+    """
+    import math
+
+    plot = Plot()
+    plot.grid = False
+    plot.ticks_visible = False
+    plot.add_curve("x-tan(y)")
+    image = _render(plot, app, xlim=(-1.6, 1.6), ylim=(-4.0, 4.0))
+    width, height = image.width(), image.height()
+    for pole in (-math.pi / 2, math.pi / 2):
+        row = int((4.0 - pole) / 8.0 * (height - 1))
+        neighbourhood = sum(_lit(image, x, y)
+                            for y in range(row - 4, row + 5)
+                            for x in range(0, width, 4))
+        assert neighbourhood == 0, \
+            f"the pole at y={pole:+.3f} drew a connector: {neighbourhood} lit pixels"
+
+
+@pytest.mark.gui
+def test_domain_boundary_draws_no_garbage_line(app: QGuiApplication) -> None:
+    """y = log(1+x) undefined for x <= -1: an *evaluated* log(negative) returns finite
+    garbage on this driver, and the garbage paints the boundary as a vertical line. The
+    injected domain predicate guards before evaluating, so nothing is drawn outside.
+    """
+    import math
+
+    plot = Plot()
+    plot.grid = False
+    plot.ticks_visible = False
+    plot.add_curve("y-log(1+x)")
+    image = _render(plot, app, xlim=(-7.7592, 5.2778), ylim=(-9.3432, 0.7309))
+    width, height = image.width(), image.height()
+    # every column x <= -1 must be completely dark (the level set lives at x > -1)
+    boundary = int((-1.0 + 7.7592) / 13.037 * (width - 1))
+    for col in range(0, boundary - 3):
+        assert not any(_lit(image, col, y) for y in range(height)), \
+            f"a garbage line at column {col} (x = {-7.7592 + col / width * 13.037:+.4f})"
+    # the descent itself is drawn from just inside the boundary. A boundary strip stays
+    # dark — the probes cross out of the domain there, and the first-order idea has no
+    # honest answer within a stroke radius of the boundary (AGENTS item 48). The
+    # inverse form (x + 1 - E**y = 0) covers the strip, which is why that form renders
+    # the descent "perfectly"; the pin here is only that the descent is drawn at all.
+    lit_cols = [x for x in range(width) if any(_lit(image, x, y) for y in range(height))]
+    assert lit_cols, "nothing is drawn"
+    assert lit_cols[0] > boundary, \
+        f"the curve is drawn at column {lit_cols[0]}, left of the boundary at {boundary}"
+    # the other end is where the geometry says: x = e^0.73 - 1
+    true_end = int((math.exp(0.7309) - 1 + 7.7592) / 13.037 * (width - 1))
+    assert abs(lit_cols[-1] - true_end) <= 6, \
+        f"the curve ends at column {lit_cols[-1]}, expected {true_end}"

@@ -785,10 +785,18 @@ void main() {
 #
 #     d = |F| / |grad F in pixels|,  cov = clamp(lineWidth/2 + 0.5 - d, 0, 1)
 #
-# No sampling loop and no envelope band: this is the single-sheet, smooth case (thin features and
-# several branches of F through one pixel, e.g. sin(1/(x*x + y*y)), are a separate problem —
-# docs/api-design.md §6b). Out-of-domain pixels (log(x), sqrt, …) come out NaN and are dropped,
-# so there is no DOM/POLE machinery here either.
+# Two guards keep that first-order idea honest, both inherited from the 1-D renderer and both
+# symbol-free (they work for any elementary F):
+#   - **domain** (sympy, injected as DOM): pixels where F is undefined are dropped, *before*
+#     F is evaluated — GLSL's log(negative) is undefined and this driver returns finite
+#     garbage there (item 46), which would otherwise paint the boundary itself.
+#   - **linearisation validity**: the distance is trusted only where F actually varies the way
+#     the gradient predicts across the stroke's width. At a pole or a diverging domain boundary
+#     |grad F| explodes and |F|/|grad F| degenerates to a pseudo-zero — the whole pole
+#     neighbourhood comes out "on the set" (measured: x - tan(y) drew a full-width line at
+#     every y = pi/2 + k*pi). Probing F at p ± R*n̂ must change it by ~2R|grad F|; if the
+#     change is off by more than a factor of four the local model is invalid and the pixel is
+#     dropped. That is the 1-D join invariant / prediction test, one dimension up.
 IMPLICIT_FRAGMENT_TEMPLATE = """#version 440
 layout(location = 0) in vec2 vUV;
 layout(location = 0) out vec4 fragColor;
@@ -817,10 +825,18 @@ float _wrap(float t) { return t - TAU * floor(t * (1.0 / TAU)); }
 #define F(x, y) (@FUNC@)
 #define FX (@DFUNCX@)
 #define FY (@DFUNCY@)
+#define DOM(x, y) (@DOMXY@)
 
 void main() {
     float x = camera.x + (vUV.x - 0.5) * size.x * camera.z;
     float y = camera.y + (0.5 - vUV.y) * size.y * camera.w;
+
+    // Domain first: F is undefined outside it, and an evaluated-then-discarded call still
+    // poisons the optimiser (item 46) — and on this driver returns finite garbage.
+    if (!DOM(x, y)) {
+        fragColor = vec4(0.0);
+        return;
+    }
 
     float f = F(x, y);
     // |grad F| in pixels: the partial derivative per world unit times the world units per pixel
@@ -828,12 +844,51 @@ void main() {
     float gy = FY * camera.w;
     // Distance from this pixel to the level set, in pixels. The floor keeps a critical point of
     // F (grad F = 0, e.g. the apex of a degenerate level set) from dividing by zero.
-    float d = abs(f) / max(sqrt(gx * gx + gy * gy), 1e-9);
+    float gnorm = max(sqrt(gx * gx + gy * gy), 1e-9);
+    float d = abs(f) / gnorm;
+    float R = lineWidth * 0.5 + 0.5;
 
-    float cov = clamp(lineWidth * 0.5 + 0.5 - d, 0.0, 1.0);
+    // Linearisation validity: at a pole or a diverging domain boundary |grad F| explodes and
+    // |F|/|grad F| degenerates towards zero — the pole's whole neighbourhood would come out
+    // "on the set" (measured: x - tan(y) drew a full-width line at every pole). Probes at
+    // p ± R*n̂ must change F by a first-order amount with a small second difference: at a
+    // discontinuity the probes straddle a jump and the second difference is of the order of
+    // the change itself (measured at x - tan(y) near a pole). That is the 1-D probe's
+    // midpoint-violation test one dimension up. Everything is hoisted out of the coverage
+    // `if` on purpose — a shader whose output changes under an unrelated edit cannot be
+    // debugged (AGENTS item 46).
+    float nx = gx / gnorm;
+    float ny = gy / gnorm;
+    float stepx = nx * R * camera.z;
+    float stepy = ny * R * camera.w;
+    float fp = 1e30;
+    float fm = 1e30;
+    bool okp = false;
+    bool okm = false;
+    // Probe coordinates are hoisted into locals first: F's macro body is printed bare
+    // (`x*x`, not `(u)*(u)`), so a shifted argument would expand textually as
+    // `x + stepx*x + stepx` — AGENTS item 1, re-armed. A single-token argument is safe
+    // under any body form.
+    float pxp = x + stepx;
+    float pyp = y + stepy;
+    float pxm = x - stepx;
+    float pym = y - stepy;
+    if (DOM(pxp, pyp)) {
+        fp = F(pxp, pyp);
+        okp = (fp == fp) && (abs(fp) < 1e30);
+    }
+    if (DOM(pxm, pym)) {
+        fm = F(pxm, pym);
+        okm = (fm == fm) && (abs(fm) < 1e30);
+    }
+    float curvature = fp - 2.0 * f + fm;
+    bool valid = okp && okm
+                 && abs(curvature) <= 0.9 * abs(fp - fm);
+
+    float cov = clamp(R - d, 0.0, 1.0);
     float a = cov * color.a * qt_Opacity;
-    if (isnan(f) || isinf(f)) {
-        a = 0.0;                       // pixels where F itself is undefined
+    if (isnan(f) || isinf(f) || !valid) {
+        a = 0.0;                       // F undefined here, or not resolvable at all
     }
     fragColor = vec4(color.rgb * a, a);   // premultiplied alpha
 }
@@ -844,12 +899,16 @@ def implicit_shader_sources(expr: sp.Expr) -> tuple[str, str]:
     """Vertex/fragment shader sources for an implicit curve (the level set ``F(x, y) = 0``).
 
     Same uniform block as the 1-D shader, so the QML side and the curve model need no special
-    case: only the expressions differ.
+    case: only the expressions differ. The domain predicate comes from the same sympy analysis
+    the 1-D path uses, printed over both symbols (F lives on two of them).
     """
+    conds = _domain_conditions(expr)
+    dom = " && ".join(f"({func_glsl(c)})" for c in conds) if conds else "true"
     return (VERTEX_SHADER, IMPLICIT_FRAGMENT_TEMPLATE
             .replace("@FUNC@", func_glsl(expr, "x"))
             .replace("@DFUNCX@", func_glsl(sp.diff(expr, sp.Symbol("x")), "x"))
-            .replace("@DFUNCY@", func_glsl(sp.diff(expr, sp.Symbol("y")), "x")))
+            .replace("@DFUNCY@", func_glsl(sp.diff(expr, sp.Symbol("y")), "x"))
+            .replace("@DOMXY@", dom))
 
 def shader_sources(expr: sp.Expr) -> tuple[str, str]:
     """Vertex/fragment shader sources for the QML front end (implicit model)."""

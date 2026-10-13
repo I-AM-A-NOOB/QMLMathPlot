@@ -201,7 +201,14 @@ everything around it — camera, themes, export, QML — is already artist-agnos
   cannot see them; an honest answer needs several samples per pixel plus a spread test, i.e. a
   two-dimensional version of the 1-D criteria (a2)/(d).
 * **Domain and poles in 2-D** — the 1-D `DOM`/`POLE` machinery does not generalise directly: a
-  pole is now a curve rather than a point.
+  pole is now a curve rather than a point. What the implicit renderer has instead is the same
+  sympy domain predicate (guarded *before* evaluating, since `log(negative)` returns finite
+  garbage on this driver) plus a linearisation-validity probe: at a pole or a diverging
+  boundary `|grad F|` explodes and `|F|/|grad F|` degenerates towards zero, so the probe pair
+  at `p ± R·n̂` must change `F` by a first-order amount with a small second difference. Both are
+  symbol-free. The residue is honest: within a stroke radius of a domain boundary the probes
+  cross out of the domain, so that strip stays dark — the inverse form (see `x + 1 - E**y` for
+  `log(1+x)`) has no such boundary and renders the full curve.
 * **Cost** — three evaluations per pixel, cheap next to the 1-D stroke's 1 + 8 + 16, but a bigger
   shader, since `Fx`/`Fy` are inlined the way `DF` is.
 
