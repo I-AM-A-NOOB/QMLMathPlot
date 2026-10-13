@@ -11,6 +11,8 @@ The backend is chosen by the ``QSG_RHI_BACKEND`` environment variable (unset = Q
 
 from __future__ import annotations
 
+import math
+
 import pytest
 from PySide6.QtCore import QEventLoop, QTimer, QUrl
 from PySide6.QtGui import QGuiApplication, QImage
@@ -28,7 +30,8 @@ HOME = (-6.0, 6.0, -2.0, 2.0)    # the classic view: the pixel positions below a
 
 def _render_plot(app: QGuiApplication, expression: str | None = None,
                  pan_pixels: float = 0.0, zoom_steps: int = 0, furniture: bool = False,
-                 title: str = ""):
+                 title: str = "", xlim: tuple[float, float] | None = None,
+                 ylim: tuple[float, float] | None = None):
     """Open the component at the classic 900x600 view and grab one frame: (image, plot)."""
     view = QQuickView()
     view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
@@ -62,8 +65,8 @@ def _render_plot(app: QGuiApplication, expression: str | None = None,
     if plot is not None:
         camera = plot.camera
         camera.setViewport(float(WIDTH), float(HEIGHT))
-        camera.xlim = (HOME[0], HOME[1])
-        camera.ylim = (HOME[2], HOME[3])
+        camera.xlim = xlim if xlim is not None else (HOME[0], HOME[1])
+        camera.ylim = ylim if ylim is not None else (HOME[2], HOME[3])
         if pan_pixels:
             camera.pan_pixels(0.0, pan_pixels)
         if zoom_steps:
@@ -217,6 +220,115 @@ def test_asymptote_is_not_connected(app: QGuiApplication) -> None:
             lit = max(_column_lit_at(image, x) for x in range(center - 3, center + 4))
             assert lit < 0.25 * height, \
                 f"{expr} draws a connecting line at x={pole}: {lit} lit pixels"
+
+
+def test_jump_discontinuity_is_not_connected(app: QGuiApplication) -> None:
+    """A plain jump discontinuity must not draw a vertical connector.
+
+    x/sqrt(x^2) is sign(x): it jumps 2 world units at x=0 and has *no pole denominator*
+    for the old analytic guards to recognise. The join invariant (a segment only ever
+    joins samples within 2.5 px of each other) refuses the chord because it is two
+    viewports long — measured before the invariant: a 454-px column at x=0.
+    """
+    image = _render(app, "x/sqrt(x**2)")
+    height = image.height()
+    center = image.width() // 2
+    worst = max(_column_lit_at(image, x) for x in range(center - 3, center + 4))
+    assert worst < 0.25 * height, \
+        f"the jump is drawn as a connector: {worst} lit pixels at x=0"
+
+
+def test_steep_slope_stroke_is_continuous_and_constant_width(app: QGuiApplication) -> None:
+    """k*x from mild to extreme slope: the stroke keeps one width and no breaks.
+
+    The march's arc-length sampling makes the width a property of the line, not of the
+    slope (the old fixed-x renderer lost ~10 % at slope 200, where its ±1-column window
+    fought the band criteria). A march that ran out of budget before reaching its own
+    foot used to dash the line instead — the chord of one budget's length per column.
+    """
+    widths = []
+    for k in (2, 10, 40, 200):
+        image = _render(app, f"{k}*x")
+        chord_length = math.hypot(2 * (2.0 / k) * image.width() / 12.0,
+                                  4.0 * image.height() / 4.0)
+        widths.append(_curve_count(image) / chord_length)
+        # the stroke may appear dashed only if some column's lit rows split in two
+        for col in range(image.width()):
+            ys = [y for y in range(image.height()) if _lit(image, col, y)]
+            if len(ys) < 4:
+                continue
+            best = cur = 1
+            for i in range(1, len(ys)):
+                cur = cur + 1 if ys[i] == ys[i - 1] + 1 else 1
+                best = max(best, cur)
+            assert best > 0.7 * len(ys), \
+                f"slope {k}: column {col} dashes the line (longest run {best} of {len(ys)})"
+    assert all(0.85 * widths[0] <= w <= 1.15 * widths[0] for w in widths[1:]), \
+        f"the stroke width must not depend on the slope: {[round(w, 2) for w in widths]}"
+
+
+def test_steep_wall_at_large_y_is_drawn(app: QGuiApplication) -> None:
+    """1/x and tan(x) at large |y| with a wide x view: the branch is a near-vertical
+    wall, and a pixel's foot on it is a whole view up the arc — no march budget can
+    walk that far, and the tangent projection overshoots past the pole. The column
+    probe's consistent chords stroke it (measured before: 1/x at y 50..60 over x ±6
+    drew *nothing at all* — the curve vanished).
+    """
+    for expr in ("1/x", "tan(x)"):
+        image, _ = _render_plot(app, expr, xlim=(-6.0, 6.0), ylim=(50.0, 60.0))
+        height = image.height()
+        tallest = max(_column_lit_at(image, x) for x in range(image.width()))
+        assert tallest >= 0.9 * height, \
+            f"{expr} at large |y|: tallest column only {tallest} of {height} rows"
+
+
+def test_shifted_log_descent_wall_is_continuous(app: QGuiApplication) -> None:
+    """log(1+x) deep in its descent: the wall must not break in the middle.
+    Three separate holes used to open in it: (a) out-of-domain pixels just left of the
+    boundary took the early return with the ray alone, and the ray started at a single
+    close probe — everything between the polyline's reach and that start was dark;
+    (b) the wide window's samples straddled the boundary, where GLSL's log(negative)
+    is undefined and the driver returned finite garbage — the band collapsed to zero
+    for a whole column; (c) the wide window's t-indexed loop form computed
+    out-of-envelope samples under this driver's optimiser even guarded. Measured on
+    this view before: a ~180-row hole at x ≈ −1; after: 5 rows, the ray start's own
+    antialiasing.
+    """
+    image, _ = _render_plot(app, "log(1+x)", xlim=(-2.91528, 0.695638),
+                            ylim=(-7.67519, -4.78814))
+    height = image.height()
+    worst = 0
+    for col in range(image.width()):
+        ys = [y for y in range(height) if _lit(image, col, y)]
+        if not ys:
+            continue
+        for i in range(1, len(ys)):
+            if ys[i] == ys[i - 1] + 1:
+                continue
+            worst = max(worst, ys[i] - ys[i - 1] - 1)
+    assert worst <= 12, f"the descent wall breaks: a {worst}-row gap in a column"
+
+
+def test_descent_is_one_wall_not_two(app: QGuiApplication) -> None:
+    """A shallower descent view must not fork into two parallel walls.
+
+    When the curve's own samples already reach the viewport's bottom, the boundary ray
+    is redundant — and drawing it next to the visible curve reads as a fork (measured:
+    the ray at x = −1 beside the curve at x ≈ −0.996 in a 0.9-unit-wide view of
+    log(1+x)). The gate is the samples' deepest point; the ray's *top edge* is a
+    separate, higher quantity, and conflating them was the fork.
+    """
+    image, _ = _render_plot(app, "log(1+x)", xlim=(-1.5912, -0.4357),
+                            ylim=(-6.0641, -5.1712))
+    width = image.width()
+    groups = 0
+    prev_lit = False
+    for col in range(width):
+        lit = any(_lit(image, col, y) for y in range(image.height()))
+        if lit and not prev_lit:
+            groups += 1
+        prev_lit = lit
+    assert groups == 1, f"the descent forks into {groups} walls"
 
 
 def test_out_of_domain_is_blank(app: QGuiApplication) -> None:

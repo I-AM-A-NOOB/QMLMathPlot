@@ -442,26 +442,225 @@ histories and numbers belong here.
 | `qsb` bake | 0 / ~126 ms | Cached by source hash: 0.15 ms on a hit; a source change re-bakes once |
 | Expression analysis (sympy) | 0.6–3 ms | See item 14 |
 
-Per-frame GPU cost (2400×1500, extreme zoom, worst case) **31 ms**; at 900×600 it is about
-1/7 of that, well below 60 Hz's 16.7 ms. Fragment shader source ≈ 6.9 KB.
+Frame grab cycles (900×600, `grabToImage` — frame plus readback, an upper bound on the
+GPU cost; the fixed-grid shader measured 31 ms of pure GPU at 2400×1500, ~1/7 at 900×600):
+`sin(1/x)` default 27 ms, `tan(x)` default 34 ms, `sin(1/x)` at zoom 90 (worst case) 33 ms
+mean / 36 ms peak. 1-D fragment shader source ≈ 21 KB.
 
-**Per-pixel work** (measured by patching a counter into the shader and reading it back out
-of the rendered pixels — the mean/peak number of `F` evaluations per pixel):
+Per-pixel `F` evaluations (counter patched into the shader, read back out of the rendered
+pixels; fixed-grid renderer → march, from item 44):
 
-| expression | before | after |
+| expression | fixed grid (mean/peak) | march (mean/peak) |
 |---|---|---|
-| `tan(x)` | 32.96 / 33 | **16.96 / 17** |
-| `x^3` | 31.36 / 33 | **16.45 / 17** |
-| `log(x)` | 8.50 / 33 | **5.83 / 17** |
-| `1/x` | 14.64 / 33 | **10.87 / 17** |
-| `exp(-x*x)*sin(10*x)` | 14.97 / 33 | **10.99 / 17** |
-| `sin(1/x)`, default view | 12.56 / 33 | **10.30 / 33** |
+| `tan(x)` | 16.96 / 17 | 18.98 / 50 |
+| `x^3` | 16.45 / 17 | 16.53 / 50 |
+| `log(x)` | 8.50 / 33 | 7.97 / 50 |
+| `1/x` | 14.64 / 33 | 6.27 / 50 |
+| `exp(-x*x)*sin(10*x)` | 14.97 / 33 | 6.83 / 58 |
+| `sin(1/x)`, default view | 12.56 / 33 | 5.32 / 58 |
 
-The shader is written so that each piece of work is paid for only when it survives: the
-band decision is made from the 8 narrow-window samples first (1 + 8 evaluations in the
-common case), the interleaved odd slots are sampled only when the turn count is needed
-(1 + 8 + 8), the wide window only when the column will actually be banded (1 + 8 + 8 + 16),
-and a fully banded column skips the stroke entirely (mixing with w = 1 discards it anyway).
-A pole-gap column draws nothing and skips all of it. Verified pixel-identical (≤1/255 in one
-channel on 2-8 of 1.2 M pixels, i.e. compiler scheduling noise) across 18 expression/view
-combinations, including every zoom level of `sin(1/x)`, deep `log` views and all poles.
+The march pays per pixel: 1 `f` + 1 `f'` + the walk. A shallow pixel stops after a few
+steps (the escape rule recedes) and never runs the column probe, so it is cheaper than the
+old fixed grid's unconditional 8 narrow-window samples; the probe (8 grid + 8 midpoints)
+and the wide window are only paid where the march said so. The peak is the banded column:
+the full step budget in both directions plus both windows.
+
+## The march (the fixed-x grid replaced)
+
+44. **The fixed-x renderer was replaced by the march** (symptom → cause → fix, with what
+    each superseded mechanism cost).
+
+    *Symptoms (the two the rewrite was for):* the stroke thinned out where dy/dx was large
+    (2.02 of the nominal 2.25 px at screen slope 200), and vertical connectors kept
+    reappearing at discontinuities the analysis could not see. *Cause:* the renderer
+    sampled f on a **fixed x grid** but stroked in screen space, and bridged the mismatch
+    with case-by-case detection — a ±1-column window widened until the band criteria
+    stopped over-triggering (items 5/24), three separate POLE guards plus a 32×viewport gap
+    against connectors (item 12), a 16-point interleaved turn count against sampling luck
+    (item 11), and measured thresholds tying the two families together. The detection was
+    **structurally blind**: `x/sqrt(x**2)` (= sign) has no pole denominator, and it drew a
+    **454-px full-height column** at x=0 through every guard, measured.
+
+    *Fix: one mechanism.* The fragment shader walks the curve per pixel: seed at the
+    column (probe if it is a pole/domain column), **project the pixel onto the tangent**
+    one evaluation to start at its foot, then march **1 logical px of arc length per
+    step** in both directions (`f'` bootstraps the slope; 4 halvings when it cannot), stop
+    at the viewport edge, at a receding `R+1` ball, or at the 12-step budget. A segment
+    joins only samples within **2.5 px** (the join invariant). Consequences, each one
+    replacing a family of patches:
+
+    - width is a property of the line, not of the slope: `k·x` measured **3.00/3.00/3.00/
+      2.94** device px at slopes 2/10/40/200 (nominal 3.0) — and there is no window to
+      widen against band criteria, because coverage is bounded by the escape rule;
+    - a connector cannot be *formed*, whatever its origin — the invariant refuses the
+      chord, and a pole column is dark because its branches leave through the viewport
+      edge before the pole;
+    - a jump lands in the invariant too: an honest 1-px stride that still cannot join is a
+      discontinuity, and the march resumes on the far branch (`run` is true only for
+      stride estimates measured from joined pairs; a probe step halves at most 4 times
+      before concluding) — that is why `x/sqrt(x**2)` draws 4 px where the old renderer
+      drew 454;
+    - the band's (a)/(d) criteria became four march-native triggers, each tapering with
+      its count: budget exhausted (sustained structure), ≥ 2 reversals, ≥ 4 missed tangent
+      predictions (aliasing), or ≥ 2 column-probe **violations** — the fixed-x probe's
+      midpoint landing outside its pair's [min,max], which is the sub-column oscillation
+      the march cannot see along the arc. The 16-point interleave and the 16×/4px
+      thresholds are gone;
+    - the pole-flood hazard got a gate that needs no pole recognition: a pole or jump
+      column's envelope brackets the whole viewport without taking those values (its
+      window samples form a monotone "V" — exactly one violating pair), while a genuinely
+      oversampled oscillation violates most pairs: the fill is **gated on the violation
+      count** (`smoothstep(3, 6, violations)`), zoom-stable where the old 32×-viewport gap
+      was viewport-relative and the pixel-unit gates were not.
+
+    *Traps re-armed while implementing (measured here, on this machine):*
+    - the escape rule must count only **receding** steps: a march closing in on its foot
+      from far away (steep curves) was stopped on its way in → dashed strokes;
+    - the **tangent-foot seed cap** and the hopless check matter: a seed > ~500 px along
+      its own tangent is meaningless, and a seed more than `R + 2 + MARCH` from the pixel
+      will not reach it — marching anyway burns the budget and fires a spurious band;
+    - a dy smaller than ~1e-4 px is **float noise** whose sign flips read as reversals
+      (constant-valued expressions such as `x/sqrt(x**2)` move ~1e-12 per step) — that is
+      what banded the jump column solid behind the invariant;
+    - the old narrow-window turn counting hid a **second** mix line: after adding the
+      violation gate a `cov = mix(cov, band, …)` line survived below the gated one and
+      silently undid it.
+
+    *Superseded:* items 6 (two rulers → the probe's violation count), 11 (16-point
+    interleave → arc sampling turns are traversed, not luck-sampled), 12 (three POLE
+    guards + the 32× gap → the invariant + the violation gate), 24 (±1-column window →
+    arc-length marching). Items 5 (segment distance) and 13 (the boundary ray) survive
+    unchanged inside the march; the ray remains its own mechanism because a jump over the
+    viewport is not an arc a 12-step budget can walk either.
+
+    *Per-pixel `f` evaluations* (counter patched into the shader; mean/peak over 1-in-3
+    pixels, fixed grid → march): `tan(x)` 16.96/17 → 18.98/50; `x^3` 16.45/17 → 16.53/50;
+    `log(x)` 8.50/33 → 7.97/50; `1/x` 14.64/33 → 6.27/50; `exp(-x*x)*sin(10*x)`
+    14.97/33 → 6.83/58; `sin(1/x)` 12.56/33 → 5.32/58. The mean is lower everywhere; the
+    peak is the banded column. 1-D fragment source ≈ 21 KB. Frame grab cycles
+    (900×600, incl. readback): default-view `sin(1/x)`/`tan(x)` 27/34 ms mean, `sin(1/x)`
+    at zoom 90 (worst case) 33 ms mean / 36 ms peak.
+
+45. **A steep monotone wall vanished under the march; the column probe's chords cover
+    it** (symptom → cause → fix, with what the post-rewrite review found).
+
+    *Symptoms (user-reported, after item 44):* `log(x)` "thins then thickens at the
+    bend at every zoom"; `tan(x)`/`1/x` go thin or disappear at large |y|; `sin(1/x)`
+    has a fragmented patch in the middle that stays fragmented when zoomed; Desmos
+    fills the screen for `tan(x)` when zoomed in far enough.
+
+    *Investigation (all measured here, on this machine):*
+    - the `log` corner is **correct**: run heights at six points across five views match
+      the constant-width stroke scaled by the local slope and the AA feather (e.g. a
+      6/5/5/4/5/4-row profile over slope 21 → 1.7, where the "expected" single number
+      is the run height divided by √(1+m²)). Comparing a run's centre against the
+      curve's value *at the pixel's own column* is meaningless on steep stretches —
+      that was a measurement artifact, not a render bug.
+    - `sin(1/x)`'s centre column is **solid** (900/900 rows above the solid threshold)
+      at zooms 30/45/60/90; the fragmentation is the band/stroke boundary columns
+      (17 of 1350 at zoom 30), the same transition the old renderer had.
+    - `tan(x)`/`1/x` at large |y| **really did vanish**: at y 50..60 over x ±6, `1/x`
+      drew 0 columns. Its pixels' feet are a whole view up the arc (no march budget
+      can walk there), the tangent projection overshoots past the pole onto another
+      part of the branch, and the hoplessness gate then correctly skips the march.
+      The only thing that can cover those pixels is the band — and the band's
+      violation-count gate (item 44) *blocks* it: a wall's probe samples are monotone
+      (the V has exactly one violating pair, at the straddle).
+
+    *Fix: the chord-stroke.* A **consistent pair** of probe samples — one whose
+    midpoint lands strictly inside the pair's [min,max] — is a trustworthy chord: the
+    connected curve between the pair's ends really does pass through the values in
+    between (the jump pair of a pole or jump column just failed the midpoint test;
+    a flat or degenerate span brackets nothing). Stroke those chords with the same
+    coverage ramp as the march, and let the bracket weight the band fill:
+    `cov = max(cov, band · … · max(violations-gate, bracket))`. It is the old
+    fixed-x renderer's long-chord coverage, minus its connector: the straddling pair
+    never qualifies. Measured after: `1/x` at y 50..60 over x ±6 draws a full-height
+    wall (4 columns), `tan(x)` the same at all four of its in-view poles (16 columns),
+    and `k·x` keeps 3.00/3.00/3.00/2.94 device px at slopes 2/10/40/200.
+
+    *Traps re-armed while implementing:*
+    - the band fill must be `max(cov, …)`, **not** `mix(cov, band, w)`: mixing with a
+      band of 0 darkens the stroke (measured: the ray-drawn part of `log`'s descent
+      pinched to 2.50 of 3.00 px once a chord bracket outweighed the ray);
+    - the probe's 1-px spacing is **load-bearing**: a slope-adaptive (R/|f'|) spacing
+      hugs the column's own value and brackets nothing — the large-|y| wall went back
+      to 0 columns. The coarse grid is what produces pairs that span the pixel's y.
+    - the tang-foot projection's cap (`|t| < 512`) was dead weight, not a guard:
+      pixels whose projection lands far are filtered by the hoplessness gate, and a
+      pole-adjacent column's own tang-seed already lands in the ball. Removing it
+      changed nothing visible but the pole-adjacent behaviour under deep zoom.
+
+    *Known limitation (unchanged by the fix):* the Desmos-style **merged pole wall**
+    — two branches a fraction of a pixel apart under an enormous y view (e.g. tan at
+    x ±0.002, y ∈ [1e6, 1.1e6]) — is still blank. Its visible arc is the sliver
+    between the pixel's column and the pole, narrower than the probe's 1-px step, and
+    the tangent projection overshoots the pole. Covering it needs a pole-ward
+    bisection seed (solve F(x) = y towards the straddled discontinuity), a separate
+    mechanism from the march.
+
+46. **log(1+x)'s descent wall broke in the middle — three stacked holes and a compiler
+    trap** (symptom → cause → fix, with the debugging lesson).
+
+    *Symptom (user-reported with a screenshot):* `log(1+x)` zoomed deep into its
+    descent (view x [-2.9, 0.7], y [-7.7, -4.8]) drew the wall at x ≈ −1 with a
+    ~180-row hole in its middle; `tan`/`1/x` went thin or vanished at large |y|;
+    `sin(1/x)` looked speckled; "nothing improved".
+
+    *The three holes:*
+    - **out-of-domain pixels took the early return with the ray alone.** A pixel just
+      left of the boundary is still inside the curve's stroke band (the curve passes a
+      pixel or two inside at that height, where the boundary is not vertical yet), and
+      the ray only covers the genuinely vertical part: it starts at the boundary probe.
+      Everything between the polyline's reach and the ray's start was dark. Fix: the
+      out-of-domain branch now also strokes **just-inside chords** (four samples
+      inside the boundary, with "the pair brackets this pixel's height" as the
+      consistency test — exactly the monotone near-boundary case that qualifies).
+    - **the ray started too low.** `edge_nl` came from a single probe 0.25 px inside
+      the boundary — the *deepest* value. A down-ray's top edge should be the
+      *highest* in-domain probe: the descent carries every value below it to the
+      boundary. Fix: a 4-step ladder on whichever side is in the domain, best_down for
+      the down-ray's top (best_up for the up-ray's bottom). The shallow-boundary
+      regression the probe exists for (`log(x-1)` in a shallow view) is preserved:
+      every probe below the viewport bottom and the ray still declines to draw.
+    - **the wide window straddled the domain boundary.** GLSL's log(negative) is
+      undefined and this driver returns *finite garbage*; wl/wh picked it up and the
+      band's clamp collapsed the whole column to zero. Fix (both parts):
+      guard *then* evaluate — never evaluate F outside the domain — and keep the
+      loop in the **same inline form as the column probe**: a `t`-indexed variant
+      computed out-of-envelope samples under the optimiser even when guarded
+      (measured: wh−wl = 4+ world units where the true spread was 3.2). All six F
+      sites in the shader now guard before evaluating.
+
+    *The debugging lesson (cost half a day):* **instrumented renders are not the
+    shipped shader.** Adding a global to write diagnostics into the output changed the
+    coverage itself — same source plus a store, different pixels lit. Diagnoses that
+    referenced variables scoped inside the band's `if` failed to compile, and `Curve`
+    silently kept the *previous* binary (that is the documented behaviour), so the
+    "diagnostic" was a re-render of the old shader. Two rules that came out of it:
+    the band's quantities are hoisted out of the trigger's `if` (a shader whose output
+    changes under an unrelated edit cannot be debugged), and diagnostics must be
+    verified against the plain render's own pixels, never the other way around.
+
+    *Also fixed along the way:* `cov = max(cov, band …)` — mixing with a zero band
+    darkened the stroke; the log-corner and sin(1/x) reports did not reproduce
+    (run heights matched constant width × slope × feather at five views; the centre
+    column was solid at zooms 30-90 — both earlier "gaps" were measurement artifacts:
+    run centres compared against the wrong reference, and grid/ticks counted as gaps).
+
+    Measured after, on the reported view: the wall is continuous, the largest internal
+    vertical gap in the whole frame is **5 rows** (the ray start's own antialiasing;
+    ~180 before), 130/130 tests green, and `k·x` still holds 3.00/3.00/3.00/2.94 at
+    slopes 2/10/40/200.
+
+47. **The delta to 46: the ray's gate and its top edge are different quantities.**
+    Over-correcting 46 (giving the boundary ray a *higher* start) forked log(1+x)'s
+    descent into two parallel walls: the ray at x = −1 beside the curve at x ≈ −0.996
+    in a view where the curve's own samples already reach the viewport bottom. The
+    down-ray's start (`rtop`) is separate from the samples' deepest point (`nl`) that
+    *decides whether to draw at all*: `nl > y_bot` is "the polyline has not reached the
+    bottom", and feeding it the highest probe made a redundant ray draw wherever the
+    descent was already visible. `_ray_dist` now takes both; `edge_nl` is the ladder's
+    minimum (the gate), `edge_top` its maximum (the start). Measured after: one wall in
+    the fork view, the deep-descent wall still continuous (5-row worst gap, the ray
+    start's own AA), 132/132 green.

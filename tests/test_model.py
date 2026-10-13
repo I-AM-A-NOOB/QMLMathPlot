@@ -66,26 +66,21 @@ def test_shader_sources_use_the_camera():
     assert "float sy = 1.0 / camera.w;" in frag
 
 
-def test_pole_and_domain_analysis():
-    """Pole factors (a sign change = a +inf/-inf jump) and domain conditions."""
-    assert model.pole_glsl(1 / X) == "(x)"     # the default symbol name
-    assert model.pole_glsl(1 / X, "u") == "(u)"
-    assert model.pole_glsl(sp.tan(X)) is not None
-    assert model.pole_glsl(sp.sin(X)) is None
-
+def test_domain_analysis():
+    """Domain conditions (where the function's value is defined at all)."""
     assert model.domain_glsl(sp.log(X)) == "(x > 0)"      # default symbol name
     assert model.domain_glsl(sp.log(X), "u") == "(u > 0)"
     assert model.domain_glsl(sp.sqrt(X)) == "(x >= 0)"
     assert model.domain_glsl(X**2) is None               # the whole domain
 
 
-def test_shader_sources_inject_domain_and_pole():
+def test_shader_sources_inject_domain():
     _, frag = model.shader_sources(1 / X)
     assert "#define DOM(u) ((u != 0))" in frag
-    assert "#define POLE(u) ((u))" in frag
+    # The join invariant replaced the pole-detection machinery: no POLE macro at all.
+    assert "POLE" not in frag
     _, smooth = model.shader_sources(X**2)
     assert "#define DOM(u) true" in smooth               # not analysable => identically true
-    assert "#define POLE(u) 1.0" in smooth               # no pole => the product stays positive, no false positives
 
 
 def test_unbounded_edges():

@@ -330,24 +330,63 @@ a Python-side assignment updates the view with no call in between. `view.py`, `P
 | Entry | `src/qmlmathplot/app.py` | command line / standalone window (the `qmlmathplot` script, `examples/minimal.py`) |
 | Examples | `examples/` | `minimal.py` (minimal), `explorer_qtwidgets.py` (input box + widget coexistence), `explorer_qtquick.py` (Qt Quick) |
 
-## Algorithm (the two pieces that make it visually "perfect")
+## Algorithm (one mechanism: the march)
 
-1. **Screen-space distance stroke**: for every pixel, compute its first-order
-   distance to the curve from `f` and `f'`,
-   `cov = clamp(lineWidth/2 + 0.5 − d, 0, 1)`. Equal width at any slope, naturally
-   antialiased, and correct by construction at poles (`tan(x)`) and jumps.
-2. **Undersampled envelope band**: when a pixel's x interval holds several
-   oscillations (local period < 1 pixel), the per-pixel distance is meaningless
-   (it renders as moiré). In that case the column's `[min, max]` is filled as a
-   solid band — for `sin(1/x)` this equals filling its true ±1 envelope.
+For every pixel the shader **walks the curve** instead of sampling a fixed x grid, and
+that is what removes the whole class of "sampling wins/loses against the geometry":
 
-Both criteria are **scale-independent** and are unioned: (a) ≥ 2 direction
-reversals within the column (8 sample points for an ordinary pixel, topped up to 16
-inside the band region); (d) the derivative prediction `|f'|·dx` far exceeds the
-measured spread (hard threshold 16× and `pred ≥ 4px`). One gate: a spread < 1.5 px
-is not filled (do not turn peak ripple into a block of colour). An ordinary pixel
-costs 1 `f` + 1 `f'` + 8 narrow-window samples; the wide window (±8 columns, 16
-points) is only evaluated inside the band region.
+1. **Seed** on the curve at this pixel's column (a pole or domain-edge column probes just
+   off itself), then **project the pixel onto the tangent there** — one dot product and one
+   evaluation — so the walk starts at the pixel's own foot. On a steep curve the column's
+   curve point can be a whole viewport away (in arc length), and no budget can walk that
+   far, which used to dash the line.
+2. **March** along the curve in both directions, one *logical pixel of arc length* per
+   step (the stride follows the estimated screen slope; `f'` bootstraps it). Stroke by
+   **distance to the joined polyline segments** (Desmos' approach): equal width at any
+   slope, naturally antialiased — the width is a property of the line, not of the slope
+   (measured on `k·x`: 3.00, 3.00, 3.00, 2.94 device px at slopes 2/10/40/200 against a
+   nominal 3.0, where the old ±1-column window gave 2.24/2.10/2.05/2.02).
+3. **Join invariant**: a segment only ever joins two samples within **2.5 px** of each
+   other. Chords of 1-px-arc steps are ~1.2 px on any continuous curve, so a jump across
+   a pole — *or across any discontinuity the static analysis never recognised* — is
+   hundreds of px: the connector is not detected and cut, it cannot be formed
+   (`x/sqrt(x**2)` = sign: measured a 454-px column at x=0 through the old pole guards).
+4. **Escape rule**: three *receding* steps outside the pixel's stroke-radius ball end a
+   direction — the curve is monotonically away. A reversal resets the count (it may well
+   come back). This bounds a steep monotone branch (`log`'s descent) without any
+   viewport-relative gap.
+5. **Envelope band** for the columns the march cannot resolve, each trigger tapering with
+   its count: the step budget ran out (sustained structure — `sin(1/x)` near its
+   singularity), the path reversed on itself twice inside the window (a sub-stroke
+   oscillation), it kept missing its own 1-px tangent prediction (aliasing), or a
+   **fixed-x column probe** found structure below the pair spacing (a midpoint outside its
+   pair's [min,max] — a pole lands in exactly one pair, which is why the trigger needs
+   two). The column probe is what sees a sub-column oscillation: along the arc it is
+   *resolved* — the march follows it faithfully for millions of pixels without ever
+   turning. The fill's edges come from a wider ±8-column, 16-point window, and the fill is
+   **gated by the violation count** (a pole or jump column's envelope brackets the whole
+   viewport without taking those values; a genuinely oversampled oscillation violates most
+   of its pairs) — the old 32×-viewport gap, without recognising the pole, and unlike a
+   pixel-unit gap it does not drift with zoom.
+
+5. **Chord-stroke from the column probe** for the columns the march provably cannot
+   serve — a steep monotone wall (`1/x`/`tan(x)` at large |y|) whose pixel foot is a
+   whole view up the arc. A probe pair whose midpoint lands strictly inside its
+   [min,max] is a trustworthy chord (the connected curve passes through the values in
+   between; a pole or jump pair fails the midpoint test), so those chords are stroked
+   with the same coverage ramp and weight the band fill. This is the old fixed-x
+   renderer's long-chord coverage minus its connector, and the 1-px probe spacing is
+   load-bearing: a slope-adaptive spacing hugs the column's own value and brackets
+   nothing.
+
+`DOM` (domain: denominator ≠ 0, `log` argument > 0, `sqrt` ≥ 0, `asin/acos` ∈ [−1,1],
+NaN/inf) is unchanged, and the slowly diverging boundary ray (`log`'s descent) keeps its
+own mechanism: its arc is exactly the ray's job.
+
+An ordinary shallow pixel costs 1 `f` + 1 `f'` + the march (a handful of evaluations,
+stopped by the escape rule after a few steps); a resolved steep pixel a tangent-foot
+projection on top; the column probe and the wide window are only paid in the columns that
+have earned them.
 
 ## Tests
 
@@ -405,78 +444,58 @@ QSG_RHI_BACKEND=opengl uv run pytest -m gui
 
 ## Pitfalls near the `sin(1/x)` singularity (fixed — do not repeat)
 
-All of them (macro arguments, GPU `sin`/`cos`, stroke saturation on steep columns,
-per-column phase noise) are recorded in `AGENTS.md` as symptom → cause → fix with
-the measurements that settled them. After the fixes (1350×900, default view, D3D11
-and OpenGL pixel-for-pixel identical): the singularity column of `sin(1/x)` is lit
+All of them (macro arguments, GPU `sin`/`cos`, the fixed-x-grid sampling era's stroke
+saturation, per-column phase noise, the jump-discontinuity connector) are recorded in
+`AGENTS.md` as symptom → cause → fix with the measurements that settled them. After
+the fixes (900×600 logical, default view): the singularity column of `sin(1/x)` is lit
 over a ratio of 0.50 (= half a column filling the ±1 envelope) with flat edges, and
-inside the central 41 columns no solid pixel falls outside |y|>1 (7961 before).
+inside the central 41 columns no solid pixel falls outside |y|>1 (7961 before the
+envelope band existed).
 
 - Macro arguments must be parenthesized.
 - GPU `sin`/`cos` are unreliable for large arguments.
 - Tangent-based distance saturates on steep columns.
 - Per-column sampling is phase noise for oscillating functions.
+- The **join invariant** replaces pole detection: tangent-foot seeding and arc-length
+  marching, so a connector of *any* origin (poles, jumps) cannot be formed
+  (`AGENTS.md` item 44).
 
 ## Domain, poles and stroke (Desmos-style)
 
 [Desmos's engineering blog](https://engineering.desmos.com/articles/press-a-key-in-the-calculator/)
 spells it out: **sample** the function into points, join them into **segments**,
-stroke along the segments; "break where neighbouring points suggest a jump"; refine
-extrema/zeros by bisection. The same approach is used here:
+stroke along the segments; "break where neighbouring points suggest a jump". The same
+approach, with the sampling made uniform in *arc length* (the march above):
 
-- **Stroke = distance to the sampled polyline segments** (not to the tangent). The
-  tangent approximation overestimates the distance on steep or strongly curved
-  parts, so the stroke thins out or even fades away (`log(x)` as x→0+, the steep
-  stretch of `sin(1/x)`); measuring to the segment is **equal width everywhere**.
-  Sampled over ±1 column: the polyline must be wide enough that a pixel's
-  perpendicular foot lands on a segment (on a sloped line it is displaced along x
-  by `m·d/√(1+m²)`); with a narrower window the distance degraded to "distance to
-  the nearest endpoint" and steep parts looked thin and ragged.
-- **Break on jumps**: a denominator sign change (world units) decides, in three places,
-  that nothing joins the branches — the polyline segment that straddles the pole is not
-  stroked, a straddling pair does not count as a turn in the band's turn count (it used to
-  fill the pole column solid), and the unbounded-boundary ray is not drawn there. No vertical
-  connector at the asymptotes of `1/x`, `tan(x)`. (An earlier "adjacent samples differ by
-  more than 4 viewport heights" criterion was pixel-/viewport-relative, so under magnification
-  it also cut legitimate steep segments; it was removed. The remaining "spread beyond 32
-  viewport heights" gap is a second line of defence only — at `tan`'s pole column the spread
-  is ~15 viewports, so it never fires there.)
+- **Stroke = distance to the joined polyline segments** (not to the tangent): equal width
+  everywhere, including bracket-long steep stretches, because 1-px-arc chords represent
+  the curve to second order. There is no sampling window to calibrate against the band
+  criteria any more either — the march's coverage is bounded by the escape rule.
+- **Break on jumps — by construction, not by detection**. The join invariant (a segment
+  only joins samples within 2.5 px) refuses a connector of any origin: the poles of
+  `1/x`/`tan(x)` and plain jump discontinuities alike (`x/sqrt(x**2)` had no pole
+  denominator for the old guards to find; measured: a 454-px column at x=0). A pole
+  column is itself dark: the march up its branches leaves through the viewport edge
+  before the pole, and its band fill is vetoed by the violation-count gate.
 - **Domain** (derived by sympy, injected as `DOM`): denominator ≠ 0, `log` argument
   > 0, `sqrt` argument ≥ 0, `asin/acos` argument ∈ [−1,1]; pixels outside the domain
   are discarded outright — except for the **boundary ray** of a slowly diverging edge
   (`log(x)` as x→0+), which is a band centred *on* the boundary and therefore paints the few
   pixels outside the domain that it covers (the whole outer half of that band, otherwise).
-  NaN/inf samples take part in neither the envelope nor segment joining.
-- **Undersampled columns** (several oscillations inside one column) are replaced
-  wholesale by the envelope band: a polyline is random sawtooth in such columns.
-  There are two criteria, both **scale-independent**: (a) ≥ 2 direction reversals
-  within the column — 8 points in the narrow window for an ordinary pixel, and
-  inside the band region 8 additional interleaved points make it 16 (with 8 points,
-  random sampling misses the reversals in ~11% of columns, showing up as residual
-  vertical stripes; sampling 16 points globally would cost 8 extra `f` evaluations
-  for every pixel, not worth paying for a few columns); (d) the distance `pred` a
-  column should traverse according to the derivative far exceeds the measured
-  `spread` (hard threshold 16×, and `pred ≥ 4px`) — sub-pixel oscillation sampling
-  necessarily misses reversals (it may even come out monotone), and this criterion
-  does not depend on sampling randomness. Pixel-unit gates are avoided here (a
-  spread measured in pixels stops being meaningful once the viewport is deep);
-  poles are handled by the analytic gap instead.
-- **Infinite extension at unbounded domain boundaries** (`unbounded_edges()`, sympy
-  one-sided limits): `log(x)` **diverges slowly** (logarithmically) as x→0+, so a
-  fixed-width sampling window never reaches deep enough values — in a deep viewport
-  the visible curve lies at x≈e^y (e.g. for y∈[-16,-12], x∈[1e-7,6e-6]), while the
-  leftmost sample only reaches log≈-7, so the **whole segment disappears**. Fix:
-  when the window crosses such a boundary, extend the polyline along the boundary x
-  into a vertical ray out to ±1e12, which draws at any depth (the ray lies on the
-  boundary x, so the width is constant and the columns align; the x<0 half is cut
-  away by the domain, leaving exactly half a stroke visible). `1/x` and `tan(x)`
-  diverge fast, so their sampled values naturally exceed any viewport and no ray is
-  needed; `sqrt` (limit 0) and `sin(1/x)` (no limit) are not on the list either.
+  A step landing out of domain (NaN/inf) is retried once wider — stepping over a
+  measure-zero pole landing — and the direction ends there; the far side belongs to the
+  next column's march.
+- **Undersampled columns** are replaced by the envelope band, filled only where the
+  column probe's violation count says the column is genuinely dense: see item 5 of the
+  algorithm above. The march travels up the branches of a pole column and stops at the
+  viewport edge — the geometry that used to be a "32 viewport heights" gap, now free of
+  pixel/viewport units.
 
-Measured: the steep stretch of `log(x)` has a constant horizontal width of 1~2
-device pixels (previously a tapering gradient); the thin line of `sin(1/x)` is
-uniform in width; `1/x` and `tan(x)` are not connected across their poles;
-`sin(x)`/`x^2`/`exp(-x²)sin(10x)` are unaffected.
+Measured: the steep stretch of `log(x)` keeps its stroke width (3.00 device px of a
+nominal 3.0 on the ray-drawn part, unchanged); `k·x` holds one width at every slope
+(3.00/3.00/3.00/2.94 at slopes 2/10/40/200); `1/x` and `tan(x)` draw nothing beyond
+their branch strokes near the poles; `sin(x)`/`x^2`/`exp(-x²)sin(10x)` are unaffected.
+
 
 ## Performance (measured)
 
@@ -490,10 +509,28 @@ Startup to the first frame is about **230 ms**, attributed as follows
 | `qsb` bake | 0 / ~126 ms | cached by source hash: 0.15 ms on a hit; after a source change (code edit) it must re-bake once |
 | Expression analysis (sympy) | 0.6~3 ms | `unbounded_edges` only analyses **polynomial** boundaries (`tan(x)`'s `cos(x)=0` takes 94 ms via solve+limit, while tan diverges fast and sampling is naturally deep enough, so that ray is not needed) |
 
-Per-frame GPU cost (2400×1500, extreme zoom, worst case) is **31 ms**; about 1/7 of
-that at 900×600, far below the 16.7 ms of 60 Hz. The shader source is about 6.9 KB.
+Per-frame grab cycles (900×600, `grabToImage` — frame + readback, so an upper bound on
+the GPU cost: the old shader measured 31 ms of pure GPU at 2400×1500, ~1/7 of that at
+900×600): `sin(1/x)` default 27 ms, `tan(x)` default 34 ms, `sin(1/x)` at zoom 90
+(worst case) 33 ms mean / 36 ms peak. The 1-D fragment source is about 21 KB.
 Every visible curve is one full-screen fragment pass, so `Curve.visible` is the lever
 when a figure carries many of them.
+
+**Per-pixel `f` evaluations** (counter patched into the shader, mean/peak over 1-in-3
+pixels; the fixed-grid renderer's numbers alongside):
+
+| expression | fixed grid (mean/peak) | march (mean/peak) |
+|---|---|---|
+| `tan(x)` | 16.96 / 17 | **18.98 / 50** |
+| `x^3` | 16.45 / 17 | **16.53 / 50** |
+| `log(x)` | 8.50 / 33 | **7.97 / 50** |
+| `1/x` | 14.64 / 33 | **6.27 / 50** |
+| `exp(-x*x)*sin(10*x)` | 14.97 / 33 | **6.83 / 58** |
+| `sin(1/x)` | 12.56 / 33 | **5.32 / 58** |
+
+The mean is lower everywhere (shallow pixels cost a handful of evaluations and skip the
+probe entirely); the peak is the banded column — march budget in both directions plus
+the column probe — which is a small fraction of the pixels.
 
 ## Pitfalls already hit (do not repeat)
 
