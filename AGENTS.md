@@ -945,3 +945,35 @@ the full step budget in both directions plus both windows.
     rectangle; `log`'s descent is one segment/column; `tan` at y ∈ [50,60] still four
     full-height walls.
 
+53. **The implicit shader gets GeoGebra's four-corner marching cell and singular guard** (not
+    its CPU quadtree/Bernstein/contour machinery).
+
+    *Borrowed:*
+    - each pixel is one marching cell: four `F` corner values, only when all four are in the
+      domain and no pole factor changes sign between them; edge crossings are interpolated and
+      the cell's contour segment stroked (saddle pairing by the centre sign). It is combined
+      with the existing `|F|/|∇F|` + Newton projection by `max`, so the projection still owns
+      the sub-pixel width and the cell term covers a thin/tangent branch whose centre
+      projection fails.
+    - `|Fx| + |Fy| < 1e-3` (world units, GGB's singular test) plus `|F| < 0.05` draws a small
+      disc for an isolated point.
+
+    *Traps re-armed while implementing:*
+    - the implicit template had no `_seg_dist`; the 1-D helper is not shared, so the first bake
+      failed with `'_seg_dist' : no matching overloaded function found`. The helper is now in
+      both templates.
+    - the singular threshold must use the **world** derivative (`|FX| + |FY|`). Using the
+      per-pixel `gnorm` made every ordinary circle singular (its gradient is ~0.01 per pixel):
+      measured width at 0° became **12 px** against the nominal 3.
+    - the cell term is skipped across a pole factor sign change; otherwise a pole's jump would
+      be interpolated as a contour.
+
+    *Not ported:* Bernstein subdivision (polynomial-only), adaptive quad-tree refinement, and
+    the `ContourAssembler`/`ContourLinker` (vector-path selection, not rasterisation). A closed
+    loop entirely inside one pixel with no corner sign change remains outside the cell test.
+
+    *Measured:* 145 tests green; unit-circle widths 0°/45°/90°/135° still 3.0 device px;
+    `x-tan(y)`/`y-log(...)` guards unchanged; `x²+y²` draws its point; the full suite passed
+    on a rerun (the first run after the change had a one-off partial circle image; not
+    reproduced).
+

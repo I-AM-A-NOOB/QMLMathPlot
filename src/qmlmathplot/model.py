@@ -1067,6 +1067,14 @@ float _real_pow(float v, float p) {
     return v < 0.0 ? -pow(-v, p) : pow(v, p);
 }
 
+// Point-to-segment distance in logical pixels: the marching cell's contour segment is
+// stroked by the same rule as the 1-D polyline.
+float _seg_dist(vec2 p, vec2 a, vec2 b) {
+    vec2 ab = b - a;
+    float t = clamp(dot(p - a, ab) / max(dot(ab, ab), 1e-12), 0.0, 1.0);
+    return length(p - (a + t * ab));
+}
+
 // F is a macro with two parameters (text substitution; the call always passes the plain pixel
 // coordinates, so no extra parentheses are needed on the arguments — see the note in the 1-D
 // template). FX/FY are function-like too, because the one-sided boundary extension evaluates the
@@ -1171,6 +1179,97 @@ void main() {
         }
     }
 
+    // ---- GeoGebra-style marching-square cell (GPU) ----
+    // A pixel is one marching cell. GGB's AdaptiveQuadTree / Bernstein plotters never trust a
+    // single point sample: they use the four corner signs and interpolate the crossings. The
+    // first-order distance above is still the sub-pixel stroke; this cell test adds the
+    // coverage a cell whose centre projection fails (a thin or tangent branch) would lose.
+    // It is evaluated only when all four corners are in the domain and no pole factor changes
+    // sign between them — a pole crossing a cell is a jump, not a contour segment.
+    float march_cov = 0.0;
+    if (dom) {
+        float x0 = x - 0.5 * camera.z;
+        float x1 = x + 0.5 * camera.z;
+        float y0 = y - 0.5 * camera.w;
+        float y1 = y + 0.5 * camera.w;
+        bool okc = DOM(x0, y0) && DOM(x1, y0) && DOM(x0, y1) && DOM(x1, y1);
+        float f00 = 0.0;
+        float f10 = 0.0;
+        float f11 = 0.0;
+        float f01 = 0.0;
+        if (okc) {
+            f00 = F(x0, y0);
+            f10 = F(x1, y0);
+            f11 = F(x1, y1);
+            f01 = F(x0, y1);
+            okc = (f00 == f00) && (abs(f00) < 1e30)
+               && (f10 == f10) && (abs(f10) < 1e30)
+               && (f11 == f11) && (abs(f11) < 1e30)
+               && (f01 == f01) && (abs(f01) < 1e30);
+        }
+        if (okc) {
+            float p00 = POLE(x0, y0);
+            float p10 = POLE(x1, y0);
+            float p11 = POLE(x1, y1);
+            float p01 = POLE(x0, y1);
+            okc = p00 * p10 > 0.0 && p10 * p11 > 0.0
+               && p11 * p01 > 0.0 && p01 * p00 > 0.0;
+        }
+        if (okc) {
+            // corner order: bottom-left, bottom-right, top-right, top-left. Screen positions
+            // use the same order (screen y grows down, so the bottom corners are +0.5).
+            float cf[4] = float[4](f00, f10, f11, f01);
+            vec2 cp[4] = vec2[4](vec2(-0.5, 0.5), vec2(0.5, 0.5),
+                                 vec2(0.5, -0.5), vec2(-0.5, -0.5));
+            vec2 pts[4];
+            int pedge[4];
+            int npts = 0;
+            for (int e = 0; e < 4; e++) {
+                int b = (e + 1) & 3;
+                if ((cf[e] >= 0.0) != (cf[b] >= 0.0)) {
+                    float tt = cf[e] / (cf[e] - cf[b]);
+                    pts[npts] = mix(cp[e], cp[b], clamp(tt, 0.0, 1.0));
+                    pedge[npts] = e;
+                    npts++;
+                }
+            }
+            if (npts == 2) {
+                march_cov = clamp(R - _seg_dist(vec2(0.0), pts[0], pts[1]), 0.0, 1.0);
+            } else if (npts == 4) {
+                // The saddle case: use the cell centre to choose the asymptotic pairing.
+                // If corner 0 has the centre's sign, the isolated corners are 1 and 3
+                // (pair 0-1 and 2-3); otherwise they are 0 and 2 (pair 3-0 and 1-2).
+                bool same = (cf[0] >= 0.0) == (f >= 0.0);
+                int pa = same ? 0 : 3;
+                int pb = same ? 1 : 0;
+                int pc = same ? 2 : 1;
+                int pd = same ? 3 : 2;
+                vec2 a0 = vec2(0.0);
+                vec2 a1 = vec2(0.0);
+                vec2 b0 = vec2(0.0);
+                vec2 b1 = vec2(0.0);
+                for (int i = 0; i < 4; i++) {
+                    if (pedge[i] == pa) a0 = pts[i];
+                    if (pedge[i] == pb) a1 = pts[i];
+                    if (pedge[i] == pc) b0 = pts[i];
+                    if (pedge[i] == pd) b1 = pts[i];
+                }
+                march_cov = max(clamp(R - _seg_dist(vec2(0.0), a0, a1), 0.0, 1.0),
+                                clamp(R - _seg_dist(vec2(0.0), b0, b1), 0.0, 1.0));
+            }
+        }
+    }
+
+    // A singular cell (|grad F| -> 0, GGB's ImplicitCurveMarchingRect.singular) has no
+    // sign change and no useful Newton direction. Draw its tiny disc so an isolated point
+    // such as x² + y² = 0 is not left to the projection alone.
+    // GGB measures the singular cell in *world* derivative units (|Fx| + |Fy| < 0.001);
+    // the per-pixel gradient of an ordinary circle is ~0.01 and must not qualify.
+    float gw_s = abs(FX(x, y)) + abs(FY(x, y));
+    if (dom && (f == f) && (abs(f) < 1e30) && gw_s < 1e-3 && abs(f) < 0.05) {
+        march_cov = 1.0;
+    }
+
     float cov = 0.0;
     if (dom) {
         float gnorm = max(sqrt(gx * gx + gy * gy), 1e-9);
@@ -1234,9 +1333,9 @@ void main() {
                 ok = dproj <= R + 0.5;
             }
         }
-        cov = ok ? clamp(R - dproj, 0.0, 1.0) : 0.0;
+        cov = max(ok ? clamp(R - dproj, 0.0, 1.0) : 0.0, march_cov);
     } else {
-        cov = clamp(R - d, 0.0, 1.0);
+        cov = max(clamp(R - d, 0.0, 1.0), march_cov);
     }
 
     float a = cov * color.a * qt_Opacity;

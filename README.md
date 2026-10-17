@@ -176,10 +176,21 @@ view. A `POLE(x,y)` factor (e.g. `cos(y)` for `tan(y)`) rejects a normal probe t
 singularity, so `x-tan(y)` does not paint its asymptotes; far-out garbage lines are still
 refused (the stroke is allowed one radius outside the domain, no more).
 
-Known limit: **smooth, single-sheet level sets**. Thin features and several branches through one
-pixel (`sin(1/(x*x + y*y))`) are not handled yet — the assessment is `docs/api-design.md` §6b.
-The matplotlib hand-off skips implicit curves (a level set has no polyline to sample), while the
-Qt export renders them like anything else.
+The pixel is also a **marching-squares cell**, borrowed from GeoGebra's
+`ImplicitCurveMarchingRect`/`AdaptiveQuadTree`: the four corner values are evaluated when every
+corner is in the domain and no pole factor changes sign between them; the edge crossings are
+interpolated and the cell's contour segment is stroked (the saddle case is paired using the cell
+centre's sign). The first-order/Newton path still supplies the sub-pixel width; the cell term
+adds the coverage of a thin or tangent branch whose centre projection fails. A **singular cell**
+(`|Fx| + |Fy| < 1e-3` in world units, plus `|F| < 0.05`) gets a small disc, so an isolated point
+such as `x**2 + y**2 = 0` is not left to the projection alone.
+
+Still not ported: GGB's Bernstein subdivision (**polynomial-only**), its adaptive quad-tree
+refinement and the `ContourAssembler`/`ContourLinker` (they exist to produce a selectable vector
+path, not to rasterise). A closed loop that fits entirely inside one pixel with no corner sign
+change is not seen by the four-corner test; the projection is the only fallback there. The
+matplotlib hand-off skips implicit curves (a level set has no polyline to sample), while the Qt
+export renders them like anything else.
 
 ## The camera (centre, zoom, aspect)
 
