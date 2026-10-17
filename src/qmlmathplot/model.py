@@ -507,43 +507,25 @@ void main() {
 
     // A divergence's boundary is vertical: extend the column edge as a ray (log's descent
     // is otherwise a sample polyline that ends one radius short of the boundary).
-    if (own_empty && col.kind == IK_CONNECTED && col.lo <= -IINF) {
-        // A pixel just outside the domain: the band centred on the boundary still covers it.
-        pmin = min(pmin, _seg_dist(vec2(x * sx, y * sy),
-            vec2((x - 0.5 * dx) * sx, 1e12), vec2((x - 0.5 * dx) * sx, -1e12)));
-    }
-    if (own_empty && col.kind == IK_CONNECTED && col.hi >= IINF) {
-        pmin = min(pmin, _seg_dist(vec2(x * sx, y * sy),
-            vec2((x + 0.5 * dx) * sx, 1e12), vec2((x + 0.5 * dx) * sx, -1e12)));
-    }
+    // GeoGebra's unbounded-column rule (IntervalPathPlotter.leftToBottom / leftToTop):
+    // a connected enclosure with an infinite bound is drawn as one segment across the
+    // column, from its finite end at the column's left edge to the viewport edge at the
+    // column's middle. No ray at the boundary x, and no band fill: the interval path is a
+    // stroked line, exactly as the reference plotter draws log(x)'s descent.
     if (col.kind == IK_CONNECTED && col.lo <= -IINF) {
-        // The boundary is vertical and the polyline's first valid sample is one step inside it;
-        // the foot of a pixel between the two lies left of the segment, so extend the sample
-        // downwards as a ray (log's descent).
-        for (int i = 0; i < NS; i++) {
-            if (ok[i]) {
-                pmin = min(pmin, _seg_dist(vec2(x * sx, y * sy),
-                    vec2(smpx[i] * sx, max(smp[i], col.hi) * sy), vec2(smpx[i] * sx, -1e12)));
-                break;
-            }
-        }
+        pmin = min(pmin, _seg_dist(vec2(x * sx, y * sy),
+            vec2((x - 0.5 * dx) * sx, col.hi * sy), vec2(x * sx, y_bot * sy)));
     }
     if (col.kind == IK_CONNECTED && col.hi >= IINF) {
-        for (int i = NS - 1; i >= 0; i--) {
-            if (ok[i]) {
-                pmin = min(pmin, _seg_dist(vec2(x * sx, y * sy),
-                    vec2(smpx[i] * sx, min(smp[i], col.lo) * sy), vec2(smpx[i] * sx, 1e12)));
-                break;
-            }
-        }
+        pmin = min(pmin, _seg_dist(vec2(x * sx, y * sy),
+            vec2((x - 0.5 * dx) * sx, col.lo * sy), vec2(x * sx, y_top * sy)));
     }
 
     float band_cov = 0.0;
     if (col.kind == IK_CONNECTED) {
         // Fill only when the column is not a polyline: an oscillation (>= 2 reversals in the
         // samples) or a divergence (infinite bound). A monotone column is the polyline.
-        float fill = max(smoothstep(1.5, 3.0, sturns),
-                         (col.lo <= -IINF || col.hi >= IINF) ? 1.0 : 0.0);
+        float fill = smoothstep(1.5, 3.0, sturns);
         if (fill > 0.0) {
             band_cov = fill * clamp((col.hi - y) * sy + BW, 0.0, 1.0)
                             * clamp((y - col.lo) * sy + BW, 0.0, 1.0);
@@ -557,7 +539,7 @@ void main() {
     if (HAS_DEPENDENT_QUOTIENT && !FILL_WHOLE) {
         band_cov = 0.0;   // dependency overestimation: the polyline draws the real branches
     }
-    float cov = band_cov;
+    float cov = max(band_cov, clamp(R - pmin, 0.0, 1.0));
     if (!DOM(x)) {
         float a = cov * color.a * qt_Opacity;
         fragColor = vec4(color.rgb * a, a);

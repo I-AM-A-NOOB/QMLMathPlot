@@ -369,8 +369,9 @@ cannot be represented by a line.
      `sin(1/x)` near its singularity), weighted by `smoothstep(1.5, 3.0, sturns)` so the
      band edge feathers — counting the wider sampling window instead bands every column of a
      merely high-frequency curve, which rendered `sin(1/x)` as full-height stripes;
-   - a **divergence** (an infinite bound, e.g. `log`'s boundary) — a vertical ray extends the
-     last valid sample to ±1e12, giving the descent the full stroke width;
+   - a **divergence** (an infinite bound, e.g. `log`'s boundary) — GeoGebra's rule
+     (`leftToBottom`/`leftToTop`): one segment from the finite bound at the column's left
+     edge to the viewport edge at the column's middle. No boundary ray and no band fill;
    - an **inverted/whole** topology (`tan`/`1/x` poles): rays or a full column.
    There is no ±8-column window, no violation-count gate and no chord-stroke. The band is
    always the pixel's own exact column.

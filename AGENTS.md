@@ -889,10 +889,12 @@ the full step budget in both directions plus both windows.
       full-height connector (measured 900 lit rows at x=0) until the argument was fixed.
     - **Jumps** — for `HAS_DEPENDENT_QUOTIENT`, a segment with a screen jump > `JOIN` is
       skipped. `x/sqrt(x**2)` keeps its ±1 branches and has no connector.
-    - **Descent** — for a connected column with an infinite bound, the first/last valid sample
-      is extended as a vertical ray to ±1e12 (the old boundary-ray geometry, evaluated at the
-      sample x). The ray's top is `max(sample, col.hi)`; the first valid sample's own y was
-      one step short and left the top row at 2.78 of 3.00 px.
+    - **Descent** — GeoGebra's own unbounded-column rule
+      (`IntervalPathPlotterImpl.leftToBottom` / `leftToTop`): a connected enclosure with an
+      infinite bound is one segment from `(x − 0.5·dx, finite bound)` at the column's left
+      edge to `(x, viewport edge)` at its middle. No boundary-x ray and no band fill for a
+      divergence; the interval path is a stroked line. This also fixed the descent's top row
+      (2.78 → 3.71 of 3.00 device px; the width test no longer skips it).
 
     *Traps re-armed:*
     - the ±2 sample window must not decide the band: counting its reversals banded every column
