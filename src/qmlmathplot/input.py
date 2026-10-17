@@ -39,12 +39,14 @@ class ViewInput(QObject):
 
     keyboardEnabledChanged = Signal()
     keyPanStepChanged = Signal()
+    keyPanRepeatIntervalChanged = Signal()
     shortcutsChanged = Signal()
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._keyboard_enabled = True
         self._key_pan_step = 0.1
+        self._key_pan_repeat_interval = 100
         self._pan_left = "Left"
         self._pan_right = "Right"
         self._pan_up = "Up"
@@ -83,6 +85,26 @@ class ViewInput(QObject):
     #: Fraction of the viewport moved by one arrow-key press (0.1 = 10%).
     keyPanStep: float = Property(
         float, _get_key_pan_step, _set_key_pan_step, notify=keyPanStepChanged
+    )
+
+    def _get_key_pan_repeat_interval(self) -> int:
+        return self._key_pan_repeat_interval
+
+    def _set_key_pan_repeat_interval(self, value: int) -> None:
+        value = int(value)
+        if value <= 0:
+            raise ValueError(f"keyPanRepeatInterval must be positive, got {value!r}")
+        if value == self._key_pan_repeat_interval:
+            return
+        self._key_pan_repeat_interval = value
+        self.keyPanRepeatIntervalChanged.emit()
+
+    #: Milliseconds between held-key pan steps (the first step is immediate).
+    keyPanRepeatInterval: int = Property(
+        int,
+        _get_key_pan_repeat_interval,
+        _set_key_pan_repeat_interval,
+        notify=keyPanRepeatIntervalChanged,
     )
 
     #: Key sequences (QKeySequence text) for the six view commands. ``|`` separates

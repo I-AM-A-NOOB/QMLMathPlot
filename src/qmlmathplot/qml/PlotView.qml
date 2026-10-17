@@ -21,8 +21,16 @@ Item {
     // not a grab: the QQuickWidget is still ClickFocus and does not enter the Tab chain.
     focus: true
     Keys.onPressed: (event) => {
-        if (root._handleKey(event))
+        if (root._handleKeyPress(event))
             event.accepted = true;
+    }
+    Keys.onReleased: (event) => {
+        if (root._handleKeyRelease(event))
+            event.accepted = true;
+    }
+    onActiveFocusChanged: {
+        if (!activeFocus)
+            root._clearPan();
     }
 
     // The model (injected by the host). Without injection the component brings its own plot;
@@ -59,47 +67,133 @@ Item {
     // Keyboard: arrow keys move the view (the camera moves, so the content follows), the
     // zoom shortcuts anchor at the viewport centre. Every mapping is on camera.input, so a
     // host can rebind it; an empty string disables a command.
-    function _matches(event, shortcut) {
-        return root.plot.camera.input.matches(event.key, event.modifiers, shortcut);
+    //
+    // Held keys are tracked here rather than relying on the OS auto-repeat (which begins with
+    // a ~0.5 s delay and then repeats in bursts): a Timer moves once per interval while any
+    // direction is held, and the directions combine (diagonal movement is normalised). The
+    // first press still moves immediately, so a tap moves exactly one step.
+    property var _heldPan: ({})
+
+    Timer {
+        id: panTimer
+        interval: root.plot.camera.input.keyPanRepeatInterval
+        repeat: true
+        onTriggered: root._panTick()
     }
 
-    function _handleKey(event) {
+    Connections {
+        target: root.plot.camera
+        function onPanEnabledChanged() {
+            if (!root.plot.camera.panEnabled)
+                root._clearPan();
+        }
+    }
+    Connections {
+        target: root.plot.camera.input
+        function onKeyboardEnabledChanged() {
+            if (!root.plot.camera.input.keyboardEnabled)
+                root._clearPan();
+        }
+    }
+
+    // One command name for this event, or "" when it is not bound.
+    function _commandFor(event, requireEnabled) {
         const camera = root.plot.camera;
         const input = camera.input;
         if (!input.keyboardEnabled)
-            return false;
-        const dx = input.keyPanStep * root.width;
-        const dy = input.keyPanStep * root.height;
-        const duration = camera.animationDuration;
-        if (camera.panEnabled) {
-            if (_matches(event, input.panLeftShortcut)) {
-                camera.animate_pan(dx, 0, duration);
-                return true;
-            }
-            if (_matches(event, input.panRightShortcut)) {
-                camera.animate_pan(-dx, 0, duration);
-                return true;
-            }
-            if (_matches(event, input.panUpShortcut)) {
-                camera.animate_pan(0, dy, duration);
-                return true;
-            }
-            if (_matches(event, input.panDownShortcut)) {
-                camera.animate_pan(0, -dy, duration);
-                return true;
-            }
-        }
+            return "";
+        if (input.matches(event.key, event.modifiers, input.panLeftShortcut))
+            return (!requireEnabled || camera.panEnabled) ? "left" : "";
+        if (input.matches(event.key, event.modifiers, input.panRightShortcut))
+            return (!requireEnabled || camera.panEnabled) ? "right" : "";
+        if (input.matches(event.key, event.modifiers, input.panUpShortcut))
+            return (!requireEnabled || camera.panEnabled) ? "up" : "";
+        if (input.matches(event.key, event.modifiers, input.panDownShortcut))
+            return (!requireEnabled || camera.panEnabled) ? "down" : "";
         if (camera.zoomEnabled) {
-            if (_matches(event, input.zoomInShortcut)) {
-                camera.animate_zoom(120, 0.5, 0.5, root.width, root.height, duration);
-                return true;
-            }
-            if (_matches(event, input.zoomOutShortcut)) {
-                camera.animate_zoom(-120, 0.5, 0.5, root.width, root.height, duration);
-                return true;
-            }
+            if (input.matches(event.key, event.modifiers, input.zoomInShortcut))
+                return "zoomIn";
+            if (input.matches(event.key, event.modifiers, input.zoomOutShortcut))
+                return "zoomOut";
         }
-        return false;
+        return "";
+    }
+
+    function _isPanCommand(command) {
+        return command === "left" || command === "right"
+            || command === "up" || command === "down";
+    }
+
+    function _clearPan() {
+        root._heldPan = ({});
+        panTimer.stop();
+    }
+
+    function _panTick() {
+        const camera = root.plot.camera;
+        const input = camera.input;
+        if (!input.keyboardEnabled || !camera.panEnabled) {
+            root._clearPan();
+            return;
+        }
+        let dx = 0;
+        let dy = 0;
+        if (root._heldPan.left)
+            dx += 1;
+        if (root._heldPan.right)
+            dx -= 1;
+        if (root._heldPan.up)
+            dy += 1;
+        if (root._heldPan.down)
+            dy -= 1;
+        if (dx === 0 && dy === 0) {
+            panTimer.stop();
+            return;
+        }
+        if (dx !== 0 && dy !== 0) {
+            dx *= Math.SQRT1_2;                       // diagonal speed = straight speed
+            dy *= Math.SQRT1_2;
+        }
+        camera.animate_pan(input.keyPanStep * root.width * dx,
+                           input.keyPanStep * root.height * dy,
+                           camera.animationDuration);
+    }
+
+    function _handleKeyPress(event) {
+        const command = root._commandFor(event, true);
+        if (command === "")
+            return false;
+        if (event.isAutoRepeat)                       // the Timer owns repeats
+            return true;
+        const camera = root.plot.camera;
+        const input = camera.input;
+        if (root._isPanCommand(command)) {
+            root._heldPan[command] = true;
+            if (!panTimer.running)
+                panTimer.start();
+            root._panTick();                          // immediate first step (tap semantics)
+        } else if (command === "zoomIn") {
+            camera.animate_zoom(120, 0.5, 0.5, root.width, root.height,
+                                camera.animationDuration);
+        } else if (command === "zoomOut") {
+            camera.animate_zoom(-120, 0.5, 0.5, root.width, root.height,
+                                camera.animationDuration);
+        }
+        return true;
+    }
+
+    function _handleKeyRelease(event) {
+        const command = root._commandFor(event, false);
+        if (command === "")
+            return false;
+        if (event.isAutoRepeat)
+            return true;
+        if (root._isPanCommand(command)) {
+            delete root._heldPan[command];
+            if (Object.keys(root._heldPan).length === 0)
+                panTimer.stop();
+        }
+        return true;
     }
 
     // The first report resolves the home view for the real size; later ones keep the scales, so

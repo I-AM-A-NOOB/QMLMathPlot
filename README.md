@@ -132,7 +132,7 @@ The model:
 |---|---|
 | `Plot` | `camera`, `curves`, `xlim`/`ylim`/`aspect` (forwarded), `add_curve()` / `add_implicit()` / `remove_curve()`, `available_themes`, and the style properties: `background`, `grid`, `grid_color`, `grid_width`, `grid_alpha`, `grid_style`, `axis_color`, `axis_width`, `axes_position`, `color_cycle`, `line_width`, `text_color`, `tick_color`, `tick_length`, `font_size`, `tick_font_size`, `title`, `xlabel`, `ylabel`, `title_color`, `title_font_size`, `title_bold`, `ticks_visible`, `theme` |
 | `Camera` | `centre`, `zoom` (world units per logical pixel), `aspect`, `xlim`/`ylim` (derived), `ticks_x`/`ticks_y`, `zoomStep` / `panEnabled` / `zoomEnabled`, `animationDuration`, `input` (a `ViewInput`), slots `set_viewport(w, h)` / `zoom_by(delta, u, v, w, h)` / `zoom_at(factor, u, v, w, h)` / `pan_pixels(dx, dy)` / `animate_zoom(...)` / `animate_pan(dx, dy, ms)` / `stop_animation()` / `reset()` |
-| `ViewInput` | `keyboardEnabled`, `keyPanStep`, `panLeftShortcut` / `panRightShortcut` / `panUpShortcut` / `panDownShortcut` / `zoomInShortcut` / `zoomOutShortcut`, `matches(key, modifiers, shortcut)` |
+| `ViewInput` | `keyboardEnabled`, `keyPanStep`, `keyPanRepeatInterval`, `panLeftShortcut` / `panRightShortcut` / `panUpShortcut` / `panDownShortcut` / `zoomInShortcut` / `zoomOutShortcut`, `matches(key, modifiers, shortcut)` |
 | `Curve` | `expression` (string or sympy expression), `expr` (the parsed expression, read-only), `implicit`, `color`, `lineWidth`, `visible`, `label`, `error` (read-only), the baked `vertexShader` / `fragmentShader` |
 | `CurveListModel` | the curves as a model (`curve`, `expression`, `color`, `lineWidth`, `visible`, `vertexShader`, `fragmentShader` roles) so QML puts one `ShaderEffect` behind each |
 
@@ -300,9 +300,11 @@ plot.plot.camera.zoom_by(120, 0.5, 0.5, w, h)     # one wheel notch, anchored at
 ## Keyboard, touch and animation
 
 Clicking the plot gives it focus; while it has focus the arrow keys pan (10% of the viewport
-per press by default), `+`/`=` zooms in and `-`/`_` zooms out. Every command is a property on
-the camera's `input` object, so a host can rebind it — the value is a `QKeySequence` string,
-and `|` separates alternatives (empty disables the command). `input.keyPanStep`,
+per press by default), `+`/`=` zooms in and `-`/`_` zooms out. Held directions repeat on a
+timer (100 ms by default, no OS key-repeat delay), and several arrows combine, so `Left+Up`
+moves diagonally at the normal speed. Every command is a property on the camera's `input`
+object, so a host can rebind it — the value is a `QKeySequence` string, and `|` separates
+alternatives (empty disables the command). `input.keyPanStep`, `input.keyPanRepeatInterval`,
 `input.keyboardEnabled`, `panEnabled` and `zoomEnabled` shape the behaviour the same way.
 
 ```python
@@ -312,7 +314,8 @@ input.panLeftShortcut = "A"           # rebind one arrow
 input.panRightShortcut = "D"
 input.zoomInShortcut = "Ctrl+="
 input.zoomOutShortcut = "Ctrl+-"
-input.keyPanStep = 0.2                # 20% of the viewport per arrow press
+input.keyPanStep = 0.2                # 20% of the viewport per step
+input.keyPanRepeatInterval = 80       # ms between held-key steps
 camera.animationDuration = 220        # ms; 0 disables easing
 ```
 

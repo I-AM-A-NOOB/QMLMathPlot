@@ -168,6 +168,48 @@ def test_shortcuts_are_configurable(app: QApplication) -> None:
     plot.hide()
 
 
+def test_held_arrow_keeps_panning_without_the_os_repeat_delay(app: QApplication) -> None:
+    """Holding a direction moves continuously: the view's Timer repeats, so there is no
+    initial one-step + ~0.5 s pause waiting for the OS key repeat."""
+    plot = _shown_plot()
+    camera = plot.plot.camera
+    camera.animationDuration = 100
+    quick = _focus(plot)
+    before = plot.view_bounds()
+    step = camera.input.keyPanStep * (before[1] - before[0])
+
+    QTest.keyPress(quick, Qt.Key_Left)
+    QTest.qWait(250)                                  # ~3 timer ticks
+    QTest.keyRelease(quick, Qt.Key_Left)
+    held = _wait_until_still(plot)
+    assert held[0] < before[0] - 1.5 * step, "holding the key did not repeat the pan"
+    assert held[2:] == pytest.approx(before[2:])
+    plot.hide()
+
+
+def test_two_arrow_keys_pan_diagonally(app: QApplication) -> None:
+    """Left+Up held together move both axes; each axis keeps the normalised step, so a
+    diagonal is not sqrt(2) faster than a straight pan."""
+    plot = _shown_plot()
+    camera = plot.plot.camera
+    camera.animationDuration = 100
+    quick = _focus(plot)
+    before = plot.view_bounds()
+    x_step = camera.input.keyPanStep * (before[1] - before[0])
+    y_step = camera.input.keyPanStep * (before[3] - before[2])
+
+    QTest.keyPress(quick, Qt.Key_Left)
+    QTest.keyPress(quick, Qt.Key_Up)
+    QTest.qWait(250)
+    QTest.keyRelease(quick, Qt.Key_Left)
+    QTest.keyRelease(quick, Qt.Key_Up)
+    after = _wait_until_still(plot)
+
+    assert after[0] < before[0] - 1.5 * x_step
+    assert after[2] > before[2] + 1.5 * y_step
+    plot.hide()
+
+
 def test_keyboard_and_pan_can_be_switched_off(app: QApplication) -> None:
     plot = _shown_plot()
     camera = plot.plot.camera

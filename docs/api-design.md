@@ -276,6 +276,9 @@ vector route).
   (`input.panLeftShortcut` … `input.zoomOutShortcut`) are `QKeySequence` text, so rebinding
   needs no QML change; `|` separates alternatives. Methods are snake_case
   (`set_viewport`, `zoom_by`, `pan_pixels`, `stop_animation`); Qt properties stay camelCase.
+  Held directions are tracked by `PlotView` and repeated by its own timer
+  (`ViewInput.keyPanRepeatInterval`, 100 ms), not by the OS auto-repeat, so there is no
+  initial delay and several arrows combine (diagonal movement is normalized).
   Discrete moves (wheel, keys) are animated through one `CameraAnimator`
   (`Camera.animationDuration`; scales interpolate geometrically), which accumulates onto its
   target under a fast wheel; drags and touch gestures call the direct slots and cancel any
