@@ -11,17 +11,10 @@ from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import (
-    Property,
-    QAbstractAnimation,
-    QEasingCurve,
-    QObject,
-    Qt,
-    QVariantAnimation,
-    Signal,
-    Slot,
-)
+from PySide6.QtCore import Property, QObject, Qt, Signal, Slot
 from PySide6.QtGui import QKeySequence, QVector2D
+
+from .animation import CameraAnimator, State
 
 __all__ = ["HOME_SIZE", "HOME_VIEW", "Camera", "nice_ticks"]
 
@@ -157,14 +150,7 @@ class Camera(QObject):
         self._zoom_out = "-|_"
         # One animation drives every discrete camera move (a wheel notch, a keypress). Drags
         # and touch gestures are direct manipulation and must never be animated through.
-        self._anim_from: tuple[float, float, float, float] | None = None
-        self._anim_to: tuple[float, float, float, float] | None = None
-        self._animation = QVariantAnimation(self)
-        self._animation.setStartValue(0.0)
-        self._animation.setEndValue(1.0)
-        self._animation.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self._animation.valueChanged.connect(self._on_animation_tick)
-        self._animation.finished.connect(self._on_animation_finished)
+        self._animator = CameraAnimator(self._apply_state, self)
 
     # ------------------------------------------------------------- state
     def _get_centre(self) -> QVector2D:
@@ -475,61 +461,24 @@ class Camera(QObject):
         self._home = False
         self._view_changed()
 
-    def _target_state(self) -> tuple[float, float, float, float]:
+    def _target_state(self) -> State:
         """The state an in-flight animation is heading for (accumulate rapid wheel/key
         presses); the current state otherwise."""
-        if (self._anim_to is not None
-                and self._animation.state() == QAbstractAnimation.State.Running):
-            return self._anim_to
-        return self._state()
+        return self._animator.target(self._state())
 
     def _stop_animation(self) -> None:
-        if self._animation.state() != QAbstractAnimation.State.Stopped:
-            self._animation.stop()
-        self._anim_from = None
-        self._anim_to = None
+        self._animator.stop()
 
     @Slot()
     def stop_animation(self) -> None:
         """Cancel an in-flight animated move (called by the view on direct manipulation)."""
-        self._stop_animation()
+        self._animator.stop()
 
-    def _on_animation_tick(self, value: object) -> None:
-        if self._anim_from is None or self._anim_to is None:
-            return
-        t = float(value)
-        fx, fy, fsx, fsy = self._anim_from
-        tx, ty, tsx, tsy = self._anim_to
-        # Scales interpolate geometrically: a zoom then feels like a constant rate rather
-        # than racing at the start and crawling at the end.
-        sx = fsx * (tsx / fsx) ** t
-        sy = fsy * (tsy / fsy) ** t
-        self._apply_view(fx + (tx - fx) * t, fy + (ty - fy) * t, sx, sy)
+    def _apply_state(self, state: State) -> None:
+        self._apply_view(*state)
 
-    def _on_animation_finished(self) -> None:
-        if self._anim_to is not None:
-            self._apply_view(*self._anim_to)
-        self._anim_from = None
-        self._anim_to = None
-
-    def _animate_to(
-        self, state: tuple[float, float, float, float], duration: int
-    ) -> None:
-        state = self._clamp_state(*state)
-        duration = int(duration)
-        if duration <= 0:
-            self._stop_animation()
-            self._apply_view(*state)
-            return
-        start = self._state()
-        if start == state:
-            self._stop_animation()
-            return
-        self._anim_from = start
-        self._anim_to = state
-        self._animation.stop()
-        self._animation.setDuration(duration)
-        self._animation.start()
+    def _animate_to(self, state: State, duration: int) -> None:
+        self._animator.start(self._state(), self._clamp_state(*state), duration)
 
     def _zoom_state(
         self,

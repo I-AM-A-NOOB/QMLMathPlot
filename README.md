@@ -439,6 +439,7 @@ three import QtWidgets lazily, so a pure-QML host never loads it.
 |---|---|---|
 | Model | `src/qmlmathplot/model.py` | expression → GLSL, shader source template (no Qt dependency, unit-testable) |
 | Camera | `src/qmlmathplot/camera.py` | `Camera`: centre / zoom / aspect, the derived ranges, pan/zoom/reset, the nice-number tick algorithm |
+| Animation | `src/qmlmathplot/animation.py` | `CameraAnimator`: the one eased interpolator behind wheel/keyboard moves |
 | Curves | `src/qmlmathplot/curve.py` | `Curve` (expression → baked `.qsb`, style, error; later edits bake on the thread pool) and `CurveListModel` |
 | Plot | `src/qmlmathplot/plot.py` | `Plot`: the camera, the curves and the styling the view binds to |
 | Facade | `src/qmlmathplot/figure.py` | `Figure` / `Axes`: Matplotlib-shaped names over one `Plot` (no Qt beyond the model) |
