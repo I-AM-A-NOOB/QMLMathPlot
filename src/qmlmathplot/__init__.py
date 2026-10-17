@@ -55,6 +55,7 @@ from .curve import Curve, CurveListModel, ImplicitCurve
 from .figure import Axes, Figure
 from .input import ViewInput
 from .plot import Plot
+from .qsb import cache_dir, cache_info, clear_cache, prune_cache
 from .view import QML_MAJOR, QML_MINOR, QML_URI, qml_component_path, register_qml_types
 
 if TYPE_CHECKING:  # only for type checkers; at runtime the module-level __getattr__ is used
@@ -63,7 +64,10 @@ if TYPE_CHECKING:  # only for type checkers; at runtime the module-level __getat
 
 __all__ = [
     "Axes",
+    "cache_dir",
+    "cache_info",
     "Camera",
+    "clear_cache",
     "Curve",
     "CurveListModel",
     "Figure",
@@ -74,6 +78,7 @@ __all__ = [
     "MathPlotWidget",
     "nice_ticks",
     "Plot",
+    "prune_cache",
     "qml_component_path",
     "QML_MAJOR",
     "QML_MINOR",

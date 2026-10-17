@@ -153,6 +153,13 @@ thread (microseconds) and run qsb on Qt's thread pool; the result is applied onl
 generation is still current, so a fast second edit discards the first. A cache miss costs about
 126 ms off the GUI thread, and a failed or pending bake keeps the previous shaders and `expr`.
 
+The cache lives in `tempfile.gettempdir()/qmlmathplot-qsb` (overridable with
+`QMLMATHPLOT_QSB_CACHE`). It is maintained automatically: the first bake in a process and at
+most once a minute afterwards removes entries older than 30 days, prunes the LRU tail to 75%
+of a 32 MiB cap (override with `QMLMATHPLOT_QSB_CACHE_MB`), and deletes interrupted-bake
+sources/temps older than an hour. `qmlmathplot.cache_info()`, `clear_cache()` and `prune_cache()`
+are the explicit equivalents; unrelated files in the directory are never touched.
+
 ## 6. Curves (many of them)
 
 * One `ShaderEffect` per curve, produced by a `Repeater` over `CurveListModel`. Each pass is

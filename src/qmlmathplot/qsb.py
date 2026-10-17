@@ -19,11 +19,164 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
 from pathlib import Path
 
-__all__ = ["bake", "qsb_binary"]
+__all__ = [
+    "bake",
+    "cache_dir",
+    "cache_info",
+    "clear_cache",
+    "prune_cache",
+    "qsb_binary",
+]
 
 _EXE = "qsb.exe" if os.name == "nt" else "qsb"
+
+#: The cache lives in the platform temp directory: ``%TEMP%`` on Windows, the per-user
+#: ``/var/folders/.../T`` on macOS, ``$TMPDIR`` or ``/tmp`` on Linux.
+CACHE_NAME = "qmlmathplot-qsb"
+#: Override the directory (useful for tests and read-only temp setups).
+CACHE_DIR_ENV = "QMLMATHPLOT_QSB_CACHE"
+#: Soft size cap in MiB; the oldest entries are removed first when it is exceeded.
+CACHE_MB_ENV = "QMLMATHPLOT_QSB_CACHE_MB"
+DEFAULT_CACHE_MB = 32.0
+DEFAULT_MAX_AGE_DAYS = 30.0
+#: How often a long-running process re-checks the cache (seconds).
+PRUNE_INTERVAL = 60.0
+#: Interrupted-bake sources/temps are safe to remove after this long (a bake takes < 1 s).
+STALE_TEMP_AGE = 3600.0
+
+_PRUNE_LOCK = threading.Lock()
+_LAST_PRUNE: dict[Path, float] = {}
+
+
+def _resolve_cache_dir(path: Path | str | None = None) -> Path:
+    if path is not None:
+        return Path(path)
+    override = os.environ.get(CACHE_DIR_ENV)
+    if override:
+        return Path(override)
+    return Path(tempfile.gettempdir()) / CACHE_NAME
+
+
+def cache_dir() -> Path:
+    """The directory qsb binaries are cached in (``tempfile.gettempdir()/qmlmathplot-qsb``)."""
+    return _resolve_cache_dir()
+
+
+def _max_bytes() -> int:
+    raw = os.environ.get(CACHE_MB_ENV)
+    try:
+        megabytes = float(raw) if raw else DEFAULT_CACHE_MB
+    except ValueError:
+        megabytes = DEFAULT_CACHE_MB
+    return max(1, int(megabytes * 1024 * 1024))
+
+
+def cache_info(path: Path | str | None = None) -> dict[str, object]:
+    """Files and bytes currently cached (``path`` defaults to :func:`cache_dir`)."""
+    directory = _resolve_cache_dir(path)
+    files = list(directory.glob("*.qsb")) if directory.exists() else []
+    total = 0
+    for file in files:
+        try:
+            total += file.stat().st_size
+        except OSError:
+            pass
+    return {"path": str(directory), "files": len(files), "bytes": total}
+
+
+def _unlink(file: Path) -> int:
+    try:
+        size = file.stat().st_size
+        file.unlink()
+        return size
+    except FileNotFoundError:
+        return 0
+    except OSError:
+        return 0                      # in use / permissions: leave it for the next prune
+
+
+def clear_cache(path: Path | str | None = None) -> int:
+    """Delete this package's cached shaders and return the bytes freed.
+
+    Only ``*.qsb`` and bake leftovers are touched; unrelated files in the directory stay.
+    """
+    directory = _resolve_cache_dir(path)
+    freed = 0
+    if not directory.exists():
+        return 0
+    for pattern in ("*.qsb", "*.qsb.tmp", "*.vert", "*.frag"):
+        for file in directory.glob(pattern):
+            freed += _unlink(file)
+    with _PRUNE_LOCK:
+        _LAST_PRUNE.pop(directory, None)
+    return freed
+
+
+def prune_cache(
+    path: Path | str | None = None,
+    *,
+    max_bytes: int | None = None,
+    max_age_days: float = DEFAULT_MAX_AGE_DAYS,
+) -> int:
+    """Remove stale/old cache entries and bring the cache under ``max_bytes``.
+
+    Entries older than ``max_age_days`` go first; if the remainder is still over the cap, the
+    least-recently-used ``.qsb`` files are removed until three quarters of the cap remain.
+    Stale ``.qsb.tmp`` / ``.vert`` / ``.frag`` leftovers from interrupted bakes are removed
+    after an hour. Returns the bytes freed.
+    """
+    directory = _resolve_cache_dir(path)
+    if not directory.exists():
+        return 0
+    cap = _max_bytes() if max_bytes is None else max(1, int(max_bytes))
+    now = time.time()
+    freed = 0
+    entries: list[tuple[float, Path, int]] = []
+    for file in directory.glob("*.qsb"):
+        try:
+            stat = file.stat()
+        except OSError:
+            continue
+        if now - stat.st_mtime > max_age_days * 86400:
+            freed += _unlink(file)
+        else:
+            entries.append((stat.st_mtime, file, stat.st_size))
+
+    total = sum(size for _, _, size in entries)
+    target = int(cap * 0.75)
+    if total > cap:
+        for _, file, size in sorted(entries):       # oldest first
+            freed += _unlink(file)
+            total -= size
+            if total <= target:
+                break
+
+    for pattern in ("*.qsb.tmp", "*.vert", "*.frag"):
+        for file in directory.glob(pattern):
+            try:
+                if now - file.stat().st_mtime > STALE_TEMP_AGE:
+                    freed += _unlink(file)
+            except OSError:
+                pass
+    return freed
+
+
+def _prune_if_due(directory: Path) -> None:
+    """Automatic maintenance: at most once per :data:`PRUNE_INTERVAL` per directory."""
+    now = time.monotonic()
+    with _PRUNE_LOCK:
+        last = _LAST_PRUNE.get(directory)
+        if last is not None and now - last < PRUNE_INTERVAL:
+            return
+        _LAST_PRUNE[directory] = now
+    try:
+        prune_cache(directory)
+    except OSError:
+        pass
 
 
 def _candidates() -> list[Path]:
@@ -71,10 +224,15 @@ def bake(source: str, stage: str, cache_dir: Path | str | None = None) -> Path:
     #     suffix, so a .glsl file is treated as a vertex shader. The version goes into the
     #     hash, which invalidates old cache entries.
     key = hashlib.sha256(f"v2\0{stage}\0{source}".encode()).hexdigest()[:16]
-    out_dir = Path(cache_dir) if cache_dir else Path(tempfile.gettempdir()) / "qmlmathplot-qsb"
+    out_dir = _resolve_cache_dir(cache_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    _prune_if_due(out_dir)
     out_path = out_dir / f"{stage}-{key}.qsb"
     if out_path.exists():
+        try:
+            out_path.touch()                # keep frequently used entries out of the LRU tail
+        except OSError:
+            pass
         return out_path
 
     # Unique source/output names: two processes (or two curves on the pool) may bake the same

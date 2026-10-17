@@ -541,6 +541,8 @@ uv run ruff check src tests examples   # bug-level lint (undefined names, unused
   matplotlib's default style, the limits are forwarded to the camera, and a theme applies
   (and re-applies as a reset) while an unknown name is rejected.
 - `test_themes.py`: the vendored style sheets resolve to this library's properties.
+- `test_qsb_cache.py`: the cache location/info/clear API and the age + LRU prune; unrelated
+  files in the temp directory are not touched.
 - `test_shader_bake.py`: the stage of a baked `.qsb` must match its purpose, and
   the four backend targets GLSL/HLSL/MSL/SPIR-V must all be covered.
 - `test_render_smoke.py`: open a window, render, read pixels; verify the thin-line
@@ -659,6 +661,41 @@ only for the legacy path. The 1-D fragment source is about 21 KB.
 (plus two interval evaluations for the column and the stroke footprint); there is no
 march budget and no band-window evaluation. The old fixed-grid/march table is superseded
 and no longer describes the shipped path.
+
+## Shader cache
+
+`qsb` binaries are cached in the platform temp directory:
+
+```python
+import qmlmathplot
+
+qmlmathplot.cache_dir()    # e.g. C:\Users\me\AppData\Local\Temp\qmlmathplot-qsb
+qmlmathplot.cache_info()   # {'path': ..., 'files': ..., 'bytes': ...}
+qmlmathplot.clear_cache()  # remove this package's entries, returns bytes freed
+```
+
+The location is `tempfile.gettempdir()/qmlmathplot-qsb`: `%TEMP%` on Windows, the per-user
+`/var/folders/.../T` on macOS, and `$TMPDIR` or `/tmp` on Linux. Set
+`QMLMATHPLOT_QSB_CACHE` to use another directory.
+
+**It is not left to grow without bound.** The first bake in a process, and at most once per
+minute afterwards, runs `prune_cache()`:
+
+- entries older than **30 days** are removed;
+- if the cache is over **32 MiB** (default), the least-recently-used `.qsb` files are removed
+  until it is at 75% of the cap — so an existing 60 MB cache drops to about 24 MB on the next
+  bake;
+- interrupted-bake leftovers (`*.qsb.tmp`, `*.vert`, `*.frag`) older than an hour are removed.
+
+Both knobs are overridable: `QMLMATHPLOT_QSB_CACHE_MB` (size cap) and
+`qmlmathplot.prune_cache(max_bytes=..., max_age_days=...)` for an explicit pass. The cache
+contains compiled shaders only; the GLSL source and temporary outputs are deleted after each
+bake. Concurrent processes share the directory safely: writes use unique temp names and an
+atomic replace, and pruning only removes entries by age/LRU.
+
+On macOS/Linux `qsb` is looked up in the PySide6 package (`Qt/bin`, `Qt/libexec`) and on
+`PATH`; if the wheel does not ship it, install Qt Shader Tools (`qt6-shadertools` on most
+distributions) or add `qsb` to `PATH`. Only the Windows wheel has been confirmed to ship it.
 
 ## Pitfalls already hit (do not repeat)
 
