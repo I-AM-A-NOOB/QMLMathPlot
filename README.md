@@ -359,22 +359,31 @@ cannot be represented by a line.
    `x/sqrt(x**2)`, when the endpoint jump exceeds the join radius. The flat branches are
    still drawn; measured `x/sqrt(x**2)` draws its ±1 branches without the old 454-px
    connector at x = 0.
-3. **Interval column band** — GeoGebra's column idea, on the GPU. The expression is also
-   evaluated in interval arithmetic over the pixel's column (generated from sympy in
-   `interval.py`, compiled to the GLSL `IVal FI(xlo, xhi)`): a conservative y-enclosure
-   with topology **connected / two rays around a gap / whole / empty**. The band is that
-   enclosure plus a half-stroke feather, and it is filled only when the column is not a
-   polyline:
-   - **two reversals inside the pixel's own column** (a sub-column oscillation such as
-     `sin(1/x)` near its singularity), weighted by `smoothstep(1.5, 3.0, sturns)` so the
-     band edge feathers — counting the wider sampling window instead bands every column of a
-     merely high-frequency curve, which rendered `sin(1/x)` as full-height stripes;
-   - a **divergence** (an infinite bound, e.g. `log`'s boundary) — GeoGebra's rule
-     (`leftToBottom`/`leftToTop`): one segment from the finite bound at the column's left
-     edge to the viewport edge at the column's middle. No boundary ray and no band fill;
-   - an **inverted/whole** topology (`tan`/`1/x` poles): rays or a full column.
-   There is no ±8-column window, no violation-count gate and no chord-stroke. The band is
-   always the pixel's own exact column.
+3. **Interval topology — GeoGebra's column rules on the GPU.** The expression is evaluated
+   in interval arithmetic over the pixel's column (generated from sympy in `interval.py`,
+   compiled to the GLSL `IVal FI(xlo, xhi)`): a conservative y-enclosure with topology
+   **connected / two rays around a gap / whole / empty**. The shader reproduces the reference
+   plotter's rules:
+   - **connected, sub-column oscillation** (`smoothstep(1.5, 3.0, sturns)`): GeoGebra's
+     `DrawInterval.drawJoined` path — the vertical join at `x.low` and the diagonal across
+     the column, choosing `drawUp`/`drawDown` from the high edge; an independent column is a
+     vertical at `x.high`. These are **strokes**, not a filled rectangle.
+   - **divergence** (`log`'s boundary): `IntervalPath.drawNormalInfinity` →
+     `leftToBottom`/`leftToTop`, only when the finite bound is on screen: one segment from
+     `(x.low, finite bound)` to `(x.middle, viewport edge)`. If the interval covers the
+     viewport but the finite bound is above/below it (the deep `log` view), the column is
+     effectively `whole` and gets `drawWhole` (a vertical at `x.low`) — an extension needed
+     because the Java branch draws nothing there although the visible curve lies inside the
+     column.
+   - **inverted** (`tan`/`1/x` poles): `DrawInvertedInterval` — the top segment at `x.high`
+     from the viewport top to the gap's high, the bottom at `x.low` from the gap's low to the
+     viewport bottom; no filled ray.
+   - **whole**: `DrawInterval.drawWhole` — one vertical segment at `x.low`.
+   Deliberate deviations, because this is a fragment shader and not the Java tuple list: the
+   16-sample polyline supersamples GGB's one interval per column for resolved stretches; a
+   dependent quotient's whole column is still suppressed (the fixed-x polyline draws the real
+   branches, avoiding the `x/sqrt(x**2)` connector); and a joined inverted column uses those
+   sample branches instead of replaying `JoinLines.inverted`'s neighbour decisions.
 4. **Domain.** `DOM`/`DOMS` (from sympy) guard every `F` evaluation, so `log(negative)` is
    never evaluated; a pixel just outside the domain still gets the band, which is centred
    on the boundary.

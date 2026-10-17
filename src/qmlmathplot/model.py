@@ -505,36 +505,87 @@ void main() {
         }
     }
 
-    // A divergence's boundary is vertical: extend the column edge as a ray (log's descent
-    // is otherwise a sample polyline that ends one radius short of the boundary).
-    // GeoGebra's unbounded-column rule (IntervalPathPlotter.leftToBottom / leftToTop):
-    // a connected enclosure with an infinite bound is drawn as one segment across the
-    // column, from its finite end at the column's left edge to the viewport edge at the
-    // column's middle. No ray at the boundary x, and no band fill: the interval path is a
-    // stroked line, exactly as the reference plotter draws log(x)'s descent.
-    if (col.kind == IK_CONNECTED && col.lo <= -IINF) {
+    // GeoGebra's unbounded-column rule (IntervalPath.drawNormalInfinity): only when the
+    // finite bound itself is on screen. The segment uses the column's left edge and middle.
+    if (col.kind == IK_CONNECTED && col.lo <= -IINF
+            && col.hi >= y_bot && col.hi <= y_top) {
         pmin = min(pmin, _seg_dist(vec2(x * sx, y * sy),
             vec2((x - 0.5 * dx) * sx, col.hi * sy), vec2(x * sx, y_bot * sy)));
     }
-    if (col.kind == IK_CONNECTED && col.hi >= IINF) {
+    if (col.kind == IK_CONNECTED && col.hi >= IINF
+            && col.lo >= y_bot && col.lo <= y_top) {
         pmin = min(pmin, _seg_dist(vec2(x * sx, y * sy),
             vec2((x - 0.5 * dx) * sx, col.lo * sy), vec2(x * sx, y_top * sy)));
+    }
+    // The deep log case: the finite bound is *above* the viewport but the column's interval
+    // covers it (the visible curve lies inside this x column). GeoGebra's normal-infinity
+    // branch declines to draw here; the column is effectively whole (drawWhole), so a
+    // vertical segment at the left edge is GGB's own rule for that topology.
+    if (col.kind == IK_CONNECTED && col.lo <= -IINF && col.hi > y_top) {
+        pmin = min(pmin, _seg_dist(vec2(x * sx, y * sy),
+            vec2((x - 0.5 * dx) * sx, y_bot * sy), vec2((x - 0.5 * dx) * sx, y_top * sy)));
+    }
+    if (col.kind == IK_CONNECTED && col.hi >= IINF && col.lo < y_bot) {
+        pmin = min(pmin, _seg_dist(vec2(x * sx, y * sy),
+            vec2((x - 0.5 * dx) * sx, y_bot * sy), vec2((x - 0.5 * dx) * sx, y_top * sy)));
+    }
+
+    // GeoGebra's DrawInvertedInterval: an inverted column draws the two attained rays as
+    // vertical segments at the column's *outer* edges — top at x.high, bottom at x.low —
+    // not as a filled band. (The joined variant, JoinLines.inverted, adds the neighbour
+    // joins; the sample polyline already draws those branches.)
+    if (col.kind == IK_INVERTED) {
+        if (col.lo < y_top) {
+            pmin = min(pmin, _seg_dist(vec2(x * sx, y * sy),
+                vec2((x + 0.5 * dx) * sx, y_top * sy),
+                vec2((x + 0.5 * dx) * sx, col.hi * sy)));
+        }
+        if (col.hi > y_bot) {
+            pmin = min(pmin, _seg_dist(vec2(x * sx, y * sy),
+                vec2((x - 0.5 * dx) * sx, y_bot * sy),
+                vec2((x - 0.5 * dx) * sx, col.lo * sy)));
+        }
+    }
+
+    // GeoGebra's DrawInterval.drawWhole: one vertical segment at the column's left edge.
+    if (col.kind == IK_WHOLE && FILL_WHOLE) {
+        pmin = min(pmin, _seg_dist(vec2(x * sx, y * sy),
+            vec2((x - 0.5 * dx) * sx, y_bot * sy), vec2((x - 0.5 * dx) * sx, y_top * sy)));
     }
 
     float band_cov = 0.0;
     if (col.kind == IK_CONNECTED) {
-        // Fill only when the column is not a polyline: an oscillation (>= 2 reversals in the
-        // samples) or a divergence (infinite bound). A monotone column is the polyline.
+        // GeoGebra's DrawInterval path for a sub-column oscillation: the current column's
+        // joined diagonal plus the vertical join at x.low (drawUp/drawDown compare the high
+        // edges). An independent column is a vertical at x.high. This replaces the old
+        // filled rectangle: the interval path is a stroked line, not a fill.
         float fill = smoothstep(1.5, 3.0, sturns);
-        if (fill > 0.0) {
-            band_cov = fill * clamp((col.hi - y) * sy + BW, 0.0, 1.0)
-                            * clamp((y - col.lo) * sy + BW, 0.0, 1.0);
+        if (fill > 0.0 && !(HAS_DEPENDENT_QUOTIENT && !FILL_WHOLE)) {
+            IVal prevc = FI(x - 1.5 * dx, x - 0.5 * dx);
+            float gcov = 0.0;
+            if (prevc.kind == IK_CONNECTED && prevc.lo > -IINF && prevc.hi < IINF) {
+                if (col.hi > prevc.hi) {
+                    gcov = max(gcov, clamp(R - _seg_dist(vec2(x * sx, y * sy),
+                        vec2((x - 0.5 * dx) * sx, prevc.hi * sy),
+                        vec2((x - 0.5 * dx) * sx, col.lo * sy)), 0.0, 1.0));
+                    gcov = max(gcov, clamp(R - _seg_dist(vec2(x * sx, y * sy),
+                        vec2((x - 0.5 * dx) * sx, col.lo * sy),
+                        vec2((x + 0.5 * dx) * sx, col.hi * sy)), 0.0, 1.0));
+                } else {
+                    gcov = max(gcov, clamp(R - _seg_dist(vec2(x * sx, y * sy),
+                        vec2((x - 0.5 * dx) * sx, prevc.lo * sy),
+                        vec2((x - 0.5 * dx) * sx, col.hi * sy)), 0.0, 1.0));
+                    gcov = max(gcov, clamp(R - _seg_dist(vec2(x * sx, y * sy),
+                        vec2((x - 0.5 * dx) * sx, col.hi * sy),
+                        vec2((x + 0.5 * dx) * sx, col.lo * sy)), 0.0, 1.0));
+                }
+            } else {
+                gcov = clamp(R - _seg_dist(vec2(x * sx, y * sy),
+                    vec2((x + 0.5 * dx) * sx, col.lo * sy),
+                    vec2((x + 0.5 * dx) * sx, col.hi * sy)), 0.0, 1.0);
+            }
+            band_cov = fill * gcov;
         }
-    } else if (col.kind == IK_INVERTED) {
-        band_cov = max(clamp((col.lo - y) * sy + BW, 0.0, 1.0),
-                       clamp((y - col.hi) * sy + BW, 0.0, 1.0));
-    } else if (col.kind == IK_WHOLE && FILL_WHOLE) {
-        band_cov = 1.0;
     }
     if (HAS_DEPENDENT_QUOTIENT && !FILL_WHOLE) {
         band_cov = 0.0;   // dependency overestimation: the polyline draws the real branches

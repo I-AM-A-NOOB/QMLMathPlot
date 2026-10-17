@@ -861,7 +861,7 @@ the full step budget in both directions plus both windows.
     - The full 1-D shader is ~40 KB with the library (legacy ~29 KB).
 
 
-49. **The fixed-x sampled polyline returned; the interval band stayed** (the march is now the
+51. **The fixed-x sampled polyline returned; the interval band stayed** (the march is now the
     legacy path only). Items 44 and 45 described the march as the renderer; that is no longer
     true for supported expressions.
 
@@ -910,4 +910,33 @@ the full step budget in both directions plus both windows.
     13.6 ms, `tan(x)` default 12.4 ms, `sin(1/x)` zoom 90 12.5 ms (march renderer: 27/34/33
     ms); `tan` at y ∈ [50,60] draws four full-height walls; `log(1+x)`'s descent 3.00 px at
     every sampled row; `k·x` 3.00/3.00/3.00/2.94 at slopes 2/10/40/200.
+
+52. **The 1-D interval path now follows GeoGebra's topology rules, not just its enclosure**
+    (found by diffing against `euclidian/plot/interval`; all GPU, no tuple list).
+
+    *Deviations found and fixed:*
+    - a connected sub-column oscillation was a **filled rectangle**; GGB's
+      `DrawInterval.drawJoined` is a **stroked interval path**: the vertical join at `x.low`
+      plus the diagonal across the column (`drawUp`/`drawDown` chosen by `high`), and a
+      vertical at `x.high` for an independent column. The shader now strokes those segments
+      (weighted by `smoothstep(1.5, 3.0, sturns)`).
+    - inverted columns were filled top/bottom rays; `DrawInvertedInterval` draws the **top
+      segment at x.high** and the **bottom at x.low**, from the gap to the viewport edge.
+    - whole columns were filled; `DrawInterval.drawWhole` is one vertical at `x.low`.
+    - `leftToBottom`/`leftToTop` were unconditional; `IntervalPath.drawNormalInfinity` draws
+      only when the finite bound is on screen. The deep `log` view still needs a line: its
+      column interval covers the viewport while the finite bound is above it, so the shader
+      treats that column as `whole` (vertical at `x.low`). Without that, the deep-descent
+      render test goes to 0 lit pixels (GGB's normal branch declines).
+    - `drawUp`/`drawDown` compare the **high** edges (`Interval.isGreaterThan`), matched.
+
+    *Kept deliberately, not copied:* the Java `JoinLines.inverted` neighbour decisions and
+    the `IntervalTupleList`; the fixed-x 16-sample polyline supersamples the one interval per
+    column for resolved stretches; a dependent quotient's whole column stays suppressed
+    (`x/sqrt(x**2)`).
+
+    *Measured after:* 144 tests green; `tan`/`1/x` branches smooth with no pole fill;
+    `sin(1/x)`'s band is now the GGB interval path (vertical joins + diagonals) instead of a
+    rectangle; `log`'s descent is one segment/column; `tan` at y ∈ [50,60] still four
+    full-height walls.
 
