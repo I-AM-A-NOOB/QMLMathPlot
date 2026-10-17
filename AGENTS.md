@@ -304,14 +304,19 @@ histories and numbers belong here.
       inline component) is rejected by QML with "Property value set multiple times", so this is
       still open.
 
-35. **Snap hairlines to a half pixel, but never a *styled* line.** The grid is a 1 px hairline
-    drawn in the Canvas, so `Math.round(px) + 0.5` is right there; the axis line is 1.07 logical
-    px wide (`axis_width`, 0.8 pt) and applying the same rounding put it half off the centre
-    column — the y-axis came out pale grey where the test expected black, and the axis visibly
-    thinned out when the widget's logical size was odd. Fix: the axis rectangles are positioned
-    at the exact value (`yAxisX - axis_width / 2`), only the hairline grid is snapped.
-    Regression: `test_render_smoke.py::test_grid_ticks_axes_and_title_are_drawn` checks a dark
-    pixel on the centre column and on the middle row.
+35. **Snap screen-space lines to *device* pixels, not logical half-pixels.** The grid is a
+    1 px hairline drawn in the Canvas; the axis is 1.07 logical px (`axis_width`, 0.8 pt), i.e.
+    1.6 device px at DPR 1.5. The first fix positioned the axis at the exact value
+    (`yAxisX - axis_width / 2`), which kept it on the centre column but made its **width**
+    flip between one and two device rows as the world position drifted across the pixel grid
+    (measured across pans: 1-2 rows). Applying the grid's logical `+0.5` was worse — it put a
+    1.6-device line half off the column and the y-axis came out pale. Fix in
+    `PlotView.qml`: `_deviceWidth(logical)` rounds the width to an **integral device** width
+    and `_snapLine(centre, width)` places the line's edges at integral device pixels. The axis
+    is 2 device px at DPR 1.5 and constant; the grid and tick marks use the same helpers.
+    Regression: `test_render_smoke.py::test_axis_thickness_is_stable_across_positions` (six
+    pans, thickness must be constant) plus the original
+    `test_grid_ticks_axes_and_title_are_drawn` dark-pixel check.
 
 36. **The axis is clamped to the nearest edge; the tick labels are clamped too.** With the
     origin off screen the axis sticks to the item's edge (the Desmos behaviour), and the mark

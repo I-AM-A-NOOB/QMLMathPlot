@@ -10,6 +10,7 @@
 // reported to the camera for the derived ranges only — the shader derives its own mapping from
 // the camera and the item size, so drawing never depends on a size report arriving in order.
 import QtQuick
+import QtQuick.Window
 import QmlMathPlot 1.0
 
 Item {
@@ -52,6 +53,23 @@ Item {
                         camera.centre.y - (point.y - height / 2) * camera.scale_y);
     }
 
+    // Screen-space furniture is drawn in logical QML coordinates, but its edges must land on
+    // device pixels: a 1.07-logical-px axis is 1.6 physical px at DPR 1.5, so an unsnapped
+    // rectangle is rasterised as 1 or 2 px depending on the zoom (the world position drifts
+    // across the pixel grid). Snap the line *center* so its edges are integral device pixels,
+    // and use an integral device width. This is the axis/grid equivalent of the grid
+    // hairline's half-pixel rule, generalised to a styled line of any DPR.
+    readonly property real _dpr: Screen.devicePixelRatio > 0 ? Screen.devicePixelRatio : 1
+
+    function _deviceWidth(logicalWidth) {
+        return Math.max(1, Math.round(logicalWidth * _dpr)) / _dpr;
+    }
+
+    function _snapLine(center, logicalWidth) {
+        const wd = Math.max(1, Math.round(logicalWidth * _dpr));
+        return (Math.round(center * _dpr - wd / 2) + wd / 2) / _dpr;
+    }
+
     function _gridDash(style) {
         if (style === "--")
             return [6, 4];
@@ -83,18 +101,18 @@ Item {
         onPaint: {
             const ctx = getContext("2d");
             ctx.clearRect(0, 0, width, height);
-            ctx.lineWidth = root.plot.grid_width;
+            ctx.lineWidth = root._deviceWidth(root.plot.grid_width);
             ctx.strokeStyle = root.plot.grid_color;
             ctx.globalAlpha = root.plot.grid_alpha;
             ctx.setLineDash(root._gridDash(root.plot.grid_style));
             ctx.beginPath();
             for (const tick of root.plot.camera.ticks_x) {
-                const px = Math.round(root.mapToScreen(tick[0], 0).x) + 0.5;
+                const px = root._snapLine(root.mapToScreen(tick[0], 0).x, ctx.lineWidth);
                 ctx.moveTo(px, 0);
                 ctx.lineTo(px, height);
             }
             for (const tick of root.plot.camera.ticks_y) {
-                const py = Math.round(root.mapToScreen(0, tick[0]).y) + 0.5;
+                const py = root._snapLine(root.mapToScreen(0, tick[0]).y, ctx.lineWidth);
                 ctx.moveTo(0, py);
                 ctx.lineTo(width, py);
             }
@@ -158,20 +176,21 @@ Item {
         readonly property real yAxisX: atZero
                                        ? Math.max(0, Math.min(width, root.mapToScreen(0, 0).x))
                                        : 0
+        readonly property real axisThickness: root._deviceWidth(root.plot.axis_width)
 
         Rectangle {
             visible: furniture.atZero
             x: 0
             width: parent.width
-            height: root.plot.axis_width
-            y: furniture.xAxisY - height / 2
+            height: furniture.axisThickness
+            y: root._snapLine(furniture.xAxisY, furniture.axisThickness) - height / 2
             color: root.plot.axis_color
         }
         Rectangle {
             visible: furniture.atZero
-            x: furniture.yAxisX - width / 2
+            x: root._snapLine(furniture.yAxisX, furniture.axisThickness) - width / 2
             y: 0
-            width: root.plot.axis_width
+            width: furniture.axisThickness
             height: parent.height
             color: root.plot.axis_color
         }
@@ -183,14 +202,15 @@ Item {
             // when the axis is pinned to an edge (a label may never leave the item).
             delegate: Item {
                 required property var modelData
+                readonly property real markWidth: root._deviceWidth(1)
 
-                x: Math.round(root.mapToScreen(modelData[0], 0).x)
-                width: 1
+                x: root._snapLine(root.mapToScreen(modelData[0], 0).x, markWidth) - markWidth / 2
+                width: markWidth
                 height: furniture.height
 
                 Rectangle {
                     y: Math.max(0, Math.min(furniture.xAxisY, furniture.height - height))
-                    width: 1
+                    width: markWidth
                     height: root.plot.tick_length
                     color: root.plot.tick_color
                 }
@@ -212,16 +232,17 @@ Item {
 
             delegate: Item {
                 required property var modelData
+                readonly property real markHeight: root._deviceWidth(1)
 
                 x: 0
-                y: Math.round(root.mapToScreen(0, modelData[0]).y)
+                y: root._snapLine(root.mapToScreen(0, modelData[0]).y, markHeight) - markHeight / 2
                 width: furniture.width
-                height: 1
+                height: markHeight
 
                 Rectangle {
                     x: Math.max(0, Math.min(furniture.yAxisX - width, furniture.width - width))
                     width: root.plot.tick_length
-                    height: 1
+                    height: markHeight
                     color: root.plot.tick_color
                 }
                 Text {

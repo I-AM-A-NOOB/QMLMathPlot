@@ -548,9 +548,11 @@ measurement that settled each one). The Qt/packaging ones that shaped the code:
   same x 9 times, and macros are preprocessor expansion with no call semantics.
 - PySide ties a property's notify signal to the `Signal` **object**; a name string
   silently leaves the property without one (and QML bindings then never refresh).
-- Snap **hairlines** (grid) to a half pixel, but never a **styled** line: rounding the
-  axis position put the 1.07 px y-axis half off the centre column, so the line came out
-  pale where it should be black.
+- Screen-space furniture is QML: background `Rectangle`, grid `Canvas`, axes/ticks
+  `Rectangle`s, labels/title `Text`; curves are `ShaderEffect` passes. Snap its lines to
+  **device** pixels with an integral device width (`_deviceWidth`/`_snapLine`), not logical
+  half-pixels: the 1.07-logical axis is 2 device px at DPR 1.5 and otherwise alternated
+  between one and two rows as it drifted with the zoom.
 - `QQuickWidget.setProperty(name, …)` sets it on the **widget**, not on the QML root (the
   widget has no such property, so it silently does nothing): inject the model with
   `widget.rootObject().setProperty("plot", plot)`, as `MathPlotWidget` does.

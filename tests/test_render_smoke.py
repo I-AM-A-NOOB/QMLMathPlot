@@ -577,6 +577,31 @@ def test_grid_ticks_axes_and_title_are_drawn(app: QGuiApplication) -> None:
     assert top > 0, "the title is not drawn at the top"
 
 
+def test_axis_thickness_is_stable_across_positions(app: QGuiApplication) -> None:
+    """The axis must not alternate between one and two physical pixels while zooming.
+
+    It is a plain QML ``Rectangle`` in logical coordinates. At DPR 1.5 its 1.07-logical-px
+    width is 1.6 device px; if its edges are not snapped to the device grid the rasteriser
+    covers one or two rows depending on the fractional world position. The view snaps the
+    line's centre so its edges are integral device pixels and uses an integral device width.
+    """
+    counts: set[int] = set()
+    expected = 0
+    for pan in (0.0, 0.3, 0.7, 1.1, -1.7, 2.3):
+        image, plot = _render_plot(app, "sin(x)", pan_pixels=pan, furniture=True)
+        dpr = image.devicePixelRatio()
+        expected = max(1, round(plot.axis_width * dpr))
+        camera = plot.camera
+        # a column away from the curve's and labels' crossings of the x axis
+        x = image.width() // 8
+        y0 = (camera.centre.y() / camera.scale_y + HEIGHT / 2) * dpr
+        rows = [y for y in range(int(round(y0)) - 3, int(round(y0)) + 4)
+                if _dark(image, x, y)]
+        counts.add(len(rows))
+    assert counts == {expected}, \
+        f"axis thickness varied across pans: {sorted(counts)} rows, expected {expected} device px"
+
+
 def test_axis_pins_to_the_edge_when_the_origin_is_off_screen(app: QGuiApplication) -> None:
     """Panning the origin out of the view must not lose the labels: the axis sticks to the
     nearest edge (the Desmos behaviour) instead of leaving the item."""
