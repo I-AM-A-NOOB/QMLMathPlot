@@ -67,6 +67,9 @@ jobs:
       - name: Install
         run: uv sync --group dev
 
+      - name: Lint
+        run: uv run ruff check src tests examples
+
       # The GUI tests open real windows and need a GPU scene graph; a runner has neither.
       # They are marked `gui` and are meant to be run on a developer machine:
       #     uv run pytest              # everything, needs a desktop session

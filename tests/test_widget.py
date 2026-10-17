@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import pytest
 from PySide6.QtCore import QEventLoop, QPoint, QPointF, Qt, QTimer
-from PySide6.QtGui import QImage, QWheelEvent
+from PySide6.QtGui import QColor, QImage, QWheelEvent
 from PySide6.QtQuickWidgets import QQuickWidget
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLineEdit, QScrollArea, QVBoxLayout, QWidget

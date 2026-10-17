@@ -117,7 +117,9 @@ PlotView {
 ```
 
 `PlotView` exposes `mapToScreen(x, y)` and `mapFromScreen(point)` so any QML element can sit
-at world coordinates without re-deriving the transform.
+at world coordinates without re-deriving the transform. Without an injected `plot` the
+component creates an empty one; a standalone curve is explicit (`defaultExpression: "sin(x)"`),
+so the reusable component has no hidden artist.
 
 ## 5. The Qt contract (what makes runtime changes free)
 

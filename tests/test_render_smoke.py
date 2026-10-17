@@ -42,9 +42,9 @@ def _render_plot(app: QGuiApplication, expression: str | None = None,
 
     root = view.rootObject()
     if expression is None:
-        # No injection: the component brings its own plot and its default sin(x) curve. Its
-        # own plot is deliberately not read back (a QML-declared property of a registered
-        # Python type has no Python converter), so the component's own home view stands.
+        # No model injection: the standalone component creates its own Plot. A curve is now
+        # explicit (`defaultExpression`), not a hidden sin(x).
+        root.setProperty("defaultExpression", "sin(x)")
         plot = None
     else:
         # MVVM: the app side creates the model and injects it into the component
@@ -145,10 +145,23 @@ def test_smooth_curve_is_a_thin_stroke(app: QGuiApplication) -> None:
 
 
 def test_component_works_without_injection(app: QGuiApplication) -> None:
-    """Without an injected model the component brings its own plot and curve (the standalone
-    usability promised by the README)."""
+    """Without an injected model the component brings its own plot; an explicit
+    ``defaultExpression`` adds the standalone curve (there is no hidden default)."""
     image = _render(app)
-    assert _curve_count(image) > 100, "the component's own default sin(x) curve should draw"
+    assert _curve_count(image) > 100, "the explicit default sin(x) curve should draw"
+
+
+def test_no_hidden_curve_without_default_expression(app: QGuiApplication) -> None:
+    """A bare PlotView creates an empty Plot; the curve used to be an implicit sin(x)."""
+    view = QQuickView()
+    view.setSource(QUrl.fromLocalFile(qml_component_path()))
+    assert view.status() is QQuickView.Status.Ready, [e.toString() for e in view.errors()]
+    root = view.rootObject()
+    app.processEvents()
+    curves = root.property("curves")        # QtObject-typed forwarder: the Python model
+    assert curves is not None
+    assert curves.rowCount() == 0, "PlotView added a curve nobody asked for"
+    view.hide()
 
 
 def _solid_outside_pm1(image: QImage) -> int:

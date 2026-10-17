@@ -113,6 +113,15 @@ PlotView {                       // inject a Plot, or let the component create i
 }
 ```
 
+For a standalone view with no injected model, the curve is explicit:
+
+```qml
+PlotView { defaultExpression: "sin(x)"; anchors.fill: parent }
+```
+
+There is no hidden default curve: the component creates its own empty `Plot` when none is
+injected, and `defaultExpression` is the only way it adds one.
+
 `PlotView` exposes `mapToScreen(x, y)` / `mapFromScreen(point)` plus the forwarders
 `camera` and `curves`; input handling (pan by left-drag, wheel zoom anchored at the cursor)
 is built in and switchable through `camera.panEnabled` / `camera.zoomEnabled`.
@@ -505,6 +514,7 @@ the arc-length march now.
 uv run pytest                      # everything
 uv run pytest -m "not gui"         # skip the render smoke tests that open a window
 QSG_RHI_BACKEND=opengl uv run pytest -m gui
+uv run ruff check src tests examples   # bug-level lint (undefined names, unused imports)
 ```
 
 - `test_model.py`: GLSL generation (small integer powers as repeated

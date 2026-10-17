@@ -27,6 +27,7 @@ and a redraw loop. Unsupported methods raise ``NotImplementedError`` with the re
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Any
 
 import sympy as sp
 
@@ -306,7 +307,7 @@ class Figure:
         )
         self._dpi = DEFAULT_DPI if dpi is None else float(dpi)
         self.number = number
-        self.canvas: "FigureCanvasQt | None" = None
+        self.canvas: Any = None
         # Matplotlib accepts many more knobs; the ones that describe a page (edgecolor,
         # frameon, tight_layout, constrained_layout, …) have no meaning on an infinite canvas.
 

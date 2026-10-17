@@ -26,7 +26,7 @@ def register_qml_types() -> None:
     ``PlotView`` component, so a Qt Quick app can simply write::
 
         import QmlMathPlot 1.0
-        PlotView { anchors.fill: parent }
+        PlotView { anchors.fill: parent; defaultExpression: "sin(x)" }
 
     Idempotent: repeated calls are a no-op (Qt complains about duplicate registrations).
     """

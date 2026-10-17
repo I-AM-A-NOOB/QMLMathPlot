@@ -29,17 +29,14 @@ Item {
             event.accepted = true;
     }
 
-    // The model (injected by the host). Without injection the component brings its own plot
-    // with one sin(x) curve, so it is usable standalone; a host that adds curves itself keeps
-    // this handler from firing (it only acts on an empty model).
+    // The model (injected by the host). Without injection the component brings its own plot;
+    // it adds no curve by itself. A standalone user opts into one with `defaultExpression`
+    // (``PlotView { defaultExpression: "sin(x)" }``) — no hidden default, and a host that
+    // injects a model or adds its own curves never races this handler.
     property Plot plot: defaultPlot
+    property string defaultExpression: ""
     Plot {
         id: defaultPlot
-
-        Component.onCompleted: {
-            if (curves.rowCount() === 0)
-                add_curve("sin(x)");
-        }
     }
 
     // Forwarders, so a host can drive the component without knowing where the knob lives:
@@ -137,7 +134,11 @@ Item {
 
     // The first report resolves the home view for the real size; later ones keep the scales, so
     // nothing zooms while a window or a splitter is dragged.
-    Component.onCompleted: root.plot.camera.setViewport(width, height)
+    Component.onCompleted: {
+        if (defaultExpression !== "" && curves.rowCount() === 0)
+            add_curve(defaultExpression);
+        root.plot.camera.setViewport(width, height);
+    }
     onWidthChanged: root.plot.camera.setViewport(width, height)
     onHeightChanged: root.plot.camera.setViewport(width, height)
 

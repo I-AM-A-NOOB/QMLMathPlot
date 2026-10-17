@@ -28,6 +28,7 @@ build-backend = "uv_build"
 dev = [
     "pytest>=9.1.1",
     "matplotlib>=3.8",      # the hand-off tests need it (the feature itself stays optional)
+    "ruff>=0.9",
 ]
 
 [tool.pytest.ini_options]
@@ -35,3 +36,12 @@ testpaths = ["tests"]
 markers = [
     "gui: needs a real GPU scene graph (opens windows and renders)",
 ]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+# Bug-level rules only: undefined names, unused imports, syntax/exception mistakes. Stylistic
+# families (import sorting, quoted annotations, …) are not enforced yet.
+select = ["F", "E9"]

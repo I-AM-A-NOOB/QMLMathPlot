@@ -18,7 +18,7 @@ from PySide6.QtQuickWidgets import QQuickWidget
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
-from qmlmathplot import Axes, Figure, FigureCanvasQt, MathPlotWidget, Plot
+from qmlmathplot import Figure, FigureCanvasQt, MathPlotWidget, Plot
 from qmlmathplot import pyplot as plt
 
 X = sp.Symbol("x")
