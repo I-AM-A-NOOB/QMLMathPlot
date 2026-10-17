@@ -121,8 +121,8 @@ The model:
 
 | Object | Members |
 |---|---|
-| `Plot` | `camera`, `curves`, `xlim`/`ylim`/`aspect` (forwarded), `add_curve()` / `add_implicit()` / `remove_curve()`, `available_themes`, and the style properties: `background`, `grid`, `grid_color`, `grid_width`, `grid_alpha`, `grid_style`, `axis_color`, `axis_width`, `axes_position`, `color_cycle`, `line_width`, `text_color`, `tick_color`, `tick_length`, `font_size`, `tick_font_size`, `title`, `title_color`, `title_font_size`, `title_bold`, `ticks_visible`, `theme` |
-| `Camera` | `centre`, `zoom` (world units per logical pixel), `aspect`, `xlim`/`ylim` (derived), `ticks_x`/`ticks_y`, `zoomStep` / `panEnabled` / `zoomEnabled`, slots `setViewport(w, h)` / `zoom_by(delta, u, v, w, h)` / `pan_pixels(dx, dy)` / `reset()` |
+| `Plot` | `camera`, `curves`, `xlim`/`ylim`/`aspect` (forwarded), `add_curve()` / `add_implicit()` / `remove_curve()`, `available_themes`, and the style properties: `background`, `grid`, `grid_color`, `grid_width`, `grid_alpha`, `grid_style`, `axis_color`, `axis_width`, `axes_position`, `color_cycle`, `line_width`, `text_color`, `tick_color`, `tick_length`, `font_size`, `tick_font_size`, `title`, `xlabel`, `ylabel`, `title_color`, `title_font_size`, `title_bold`, `ticks_visible`, `theme` |
+| `Camera` | `centre`, `zoom` (world units per logical pixel), `aspect`, `xlim`/`ylim` (derived), `ticks_x`/`ticks_y`, `zoomStep` / `panEnabled` / `zoomEnabled`, `keyboardEnabled` / `keyPanStep`, `panLeftShortcut` / `panRightShortcut` / `panUpShortcut` / `panDownShortcut` / `zoomInShortcut` / `zoomOutShortcut`, `animationDuration`, slots `setViewport(w, h)` / `zoom_by(delta, u, v, w, h)` / `zoom_at(factor, u, v, w, h)` / `pan_pixels(dx, dy)` / `animate_zoom(...)` / `animate_pan(dx, dy, ms)` / `stop_animation()` / `reset()` |
 | `Curve` | `expression` (string or sympy expression), `expr` (the parsed expression, read-only), `implicit`, `color`, `lineWidth`, `visible`, `label`, `error` (read-only), the baked `vertexShader` / `fragmentShader` |
 | `CurveListModel` | the curves as a model (`curve`, `expression`, `color`, `lineWidth`, `visible`, `vertexShader`, `fragmentShader` roles) so QML puts one `ShaderEffect` behind each |
 
@@ -137,11 +137,75 @@ QTimer.singleShot(1000, lambda: setattr(curve, "expression", "sin(3/x)"))
 
 The design — the camera model, the Qt property/signal contract, the object model and the
 build order — is specified in [`docs/api-design.md`](docs/api-design.md). In short: the
-Matplotlib *vocabulary* is kept where it is vocabulary (limits, grid, title, ticks, annotate),
-while the *mechanism* is refused — no `Figure`/`Axes`/`subplots` (one view per widget, no
-bounded page), no `FigureCanvas`/`draw()` (the scene is live), no toolbar and no legend (host
-chrome), and an export is a canvas region at a pixel size rather than a re-rendered page
-(§9, implemented — see *Export* below).
+Matplotlib *vocabulary* is kept where it is vocabulary (limits, grid, title, ticks), while the
+*mechanism* is refused — no `Figure`/`Axes`/`subplots` in the core (one view per widget, no
+bounded page), no redraw loop (the scene is live), no toolbar and no legend (host chrome), and
+an export is a canvas region at a pixel size rather than a re-rendered page (§9, implemented —
+see *Export* below). A **thin compatibility facade** (`Figure`, `Axes`, `FigureCanvasQt`,
+`qmlmathplot.pyplot`) provides the familiar names for porting scripts; it maps onto the same
+model and refuses the mechanisms that do not fit (see *Matplotlib-style facade* below).
+
+## Matplotlib-style facade
+
+For porting scripts and for code that expects Matplotlib's vocabulary, the package ships a
+**thin** compatibility layer. It maps onto the same `Plot`/`Camera` model and refuses the
+mechanisms that do not fit an infinite, live canvas.
+
+```python
+from qmlmathplot import Figure, FigureCanvasQt
+
+fig = Figure(figsize=(6.4, 4.8))       # stored for the window size only; no page is implied
+ax = fig.gca()                         # exactly one axes per figure
+ax.plot("sin(1/x)", label="sin(1/x)")
+ax.set_xlim(-1, 1)
+ax.set_ylim(-2, 2)
+ax.set_title("sin(1/x)")
+ax.set_xlabel("x")
+ax.set_ylabel("y")
+ax.grid(True)
+ax.set_aspect("equal")
+
+canvas = FigureCanvasQt(fig)           # a QWidget, like MathPlotWidget
+layout.addWidget(canvas)
+canvas.draw()                          # no-op: the Qt scene is already live
+```
+
+The same model through a pyplot-shaped module (global current figure, for scripts and
+notebooks; applications should keep the object API):
+
+```python
+import qmlmathplot.pyplot as plt
+
+plt.figure()
+plt.plot("sin(1/x)")
+plt.xlim(-1, 1)
+plt.title("sin(1/x)")
+plt.xlabel("x")
+plt.grid(True)
+plt.savefig("out.png")                 # Qt raster export
+plt.show()                             # blocks in a script; use block=False in a host
+```
+
+What maps: one figure/one axes (`subplots()` and `subplot(111)`), `plot(expression)`,
+`xlim`/`ylim`, `title`/`xlabel`/`ylabel`, `grid`, `aspect`, `savefig`/`to_image`, themes.
+`plt.gcf()`/`gca()`/`sca()`/`close()`/`show()` follow Matplotlib's current-figure shape.
+
+What is deliberately different:
+
+- **One view per figure.** `subplots(2, 1)`/`add_subplot(211)` raise `NotImplementedError`;
+  several panels are several `Figure` objects in a Qt layout, not a `GridSpec`.
+- **Expressions, not x/y arrays.** `ax.plot("sin(x)")` is native; `ax.plot(x, y)` is refused
+  because the Qt renderer evaluates an expression per pixel. For sampled data use
+  `Plot.to_matplotlib()` (the hand-off), or add a data-series artist.
+- **`draw()` / `draw_idle()` are no-ops.** The scene repaints from model signals; there is no
+  deferred renderer or blitting.
+- **`savefig` is a region at a pixel size**, not a page at a dpi. `width`/`height` are device
+  pixels and `dpi` is a multiplier; `backend="matplotlib"` is the vector route.
+- **No legends, annotations, log axes or manual ticks yet.** `legend()`, `annotate()`,
+  `set_xscale()` and `set_xticks()` raise with the reason; chrome belongs to the host.
+- **Themes are per figure**, not `rcParams`; `plt` has no global style state beyond the current
+  figure.
+- **`mpl_connect`/`blit` are absent.** Qt signals are the event system.
 
 ## Implicit curves
 
@@ -215,6 +279,33 @@ plot = MathPlotWidget("sin(1/x)", aspect=1.0)     # square units
 plot.aspect = "auto"                              # back to following the widget's shape
 plot.plot.camera.zoom_by(120, 0.5, 0.5, w, h)     # one wheel notch, anchored at the centre
 ```
+
+## Keyboard, touch and animation
+
+Clicking the plot gives it focus; while it has focus the arrow keys pan (10% of the viewport
+per press by default), `+`/`=` zooms in and `-`/`_` zooms out. Every command is a property on
+the camera, so a host can rebind it — the value is a `QKeySequence` string, and `|` separates
+alternatives (empty disables the command). `keyPanStep`, `keyboardEnabled`, `panEnabled` and
+`zoomEnabled` shape the behaviour the same way.
+
+```python
+camera = plot.plot.camera
+camera.panLeftShortcut = "A"          # rebind one arrow
+camera.panRightShortcut = "D"
+camera.zoomInShortcut = "Ctrl+="
+camera.zoomOutShortcut = "Ctrl+-"
+camera.keyPanStep = 0.2               # 20% of the viewport per arrow press
+camera.animationDuration = 220        # ms; 0 disables easing
+```
+
+Wheel and keyboard moves are **eased** (scale interpolates geometrically, so a zoom feels like
+a constant rate); repeated wheel notches accumulate onto the in-flight target instead of
+restarting from the last frame. Mouse drags and touch gestures are deliberately direct — the
+pointer or the fingers are the animation.
+
+Touch is built in: one finger pans, two fingers pinch to magnify and pan together, keeping the
+world point under the finger centroid. They need no focus and work in both embedding modes;
+like the mouse, they cancel an in-flight eased move as soon as they start.
 
 ## Themes
 
@@ -332,8 +423,8 @@ conversion) and `mpl.py` (the sampled hand-off) import no Qt at all** — they a
 without a `QApplication`. `Camera`, `Curve` and `Plot` are the **ViewModel**: `QObject`s whose
 `Property`es carry notify signals, which is precisely what the QML component binds to — and why
 a Python-side assignment updates the view with no call in between. `view.py`, `PlotView.qml`,
-`export.py` and `widget.py` are the View/embedding layer and do need Qt; `export.py` and
-`widget.py` import QtWidgets lazily, so a pure-QML host never loads it.
+`export.py`, `widget.py` and `canvas.py` are the View/embedding layer and do need Qt; the last
+three import QtWidgets lazily, so a pure-QML host never loads it.
 
 | Layer | File | Responsibility |
 |---|---|---|
@@ -341,6 +432,9 @@ a Python-side assignment updates the view with no call in between. `view.py`, `P
 | Camera | `src/qmlmathplot/camera.py` | `Camera`: centre / zoom / aspect, the derived ranges, pan/zoom/reset, the nice-number tick algorithm |
 | Curves | `src/qmlmathplot/curve.py` | `Curve` (expression → baked `.qsb`, style, error) and `CurveListModel` |
 | Plot | `src/qmlmathplot/plot.py` | `Plot`: the camera, the curves and the styling the view binds to |
+| Facade | `src/qmlmathplot/figure.py` | `Figure` / `Axes`: Matplotlib-shaped names over one `Plot` (no Qt beyond the model) |
+| Facade host | `src/qmlmathplot/canvas.py` | `FigureCanvasQt`: a `MathPlotWidget` attached to a `Figure` (QtWidgets, lazy) |
+| Facade scripting | `src/qmlmathplot/pyplot.py` | `qmlmathplot.pyplot`: current figure, `plot`/`xlim`/`show`/`savefig` for scripts |
 | View | `src/qmlmathplot/qml/PlotView.qml` (+ `view.py`) | QML: background, grid, ticks/title, one `ShaderEffect` per curve, pan/zoom input; `view.py` registers the types and yields the component path |
 | Themes | `src/qmlmathplot/themes.py` + `themes/` | the vendored Matplotlib style sheets, resolved onto the `Plot`'s properties |
 | Export | `src/qmlmathplot/export.py` | `Plot.savefig()` / `to_image()`: the canvas region rendered offscreen at a pixel size (QtWidgets is imported lazily) |
@@ -456,6 +550,10 @@ QSG_RHI_BACKEND=opengl uv run pytest -m gui
   `.pdf` and `.png`; `to_sympy().save()` writes a file and keeps per-curve colours; importing
   `qmlmathplot` does not import matplotlib, and hiding matplotlib produces an error naming the
   extra.
+- `test_compat.py`: the Matplotlib-shaped facade — expressions (and the refusal of x/y arrays),
+  limits/title/labels/grid/aspect, the single-axes rule, `pyplot` current-figure semantics,
+  `FigureCanvasQt` rendering and export, and that importing `qmlmathplot` does not load
+  QtWidgets.
 - `test_export.py`: `to_image()`/`savefig()` — the image is exactly the requested device size
   (`dpi` multiplies it), the no-argument form reproduces the live centre and scale, the three
   `adjustable` modes reconcile range and size as documented (a world 45-degree line stays at 45

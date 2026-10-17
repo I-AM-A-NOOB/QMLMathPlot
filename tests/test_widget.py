@@ -132,6 +132,9 @@ def test_wheel_over_plot_zooms_and_does_not_scroll_parent(app: QApplication) -> 
     assert bar.maximum() > 0, "the scroll area cannot scroll, so this conflict cannot be tested"
 
     quick = _quick(plot)
+    # This test is about the event reaching the plot, not about easing: make the zoom
+    # immediate so the assertion right after processEvents sees the final range.
+    plot.plot.camera.animationDuration = 0
     xmin, xmax, _, _ = plot.view_bounds()
     center = QPointF(quick.width() / 2, quick.height() / 2)
     wheel = QWheelEvent(

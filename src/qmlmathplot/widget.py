@@ -9,8 +9,9 @@
 
 The QML component (View) is itself a Qt Quick Item; ``QQuickWidget`` bridges it into the widgets
 world: it renders into its own FBO, so it stacks and coexists properly with sibling widgets
-(input fields, scroll areas, splitters, overlays); wheel and left-drag are already ``accepted``
-on the QML side, so they never leak to a parent scroll area.
+(input fields, scroll areas, splitters, overlays); wheel, left-drag, touch (pinch) and — while
+focused — the camera's keyboard shortcuts are already ``accepted`` on the QML side, so they
+never leak to a parent scroll area.
 
 A ``QApplication`` must exist first (QQuickWidget belongs to QtWidgets); ``register_qml_types()``
 is called automatically here and is safe to call repeatedly.
@@ -26,7 +27,7 @@ from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtQuickWidgets import QQuickWidget
 from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget
 
-from .curve import Curve
+from .curve import DEFAULT_COLOR, Curve
 from .plot import Plot
 from .view import qml_component_path, register_qml_types
 
@@ -36,7 +37,9 @@ __all__ = ["MathPlotWidget"]
 class MathPlotWidget(QWidget):
     """Function plotting widget (QWidget version).
 
-    :param expression: expression in sympy syntax, ``"sin(x)"`` by default
+    :param expression: expression in sympy syntax (default ``"sin(x)"``); ``None`` adds no curve
+    :param plot: an existing ``Plot`` to host instead of creating one (the compatibility
+        ``Figure`` uses this); the single-curve conveniences then target its first curve
     :param line_width: line width (logical pixels); None keeps the plot's own default
     :param curve_color: curve color (``#rrggbb``); None keeps the plot's own default
     :param background_color: background color (``#rrggbb``); None keeps the plot's own default
@@ -51,9 +54,10 @@ class MathPlotWidget(QWidget):
 
     def __init__(
         self,
-        expression: str = "sin(x)",
+        expression: str | None = "sin(x)",
         parent: QWidget | None = None,
         *,
+        plot: Plot | None = None,
         line_width: float | None = None,
         curve_color: str | None = None,
         background_color: str | None = None,
@@ -69,9 +73,10 @@ class MathPlotWidget(QWidget):
 
         self._quick = QQuickWidget(self)
         self._quick.setResizeMode(QQuickWidget.ResizeMode.SizeRootObjectToView)
-        # Clicking the plot area should not enter the Tab focus chain (wheel/drag still handled
-        # by QML as usual)
+        # The view owns the keyboard: focusing the widget (programmatically or by click)
+        # focuses the QML root, which is where the shortcuts are handled.
         self._quick.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self.setFocusProxy(self._quick)
         self._quick.setSource(QUrl.fromLocalFile(qml_component_path()))
         if self._quick.status() is not QQuickWidget.Status.Ready:
             raise RuntimeError(
@@ -79,22 +84,35 @@ class MathPlotWidget(QWidget):
             )
 
         self._root = self._quick.rootObject()   # status is Ready, so this is always valid
-        self._plot = Plot(self)
-        # None for a style argument means "keep the plot's own default" (which the plot takes
-        # from its theme), so the widget does not re-state matplotlib's numbers.
+        # A host may inject a Plot (the compatibility Figure does): the widget then hosts
+        # that model instead of creating its own. ``expression=None`` means "do not add a
+        # curve"; if the injected plot already has curves, the single-curve conveniences
+        # target its first one.
+        self._plot = plot if plot is not None else Plot(self)
         if background_color is not None:
             self._plot.background = background_color
         if line_width is not None:
             self._plot.line_width = float(line_width)
-        self._curve = self._plot.add_curve(expression, color=curve_color, line_width=line_width)
-        self._curve.expressionChanged.connect(self.expressionChanged)
-        self._curve.errorChanged.connect(self.errorChanged)
+        self._curve_color = curve_color
+        self._curve: Curve | None = None
+        if expression is not None:
+            self._set_curve(
+                self._plot.add_curve(expression, color=curve_color, line_width=line_width)
+            )
+        elif len(self._plot.curves):
+            self._set_curve(self._plot.curves.at(0))
         self._root.setProperty("plot", self._plot)
         self.aspect = aspect
 
         box = QVBoxLayout(self)
         box.setContentsMargins(0, 0, 0, 0)
         box.addWidget(self._quick)
+
+    def _set_curve(self, curve: Curve) -> None:
+        """Make ``curve`` the one the single-curve conveniences drive."""
+        self._curve = curve
+        curve.expressionChanged.connect(self.expressionChanged)
+        curve.errorChanged.connect(self.errorChanged)
 
     def resizeEvent(self, event) -> None:  # noqa: N802 (Qt naming)
         """Report the plot's real size to the camera.
@@ -113,40 +131,52 @@ class MathPlotWidget(QWidget):
         return self._plot
 
     @property
-    def curve(self) -> Curve:
-        """The first curve, which the single-curve conveniences below drive."""
+    def curve(self) -> Curve | None:
+        """The first curve, which the single-curve conveniences below drive (``None`` when
+        the widget hosts a plot without curves)."""
         return self._curve
 
     @property
     def expression(self) -> str:
-        return self._curve.expression
+        return self._curve.expression if self._curve is not None else ""
 
     @expression.setter
     def expression(self, source: str) -> None:
-        self._curve.expression = source
+        if self._curve is None:
+            # A widget created with ``expression=None`` grows its convenience curve on the
+            # first assignment, so ``plot.expression = "sin(x)"`` still works.
+            self._set_curve(self._plot.add_curve(source, color=self._curve_color))
+        else:
+            self._curve.expression = source
 
     @property
     def error(self) -> str:
         """Most recent parse error (empty string = OK)."""
-        return self._curve.error
+        return self._curve.error if self._curve is not None else ""
 
     # ---------------------------------------------------------------- Appearance
     @property
     def line_width(self) -> float:
-        return self._curve.lineWidth
+        return self._curve.lineWidth if self._curve is not None else self._plot.line_width
 
     @line_width.setter
     def line_width(self, value: float) -> None:
         self._plot.line_width = float(value)     # default for curves added later
-        self._curve.lineWidth = float(value)
+        if self._curve is not None:
+            self._curve.lineWidth = float(value)
 
     @property
     def curve_color(self) -> str:
-        return self._curve.color.name()
+        if self._curve is not None:
+            return self._curve.color.name()
+        cycle = self._plot.color_cycle
+        return self._curve_color or (cycle[0] if cycle else DEFAULT_COLOR)
 
     @curve_color.setter
     def curve_color(self, value: str) -> None:
-        self._curve.color = value
+        self._curve_color = value
+        if self._curve is not None:
+            self._curve.color = value
 
     @property
     def background_color(self) -> str:

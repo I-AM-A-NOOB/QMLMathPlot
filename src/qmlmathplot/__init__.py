@@ -52,16 +52,21 @@ from typing import TYPE_CHECKING
 
 from .camera import HOME_SIZE, HOME_VIEW, Camera, nice_ticks
 from .curve import Curve, CurveListModel, ImplicitCurve
+from .figure import Axes, Figure
 from .plot import Plot
 from .view import QML_MAJOR, QML_MINOR, QML_URI, qml_component_path, register_qml_types
 
 if TYPE_CHECKING:  # only for type checkers; at runtime the module-level __getattr__ is used
+    from .canvas import FigureCanvasQt
     from .widget import MathPlotWidget
 
 __all__ = [
+    "Axes",
     "Camera",
     "Curve",
     "CurveListModel",
+    "Figure",
+    "FigureCanvasQt",
     "HOME_SIZE",
     "HOME_VIEW",
     "ImplicitCurve",
@@ -77,9 +82,17 @@ __all__ = [
 
 
 def __getattr__(name: str) -> object:
-    """``MathPlotWidget`` is imported lazily, so pure-QML use never loads QtWidgets."""
+    """QtWidgets-backed names are lazy, so pure-QML use never loads QtWidgets."""
     if name == "MathPlotWidget":
         from .widget import MathPlotWidget
 
         return MathPlotWidget
+    if name == "FigureCanvasQt":
+        from .canvas import FigureCanvasQt
+
+        return FigureCanvasQt
+    if name == "pyplot":
+        from importlib import import_module
+
+        return import_module(".pyplot", __name__)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

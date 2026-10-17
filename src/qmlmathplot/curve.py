@@ -374,9 +374,6 @@ class CurveListModel(QAbstractListModel):
         curve.visibleChanged.connect(lambda c=curve: self._notify(c, (self.VisibleRole,)))
 
     # ---------------------------------------------------------------- public
-    # "QVariant" so a sympy expression is not stringified on the way in (see Plot.add_curve).
-    @Slot("QVariant", "QVariant", "QVariant", str, result=QObject)
-    @Slot("QVariant", result=QObject)
     def _defaults(self, color: object, line_width: object) -> tuple[QColor, float]:
         if color is None:
             color = self._cycle[len(self._curves) % len(self._cycle)]

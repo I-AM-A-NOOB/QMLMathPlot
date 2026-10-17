@@ -11,8 +11,17 @@ from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import Property, QObject, Signal, Slot
-from PySide6.QtGui import QVector2D
+from PySide6.QtCore import (
+    Property,
+    QAbstractAnimation,
+    QEasingCurve,
+    QObject,
+    Qt,
+    QVariantAnimation,
+    Signal,
+    Slot,
+)
+from PySide6.QtGui import QKeySequence, QVector2D
 
 __all__ = ["HOME_SIZE", "HOME_VIEW", "Camera", "nice_ticks"]
 
@@ -77,6 +86,25 @@ def _qml_pairs(ticks: list[tuple[float, str]]) -> list[list[float | str]]:
     return [[value, label] for value, label in ticks]
 
 
+def _shortcut_property(storage: str, notify: Signal) -> Property:
+    """A shortcut string property backed by ``storage`` (one notify for the whole group).
+
+    The notify signal is passed as an *object*: PySide silently drops a notify signal given
+    by name, and QML bindings then never refresh (AGENTS item 30).
+    """
+    def getter(self: Camera) -> str:
+        return getattr(self, storage)
+
+    def setter(self: Camera, value: object) -> None:
+        text = str(value)
+        if text == getattr(self, storage):
+            return
+        setattr(self, storage, text)
+        notify.__get__(self, type(self)).emit()
+
+    return Property(str, getter, setter, notify=notify)
+
+
 class Camera(QObject):
     """The view onto the infinite canvas: centre, zoom (units per logical pixel) and aspect.
 
@@ -91,6 +119,10 @@ class Camera(QObject):
     zoomStepChanged = Signal()
     panEnabledChanged = Signal()
     zoomEnabledChanged = Signal()
+    keyboardEnabledChanged = Signal()
+    keyPanStepChanged = Signal()
+    shortcutsChanged = Signal()
+    animationDurationChanged = Signal()
 
     #: Scale limits (world units per pixel), to keep panning/zooming reversible.
     MIN_SCALE = 1e-12
@@ -109,6 +141,25 @@ class Camera(QObject):
         self._zoom_step = 0.9
         self._pan_enabled = True
         self._zoom_enabled = True
+        self._keyboard_enabled = True
+        self._key_pan_step = 0.1
+        self._animation_duration = 160
+        self._pan_left = "Left"
+        self._pan_right = "Right"
+        self._pan_up = "Up"
+        self._pan_down = "Down"
+        self._zoom_in = "+|="
+        self._zoom_out = "-|_"
+        # One animation drives every discrete camera move (a wheel notch, a keypress). Drags
+        # and touch gestures are direct manipulation and must never be animated through.
+        self._anim_from: tuple[float, float, float, float] | None = None
+        self._anim_to: tuple[float, float, float, float] | None = None
+        self._animation = QVariantAnimation(self)
+        self._animation.setStartValue(0.0)
+        self._animation.setEndValue(1.0)
+        self._animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._animation.valueChanged.connect(self._on_animation_tick)
+        self._animation.finished.connect(self._on_animation_finished)
 
     # ------------------------------------------------------------- state
     def _get_centre(self) -> QVector2D:
@@ -118,6 +169,7 @@ class Camera(QObject):
         x, y = _pair(value)
         if (x, y) == (self._centre.x(), self._centre.y()):
             return
+        self._stop_animation()
         self._centre = QVector2D(x, y)
         self._home = False
         self._view_changed()
@@ -144,6 +196,7 @@ class Camera(QObject):
             raise ValueError(f"aspect must be positive, got {value!r}")
         if value == self._aspect:
             return
+        self._stop_animation()
         old_y = self.scale_y
         self._aspect = value
         self._home = False
@@ -173,6 +226,7 @@ class Camera(QObject):
         value = min(max(value, self.MIN_SCALE), self.MAX_SCALE)
         if value == self._zoom:
             return
+        self._stop_animation()
         factor = value / self._zoom
         self._zoom = value
         if keep_ratio and isinstance(self._aspect, str):
@@ -195,6 +249,7 @@ class Camera(QObject):
         width, _ = self._effective_size()
         if not hi > lo or width <= 0:
             return
+        self._stop_animation()
         self._centre = QVector2D(0.5 * (lo + hi), self._centre.y())
         self._scale_to((hi - lo) / width)    # keeps the ratio: y follows the same factor
 
@@ -208,6 +263,7 @@ class Camera(QObject):
         _, height = self._effective_size()
         if not hi > lo or height <= 0:
             return
+        self._stop_animation()
         self._centre = QVector2D(self._centre.x(), 0.5 * (lo + hi))
         if isinstance(self._aspect, str):
             self._y_scale = min(max((hi - lo) / height, self.MIN_SCALE), self.MAX_SCALE)
@@ -283,6 +339,237 @@ class Camera(QObject):
         bool, _get_zoom_enabled, _set_zoom_enabled, notify=zoomEnabledChanged
     )
 
+    def _get_keyboard_enabled(self) -> bool:
+        return self._keyboard_enabled
+
+    def _set_keyboard_enabled(self, value: bool) -> None:
+        value = bool(value)
+        if value == self._keyboard_enabled:
+            return
+        self._keyboard_enabled = value
+        self.keyboardEnabledChanged.emit()
+
+    #: Whether the view reacts to the keyboard while it has focus.
+    keyboardEnabled: bool = Property(
+        bool, _get_keyboard_enabled, _set_keyboard_enabled, notify=keyboardEnabledChanged
+    )
+
+    def _get_key_pan_step(self) -> float:
+        return self._key_pan_step
+
+    def _set_key_pan_step(self, value: float) -> None:
+        value = float(value)
+        if value <= 0.0:
+            raise ValueError(f"keyPanStep must be positive, got {value!r}")
+        if value == self._key_pan_step:
+            return
+        self._key_pan_step = value
+        self.keyPanStepChanged.emit()
+
+    #: Fraction of the viewport moved by one arrow-key press (0.1 = 10%).
+    keyPanStep: float = Property(
+        float, _get_key_pan_step, _set_key_pan_step, notify=keyPanStepChanged
+    )
+
+    #: Key sequences (QKeySequence text) for the six view commands. ``|`` separates
+    #: alternatives, so the default zoom-in is ``"+|="`` (Shift+= and the unshifted key).
+    panLeftShortcut: str = _shortcut_property("_pan_left", shortcutsChanged)
+    panRightShortcut: str = _shortcut_property("_pan_right", shortcutsChanged)
+    panUpShortcut: str = _shortcut_property("_pan_up", shortcutsChanged)
+    panDownShortcut: str = _shortcut_property("_pan_down", shortcutsChanged)
+    zoomInShortcut: str = _shortcut_property("_zoom_in", shortcutsChanged)
+    zoomOutShortcut: str = _shortcut_property("_zoom_out", shortcutsChanged)
+
+    def _get_animation_duration(self) -> int:
+        return self._animation_duration
+
+    def _set_animation_duration(self, value: int) -> None:
+        value = int(value)
+        if value < 0:
+            raise ValueError(f"animationDuration must be >= 0, got {value!r}")
+        if value == self._animation_duration:
+            return
+        self._animation_duration = value
+        self.animationDurationChanged.emit()
+
+    #: Duration of a wheel/keyboard camera move in ms; 0 disables the animation.
+    animationDuration: int = Property(
+        int, _get_animation_duration, _set_animation_duration, notify=animationDurationChanged
+    )
+
+    # -------------------------------------------------------------- shortcuts
+    @Slot(int, int, str, result=bool)
+    def matchesShortcut(self, key: int, modifiers: int, shortcut: str) -> bool:
+        """Whether a QML key event matches one of the ``|``-separated sequences in
+        ``shortcut`` (QKeySequence text). Empty or unparsable sequences never match."""
+        if not shortcut or key <= 0:
+            return False
+        event_mods = int(modifiers) & ~Qt.KeyboardModifier.KeypadModifier.value
+        for part in shortcut.split("|"):
+            sequence = QKeySequence(part.strip())
+            if sequence.count() == 0:
+                continue
+            combination = sequence[0]
+            if combination.key().value != int(key):
+                continue
+            target_mods = (
+                combination.keyboardModifiers().value
+                & ~Qt.KeyboardModifier.KeypadModifier.value
+            )
+            if target_mods == event_mods:
+                return True
+            # QKeySequence("+") is Key_Plus with no modifier, while a real keyboard reports
+            # Shift+Plus; letters are not forgiving (Shift+A must stay Shift+A).
+            if (target_mods == 0
+                    and event_mods == Qt.KeyboardModifier.ShiftModifier.value
+                    and not (Qt.Key.Key_A.value <= int(key) <= Qt.Key.Key_Z.value)):
+                return True
+        return False
+
+    # --------------------------------------------------------------- animation
+    def _state(self) -> tuple[float, float, float, float]:
+        return (self._centre.x(), self._centre.y(), self._zoom, self._get_scale_y())
+
+    def _clamp_state(
+        self, centre_x: float, centre_y: float, scale_x: float, scale_y: float
+    ) -> tuple[float, float, float, float]:
+        return (
+            float(centre_x),
+            float(centre_y),
+            min(max(float(scale_x), self.MIN_SCALE), self.MAX_SCALE),
+            min(max(float(scale_y), self.MIN_SCALE), self.MAX_SCALE),
+        )
+
+    def _apply_view(
+        self, centre_x: float, centre_y: float, scale_x: float, scale_y: float
+    ) -> None:
+        """Apply a state without stopping the animation that produced it."""
+        centre_x, centre_y, scale_x, scale_y = self._clamp_state(
+            centre_x, centre_y, scale_x, scale_y
+        )
+        if (centre_x, centre_y, scale_x, scale_y) == self._state():
+            return
+        self._centre = QVector2D(centre_x, centre_y)
+        self._zoom = scale_x
+        if isinstance(self._aspect, str):
+            self._y_scale = scale_y
+        self._home = False
+        self._view_changed()
+
+    def _target_state(self) -> tuple[float, float, float, float]:
+        """The state an in-flight animation is heading for (accumulate rapid wheel/key
+        presses); the current state otherwise."""
+        if (self._anim_to is not None
+                and self._animation.state() == QAbstractAnimation.State.Running):
+            return self._anim_to
+        return self._state()
+
+    def _stop_animation(self) -> None:
+        if self._animation.state() != QAbstractAnimation.State.Stopped:
+            self._animation.stop()
+        self._anim_from = None
+        self._anim_to = None
+
+    @Slot()
+    def stop_animation(self) -> None:
+        """Cancel an in-flight animated move (called by the view on direct manipulation)."""
+        self._stop_animation()
+
+    def _on_animation_tick(self, value: object) -> None:
+        if self._anim_from is None or self._anim_to is None:
+            return
+        t = float(value)
+        fx, fy, fsx, fsy = self._anim_from
+        tx, ty, tsx, tsy = self._anim_to
+        # Scales interpolate geometrically: a zoom then feels like a constant rate rather
+        # than racing at the start and crawling at the end.
+        sx = fsx * (tsx / fsx) ** t
+        sy = fsy * (tsy / fsy) ** t
+        self._apply_view(fx + (tx - fx) * t, fy + (ty - fy) * t, sx, sy)
+
+    def _on_animation_finished(self) -> None:
+        if self._anim_to is not None:
+            self._apply_view(*self._anim_to)
+        self._anim_from = None
+        self._anim_to = None
+
+    def _animate_to(
+        self, state: tuple[float, float, float, float], duration: int
+    ) -> None:
+        state = self._clamp_state(*state)
+        duration = int(duration)
+        if duration <= 0:
+            self._stop_animation()
+            self._apply_view(*state)
+            return
+        start = self._state()
+        if start == state:
+            self._stop_animation()
+            return
+        self._anim_from = start
+        self._anim_to = state
+        self._animation.stop()
+        self._animation.setDuration(duration)
+        self._animation.start()
+
+    def _zoom_state(
+        self,
+        base: tuple[float, float, float, float],
+        factor: float,
+        u: float,
+        v: float,
+        width: float,
+        height: float,
+    ) -> tuple[float, float, float, float]:
+        """The state after scaling ``base`` by ``factor`` with (u, v) held fixed."""
+        bx, by, bsx, bsy = base
+        tsx = min(max(bsx * factor, self.MIN_SCALE), self.MAX_SCALE)
+        actual = tsx / bsx
+        if isinstance(self._aspect, str):
+            tsy = min(max(bsy * actual, self.MIN_SCALE), self.MAX_SCALE)
+        else:
+            tsy = tsx / float(self._aspect)
+        if width > 0 and height > 0:
+            anchor_x = bx + (u - 0.5) * width * bsx
+            anchor_y = by + (0.5 - v) * height * bsy
+            tx = anchor_x - (u - 0.5) * width * tsx
+            ty = anchor_y - (0.5 - v) * height * tsy
+        else:
+            tx, ty = bx, by
+        return self._clamp_state(tx, ty, tsx, tsy)
+
+    @Slot(float, float, float, float, float)
+    def zoom_at(self, factor: float, u: float, v: float, width: float, height: float) -> None:
+        """Magnify the view by ``factor`` (>1 closer, <1 farther) with (u, v) held fixed.
+
+        The primitive behind a pinch: the gesture supplies the incremental magnification.
+        """
+        factor = float(factor)
+        if not self._zoom_enabled or factor <= 0.0 or factor == 1.0:
+            return
+        self._stop_animation()
+        self._apply_view(*self._zoom_state(self._state(), 1.0 / factor, u, v, width, height))
+
+    @Slot(float, float, float, float, float, int)
+    def animate_zoom(
+        self, delta: float, u: float, v: float, width: float, height: float, duration: int
+    ) -> None:
+        """Animate one wheel/keyboard zoom step (``delta`` wheel units, 120 = one notch)."""
+        if not self._zoom_enabled or delta == 0:
+            return
+        factor = self._zoom_step ** (float(delta) / 120.0)
+        self._animate_to(
+            self._zoom_state(self._target_state(), factor, u, v, width, height), duration
+        )
+
+    @Slot(float, float, int)
+    def animate_pan(self, dx: float, dy: float, duration: int) -> None:
+        """Animate a pan by a pixel displacement (screen y points down)."""
+        if not self._pan_enabled or (dx == 0.0 and dy == 0.0):
+            return
+        bx, by, bsx, bsy = self._target_state()
+        self._animate_to((bx - dx * bsx, by + dy * bsy, bsx, bsy), duration)
+
     def _view_changed(self) -> None:
         self.viewChanged.emit()
         self.ticksChanged.emit()
@@ -296,6 +583,7 @@ class Camera(QObject):
         and restoring it afterwards. ``"auto"`` stays "auto" (the scales are simply set), a
         numeric aspect is re-derived from the pair so the two scales are exactly as asked.
         """
+        self._stop_animation()
         scale_x = min(max(float(scale_x), self.MIN_SCALE), self.MAX_SCALE)
         scale_y = min(max(float(scale_y), self.MIN_SCALE), self.MAX_SCALE)
         self._centre = QVector2D(float(centre_x), float(centre_y))
@@ -322,6 +610,7 @@ class Camera(QObject):
         size = (float(width), float(height))
         if size == self._size:
             return
+        self._stop_animation()
         self._size = size
         self._resolve_home()
         self._view_changed()
@@ -352,42 +641,23 @@ class Camera(QObject):
         """
         if not self._zoom_enabled or delta == 0:
             return
-        target = min(max(self._zoom * self._zoom_step ** (delta / 120.0), self.MIN_SCALE),
-                     self.MAX_SCALE)
-        factor = target / self._zoom
-        if factor == 1.0:
-            return
-        if width > 0 and height > 0:
-            anchor_x = self._centre.x() + (u - 0.5) * width * self.scale_x
-            anchor_y = self._centre.y() + (0.5 - v) * height * self.scale_y
-        else:
-            anchor_x, anchor_y = self._centre.x(), self._centre.y()
-        self._zoom = target
-        if isinstance(self._aspect, str):
-            self._y_scale = min(max(self._y_scale * factor, self.MIN_SCALE), self.MAX_SCALE)
-        if width > 0 and height > 0:
-            self._centre = QVector2D(
-                anchor_x - (u - 0.5) * width * self.scale_x,
-                anchor_y - (0.5 - v) * height * self.scale_y,
-            )
-        self._home = False
-        self._view_changed()
+        factor = self._zoom_step ** (float(delta) / 120.0)
+        self._stop_animation()
+        self._apply_view(*self._zoom_state(self._state(), factor, u, v, width, height))
 
     @Slot(float, float)
     def pan_pixels(self, dx: float, dy: float) -> None:
         """Pan by a pixel displacement (screen y points down, world y points up)."""
         if not self._pan_enabled or (dx == 0.0 and dy == 0.0):
             return
-        self._centre = QVector2D(
-            self._centre.x() - dx * self.scale_x,
-            self._centre.y() + dy * self.scale_y,
-        )
-        self._home = False
-        self._view_changed()
+        self._stop_animation()
+        cx, cy, sx, sy = self._state()
+        self._apply_view(cx - dx * sx, cy + dy * sy, sx, sy)
 
     @Slot()
     def reset(self) -> None:
         """Back to the home view (centre and scales as the camera was configured)."""
+        self._stop_animation()
         self._centre = QVector2D(0.0, 0.0)
         self._home = True
         self._resolve_home()

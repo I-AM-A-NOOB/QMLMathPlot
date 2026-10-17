@@ -6,6 +6,7 @@ the whole view arithmetic is testable without a scene graph.
 
 import pytest
 import sympy as sp
+from PySide6.QtCore import Qt
 
 from qmlmathplot import Camera, model, nice_ticks
 
@@ -222,6 +223,73 @@ def test_zoom_by_is_anchored_and_reversible():
     camera.zoom_by(-120.0, *anchor, W, H)
     assert (camera.xlim.x(), camera.xlim.y()) == pytest.approx((xlim.x(), xlim.y()))
     assert (camera.ylim.x(), camera.ylim.y()) == pytest.approx((ylim.x(), ylim.y()))
+
+
+def test_zoom_at_is_anchored_and_reversible():
+    """The pinch primitive: an arbitrary factor, the world point under (u, v) fixed."""
+    camera = Camera()
+    _size(camera)
+    anchor = (0.25, 0.75)
+    xlim, ylim = camera.xlim, camera.ylim
+    world = (xlim.x() + (xlim.y() - xlim.x()) * anchor[0],
+             ylim.y() - (ylim.y() - ylim.x()) * anchor[1])
+
+    camera.zoom_at(0.5, *anchor, W, H)              # twice as wide (zoom out)
+    new_xlim, new_ylim = camera.xlim, camera.ylim
+    assert new_xlim.y() - new_xlim.x() == pytest.approx((xlim.y() - xlim.x()) * 2.0)
+    moved = (new_xlim.x() + (new_xlim.y() - new_xlim.x()) * anchor[0],
+             new_ylim.y() - (new_ylim.y() - new_ylim.x()) * anchor[1])
+    assert moved == pytest.approx(world)
+
+    camera.zoom_at(2.0, *anchor, W, H)
+    assert (camera.xlim.x(), camera.xlim.y()) == pytest.approx((xlim.x(), xlim.y()))
+    assert (camera.ylim.x(), camera.ylim.y()) == pytest.approx((ylim.x(), ylim.y()))
+
+
+def test_shortcut_properties_and_matching():
+    """Defaults match real key events (Shift+= reports Key_Plus), and rebinding changes both
+    the match and the notify signal QML bindings depend on."""
+    camera = Camera()
+    assert camera.panLeftShortcut == "Left"
+    assert camera.zoomInShortcut == "+|="
+    assert camera.zoomOutShortcut == "-|_"
+    assert camera.matchesShortcut(Qt.Key_Left.value, 0, camera.panLeftShortcut)
+    assert camera.matchesShortcut(Qt.Key_Plus.value, Qt.ShiftModifier.value,
+                                  camera.zoomInShortcut)
+    assert camera.matchesShortcut(Qt.Key_Equal.value, 0, camera.zoomInShortcut)
+    assert camera.matchesShortcut(Qt.Key_Minus.value, 0, camera.zoomOutShortcut)
+    assert not camera.matchesShortcut(Qt.Key_Right.value, 0, camera.panLeftShortcut)
+    assert not camera.matchesShortcut(Qt.Key_Plus.value, 0, "")       # empty disables
+
+    seen = 0
+
+    def note() -> None:
+        nonlocal seen
+        seen += 1
+
+    camera.shortcutsChanged.connect(note)
+    meta = camera.metaObject()
+    index = meta.indexOfProperty("panLeftShortcut")
+    assert index >= 0 and meta.property(index).notifySignal().isValid()
+    camera.panLeftShortcut = "A"
+    assert seen == 1 and camera.panLeftShortcut == "A"
+    camera.panLeftShortcut = "A"                     # idempotent
+    assert seen == 1
+    assert camera.matchesShortcut(Qt.Key_A.value, 0, camera.panLeftShortcut)
+    assert not camera.matchesShortcut(Qt.Key_A.value, Qt.ShiftModifier.value,
+                                      camera.panLeftShortcut)
+
+    camera.zoomInShortcut = "Ctrl+="
+    assert camera.matchesShortcut(Qt.Key_Equal.value, Qt.ControlModifier.value,
+                                  camera.zoomInShortcut)
+    assert not camera.matchesShortcut(Qt.Key_Equal.value, 0, camera.zoomInShortcut)
+
+    camera.keyPanStep = 0.25
+    assert camera.keyPanStep == 0.25
+    with pytest.raises(ValueError):
+        camera.keyPanStep = 0.0
+    with pytest.raises(ValueError):
+        camera.animationDuration = -1
 
 
 def test_pan_pixels_is_one_to_one_with_the_cursor():

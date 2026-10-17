@@ -19,6 +19,16 @@ Item {
     implicitWidth: 800
     implicitHeight: 600
 
+    // Keyboard navigation is opt-in by focus: a click (or a host focusing the QQuickWidget)
+    // makes this the active item, and the keys are handled only then, so a host's shortcuts
+    // keep working while the plot is idle. `focus: true` is the default *within* this scene,
+    // not a grab: the QQuickWidget is still ClickFocus and does not enter the Tab chain.
+    focus: true
+    Keys.onPressed: (event) => {
+        if (root._handleKey(event))
+            event.accepted = true;
+    }
+
     // The model (injected by the host). Without injection the component brings its own plot
     // with one sin(x) curve, so it is usable standalone; a host that adds curves itself keeps
     // this handler from firing (it only acts on an empty model).
@@ -51,6 +61,51 @@ Item {
         const camera = root.plot.camera;
         return Qt.point(camera.centre.x + (point.x - width / 2) * camera.scale_x,
                         camera.centre.y - (point.y - height / 2) * camera.scale_y);
+    }
+
+    // Keyboard: arrow keys move the view (the camera moves, so the content follows), the
+    // zoom shortcuts anchor at the viewport centre. Every mapping is a property on the camera,
+    // so a host can rebind them; an empty string disables a command.
+    function _matches(event, shortcut) {
+        return root.plot.camera.matchesShortcut(event.key, event.modifiers, shortcut);
+    }
+
+    function _handleKey(event) {
+        const camera = root.plot.camera;
+        if (!camera.keyboardEnabled)
+            return false;
+        const dx = camera.keyPanStep * root.width;
+        const dy = camera.keyPanStep * root.height;
+        const duration = camera.animationDuration;
+        if (camera.panEnabled) {
+            if (_matches(event, camera.panLeftShortcut)) {
+                camera.animate_pan(dx, 0, duration);
+                return true;
+            }
+            if (_matches(event, camera.panRightShortcut)) {
+                camera.animate_pan(-dx, 0, duration);
+                return true;
+            }
+            if (_matches(event, camera.panUpShortcut)) {
+                camera.animate_pan(0, dy, duration);
+                return true;
+            }
+            if (_matches(event, camera.panDownShortcut)) {
+                camera.animate_pan(0, -dy, duration);
+                return true;
+            }
+        }
+        if (camera.zoomEnabled) {
+            if (_matches(event, camera.zoomInShortcut)) {
+                camera.animate_zoom(120, 0.5, 0.5, root.width, root.height, duration);
+                return true;
+            }
+            if (_matches(event, camera.zoomOutShortcut)) {
+                camera.animate_zoom(-120, 0.5, 0.5, root.width, root.height, duration);
+                return true;
+            }
+        }
+        return false;
     }
 
     // Screen-space furniture is drawn in logical QML coordinates, but its edges must land on
@@ -271,10 +326,36 @@ Item {
         font.bold: root.plot.title_bold
     }
 
+    // Axis labels are the Matplotlib vocabulary, not a second furniture system: plain Text
+    // in the plot's text colour / font size, inside the item so they never affect its size.
+    Text {
+        objectName: "xlabelText"
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: 4
+
+        text: root.plot.xlabel
+        visible: text !== ""
+        color: root.plot.text_color
+        font.pixelSize: root.plot.font_size
+    }
+
+    Text {
+        objectName: "ylabelText"
+        text: root.plot.ylabel
+        visible: text !== ""
+        color: root.plot.text_color
+        font.pixelSize: root.plot.font_size
+        rotation: -90
+        transformOrigin: Item.Center
+        // Position the *rotated* bounding box: its visual width is `height`.
+        x: 4 - width / 2 + height / 2
+        y: (parent.height - height) / 2
+    }
+
     MouseArea {
         anchors.fill: parent
         acceptedButtons: Qt.LeftButton
-        enabled: root.plot.camera.panEnabled
         // Panning must win over any ancestor Flickable/ScrollView: without this the Flickable
         // steals the grab once the drag passes its threshold, and the plot only moves a few
         // pixels before panning stops.
@@ -284,13 +365,97 @@ Item {
         property real lastY: 0
 
         onPressed: (mouse) => {
+            root.forceActiveFocus();
+            root.plot.camera.stop_animation();
             lastX = mouse.x;
             lastY = mouse.y;
         }
         onPositionChanged: (mouse) => {
+            if (!root.plot.camera.panEnabled)
+                return;
             root.plot.camera.pan_pixels(mouse.x - lastX, mouse.y - lastY);
             lastX = mouse.x;
             lastY = mouse.y;
+        }
+    }
+
+    // Touch: one finger pans, two fingers pinch (scale) and pan together. Direct
+    // manipulation is deliberately not animated: the fingers are the animation. The centroid
+    // is kept under the fingers, so a pinch that also drifts behaves like a map gesture.
+    MultiPointTouchArea {
+        id: touchArea
+        anchors.fill: parent
+        minimumTouchPoints: 1
+        maximumTouchPoints: 2
+        mouseEnabled: false
+        enabled: root.plot.camera.panEnabled || root.plot.camera.zoomEnabled
+        touchPoints: [TouchPoint {}, TouchPoint {}]
+
+        property int lastCount: 0
+        property real lastCx: 0
+        property real lastCy: 0
+        property real lastSpread: 0
+
+        function _centroidX(points) {
+            let sum = 0;
+            for (let i = 0; i < points.length; ++i)
+                sum += points[i].x;
+            return points.length > 0 ? sum / points.length : 0;
+        }
+
+        function _centroidY(points) {
+            let sum = 0;
+            for (let i = 0; i < points.length; ++i)
+                sum += points[i].y;
+            return points.length > 0 ? sum / points.length : 0;
+        }
+
+        function _spread(points) {
+            if (points.length < 2)
+                return 0;
+            const dx = points[0].x - points[1].x;
+            const dy = points[0].y - points[1].y;
+            return Math.sqrt(dx * dx + dy * dy);
+        }
+
+        function _baseline(points) {
+            lastCount = points.length;
+            lastCx = _centroidX(points);
+            lastCy = _centroidY(points);
+            lastSpread = _spread(points);
+        }
+
+        onPressed: (points) => {
+            root.forceActiveFocus();
+            root.plot.camera.stop_animation();
+            _baseline(points);
+        }
+        onUpdated: (points) => {
+            if (points.length === 0 || points.length !== lastCount) {
+                _baseline(points);
+                return;
+            }
+            const camera = root.plot.camera;
+            const cx = _centroidX(points);
+            const cy = _centroidY(points);
+            if (points.length >= 2 && camera.zoomEnabled && root.width > 0 && root.height > 0) {
+                const spread = _spread(points);
+                if (lastSpread > 0 && spread > 0) {
+                    camera.zoom_at(spread / lastSpread, lastCx / root.width,
+                                   lastCy / root.height, root.width, root.height);
+                }
+            }
+            if (camera.panEnabled && (cx !== lastCx || cy !== lastCy))
+                camera.pan_pixels(cx - lastCx, cy - lastCy);
+            lastCx = cx;
+            lastCy = cy;
+            lastSpread = _spread(points);
+        }
+        onReleased: (points) => {
+            lastCount = 0;
+        }
+        onCanceled: (points) => {
+            lastCount = 0;
         }
     }
 
@@ -301,8 +466,10 @@ Item {
         // Note: Qt 6's QML WheelEvent has no position, only x/y (relative to this item).
         onWheel: (event) => {
             const d = event.angleDelta.y !== 0 ? event.angleDelta.y : event.pixelDelta.y;
-            root.plot.camera.zoom_by(d, event.x / root.width, event.y / root.height,
-                                     root.width, root.height);
+            root.forceActiveFocus();
+            root.plot.camera.animate_zoom(d, event.x / root.width, event.y / root.height,
+                                          root.width, root.height,
+                                          root.plot.camera.animationDuration);
             event.accepted = true;
         }
     }

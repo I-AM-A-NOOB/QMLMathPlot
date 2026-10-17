@@ -142,8 +142,10 @@ at world coordinates without re-deriving the transform.
 
 Rules: setters are idempotent and emit only on a real change; a failed expression keeps the
 last working shader and fills `error` (never a blank plot); the bake is cached by source hash,
-so re-setting the same expression is free, and a new expression is baked on a worker with the
-swap happening when `shadersChanged` fires.
+so re-setting the same expression is free. A new expression is baked **synchronously** on the
+calling (GUI) thread and the swap happens when `shadersChanged` fires; a cache miss costs about
+126 ms, which is acceptable for a one-off assignment but is the reason a live text field should
+debounce (an asynchronous bake is the documented next step, not current behaviour).
 
 ## 6. Curves (many of them)
 
@@ -244,6 +246,17 @@ vector route).
   when the camera changes). Simple and crisp enough for the tens of lines a grid has; moving it
   into a static shader (tick positions as uniforms, baked once) stays the documented
   optimisation if a figure ever needs many lines.
+* **Input is a camera concern.** `PlotView` forwards wheel, drag, keyboard and touch to
+  `Camera` slots, so the same bindings work in both embedding modes and a host can drive the
+  view without synthesising events. Keys are active only while the view has focus
+  (`QQuickWidget` is `ClickFocus`, and the widget uses it as its focus proxy). The shortcuts
+  (`panLeftShortcut` … `zoomOutShortcut`) are `QKeySequence` text on the camera, so rebinding
+  needs no QML change; `|` separates alternatives. Discrete moves (wheel, keys) are animated
+  through one `QVariantAnimation` (`animationDuration`; scales interpolate geometrically),
+  which accumulates onto its target under a fast wheel; drags and touch gestures call the
+  direct slots and cancel any in-flight easing. Two-finger pinch is incremental
+  (`zoom_at(magnification)`) plus a centroid pan, which keeps the world point under the
+  fingers without storing gesture-start state in QML.
 
 ## 7b. Themes
 
@@ -408,20 +421,21 @@ imperatively rasterised canvas — none of which we have.
 
 | Matplotlib | Copy? | Why |
 |---|---|---|
-| `xlim` / `ylim` / `grid` / `title` / `ticks` / `annotate` | **yes** | pure vocabulary; no mechanism attached |
+| `xlim` / `ylim` / `grid` / `title` / `xlabel` / `ylabel` / `ticks` | **yes** | pure vocabulary; no mechanism attached |
 | `aspect` (+ `adjustable`) | **`aspect` yes, `adjustable` no** | `'box'` letterboxing needs an axes box inside a figure; on an infinite canvas the camera just zooms out instead |
 | `NavigationToolbar2QT` | **no** | its features assume a rasterising canvas (rubber-band box zoom, blitting), it would have to be written twice (QWidget + QML) and would fight host UI frameworks (qfluentwidgets, RinUI). Expose primitives instead (§13) |
-| `Figure` / `Axes` / `subplots()` / `GridSpec` | **no** | they exist to host several axes in one bounded page. We have one view per widget and no page: several panels are a Qt layout of `Plot`s |
+| `Figure` / `Axes` / `subplots()` / `GridSpec` | **facade only** | the core has one `Plot` per widget. `Figure`/`Axes` exist as compatibility names over that model (§14); `GridSpec`/multiple axes do not, and `subplots(2, 1)` is refused |
 | `legend()` | **not planned** | chrome belongs to the host; `Curve.label` + `overlay` is enough |
-| `savefig()` | **no, but the same spirit** | a bounded figure can be re-rendered at a new dpi; an infinite canvas needs a *region* (§9) |
-| `plot(x, y)` with arrays | **as `add_series`** | a data polyline is a different artist with a different quality path (§6) |
-| `FigureCanvas` / `draw()` / `Artist` / `Transform` | **no** | they serve a rasterising backend; we are a live Qt scene, so these would be empty shells and a `draw()` that lies |
+| `savefig()` | **no, but the same spirit** | a bounded figure can be re-rendered at a new dpi; an infinite canvas needs a *region* (§9). The facade keeps that semantics |
+| `plot(x, y)` with arrays | **as `add_series`** | a data polyline is a different artist with a different quality path (§6); the facade refuses arrays rather than faking them |
+| `FigureCanvas` / `draw()` / `Artist` / `Transform` | **facade only, no mechanism** | `FigureCanvasQt` is a host widget; `draw()` is a no-op because the Qt scene is live. `Artist`/`Transform` do not exist |
 | `mpl_connect("button_press_event", …)` | **no** | Qt signals are the runtime's own event system |
-| `plt.*` global current figure | **only as `quickplot()`** | scripts want it; applications must not have it |
+| `plt.*` global current figure | **`qmlmathplot.pyplot` for scripts** | applications must use explicit `Figure`/`Plot` objects; the module is a compatibility surface, not the core |
 
 Litmus test for anything else: *does the name describe a thing the user thinks about (a
 region, a label, a file) or a step our renderer performs (draw, blit, rasterise)?* Copy the
-first, refuse the second.
+first, refuse the second — the compatibility facade may expose a name, but it must not
+pretend the mechanism exists.
 
 ## 11. How this compares to Matplotlib today
 
@@ -434,26 +448,25 @@ that concept), **reasonable gap** (it fits the model and is simply not built), a
 | Matplotlib | Here | Why |
 |---|---|---|
 | bounded figure at a dpi | infinite canvas + camera | panning off the "page" must work; nothing bounds the world |
-| `Figure` / `Axes` / `subplots()` / `GridSpec` | one `Plot` per widget; panels are a Qt layout | there is no page and no axes box; layouts already size, space and resize |
+| `Figure` / `Axes` / `subplots()` / `GridSpec` | one `Plot` per widget; panels are a Qt layout. The compatibility facade wraps one `Plot` as `Figure`/`Axes` | there is no page and no axes box; layouts already size, space and resize |
 | data-space limits as the state | camera (centre/zoom/aspect) as the state, limits derived | the widget resizes constantly; a stored range would need a patch per resize |
-| `plt.*` global current figure | explicit objects | a Qt app has many plots and no global state |
-| `plot(x, y)` with data arrays as the native artist | `add_curve("f(x)")` — a fragment shader | the renderer evaluates the expression per pixel |
+| `plt.*` global current figure | explicit objects; `qmlmathplot.pyplot` exists for scripts | a Qt app has many plots and no global state |
+| `plot(x, y)` with data arrays as the native artist | `add_curve("f(x)")` — a fragment shader; the facade refuses arrays | the renderer evaluates the expression per pixel |
 | artist list redrawn per figure | one QML item per curve, driven by model signals | Qt owns invalidation; no redraw loop |
 | transforms stack (data→axes→figure→display) | one camera→item mapping | only one coordinate space exists |
 | `savefig(dpi=)` re-rendering the figure | offscreen render of a canvas region at a size | the plot *is* a Qt scene, and the region is a parameter |
 | `NavigationToolbar2QT`, rubber band, box zoom | host chrome: `mapFromScreen()` + `xlim`/`ylim` *is* the zoom | two toolkits to maintain; it clashes with host UI frameworks |
 | legend | `Curve.label` + `PlotView.overlay` | a legend is screen-space chrome |
 | four spines | two axes through the origin, edge-clamped | a function plotter wants the axes where the maths is |
-| `draw()` / `FigureCanvas` / blitting | nothing — the scene is live | an API that lies about how pixels appear |
+| `draw()` / `FigureCanvas` / blitting | `FigureCanvasQt` is a host widget; `draw()` is a no-op because the scene is live; no blitting | the mechanism is refused even when the name is offered |
 | `rcParams` global state | one `Theme` per `Plot`, loaded from Matplotlib's own style sheets | no global state in a Qt app |
-| blocking `show()` | the widget / `PlotView` is a live item | Qt's event loop is the app's |
+| blocking `show()` | the widget / `PlotView` is a live item; `pyplot.show()` blocks only when it created the application | Qt's event loop is the app's |
 
 ### 11.2 Reasonable gaps (they fit the model; not built yet)
 
 | Missing | Note |
 |---|---|
-| `xlabel` / `ylabel` | cheap; `title` exists already |
-| `quickplot()` | the `plt.plot`-flavoured one-liner; designed |
+| `quickplot()` | the one-liner can be `pyplot.figure(); pyplot.plot(...)` today; a dedicated function is not built |
 | `add_series(x, y)` | data polylines as a QML-geometry artist; designed (§6) |
 | `annotate()` / `text()` | designed (§8) |
 | settable ticks (`plot.ticks`) | designed; automatic nice-number ticks already work |
@@ -500,10 +513,15 @@ deep zoom stays exact (no polyline resampling), and a pole is a gap rather than 
 | `MathPlotWidget` | same public shape, backed by `Plot` |
 | `DEFAULT_VIEW` | `Camera.home` (centre/zoom as configured) |
 
-There is **no compatibility layer and there will not be one**: `PlotController`, `ViewRect` and
-`MathPlot.qml` were deleted and every caller (widget, CLI, demos, tests) migrated in the same
-change. For a single-curve caller the rename is mechanical (`controller.expression` →
+The **core** has no compatibility layer: `PlotController`, `ViewRect` and `MathPlot.qml` were
+deleted and every caller (widget, CLI, demos, tests) migrated in the same change. For a
+single-curve caller the rename is mechanical (`controller.expression` →
 `plot.curves.at(0).expression`), and `Camera` replaces `ViewRect` one-for-one.
+
+A separate facade (§14) now offers Matplotlib-shaped names for porting: `Figure`, `Axes`,
+`FigureCanvasQt` and `qmlmathplot.pyplot`. It is deliberately not a second model — every
+operation forwards to `Plot`/`Camera`, and the mechanisms that need a bounded page or a
+redraw loop are refused with an explanation.
 
 ## 13. Host chrome: primitives, not a toolbar
 
@@ -550,8 +568,37 @@ Two consequences worth stating:
   CPU would contradict the per-pixel model. This is the Desmos model: a fixed home view that
   you pan and zoom.
 * `camera.reset()` returns to `home` (the camera as configured), not to a hard-coded default.
+* Keyboard and touch are first-class too: arrow keys pan, `+`/`=` / `-`/`_` zoom (all
+  rebindable as `QKeySequence` text on the camera), one finger pans and two fingers pinch.
+  Wheel/keyboard moves are eased by the camera's single animation; drags and touch gestures
+  are direct manipulation and cancel any in-flight animation.
 
-## 15. Build order
+## 15. Compatibility facade (implemented)
+
+The core still refuses Matplotlib's mechanism. A separate facade offers the **names** for
+porting, with every operation forwarding to the same `Plot`/`Camera`:
+
+| Module | Contents |
+|---|---|
+| `qmlmathplot.figure` | `Figure` (one `Plot`, one `Axes`, a canvas slot, `savefig`/`to_image`) and `Axes` (`plot(expression)`, limits, title/labels, grid, aspect) |
+| `qmlmathplot.canvas` | `FigureCanvasQt`: a `MathPlotWidget` attached to a `Figure`; `draw`/`draw_idle` are no-ops because the scene is live |
+| `qmlmathplot.pyplot` | current figure, `figure`/`subplots`/`subplot`/`gca`/`plot`/`xlim`/`ylim`/`title`/`xlabel`/`ylabel`/`grid`/`show`/`close`/`savefig` |
+
+Rules that keep it honest:
+
+* **One axes per figure.** `add_subplot(211)` and `subplots(2, 1)` raise
+  `NotImplementedError`; panels are a Qt layout of `Figure`s.
+* **Expressions, not arrays.** `ax.plot("sin(x)")` is the native form; `ax.plot(x, y)` is
+  refused with a pointer to `to_matplotlib()` rather than silently sampling.
+* **No redraw loop.** `draw()`/`draw_idle()` do nothing (the Qt scene is live); `mpl_connect`
+  and `blit` are absent because Qt signals/`QQuickItem` are the mechanism.
+* **Export is a region at a size**, not a page at a dpi; `backend="matplotlib"` remains the
+  vector route.
+* **Global state only in `pyplot`**, which is a scripting surface. Applications use explicit
+  `Figure`/`Plot` objects; a pure-QML import still never loads QtWidgets (`FigureCanvasQt`
+  and `MathPlotWidget` are lazy attributes).
+
+## 16. Build order
 
 1. `Camera` + `Curve` split out of `PlotController`; `PlotView.qml` renders one curve, the
    shader takes the camera (no size round-trip for drawing). No visual change; existing tests

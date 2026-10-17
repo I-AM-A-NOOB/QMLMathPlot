@@ -87,6 +87,8 @@ class Plot(QObject):
     titleColorChanged = Signal()
     titleFontSizeChanged = Signal()
     titleBoldChanged = Signal()
+    xlabelChanged = Signal()
+    ylabelChanged = Signal()
     ticksVisibleChanged = Signal()
 
     def __init__(self, parent: QObject | None = None) -> None:
@@ -308,6 +310,10 @@ class Plot(QObject):
     font_size: float = _style(float, "font_size", fontSizeChanged, 13.33)
     tick_font_size: float = _style(float, "tick_font_size", tickFontSizeChanged, 13.33)
     title: str = _style(str, "title", titleChanged, "")
+    #: Axis labels, drawn in `text_color` / `font_size` (Matplotlib's `axes.labelcolor` /
+    #: `font.size`, which the theme converter already maps).
+    xlabel: str = _style(str, "xlabel", xlabelChanged, "")
+    ylabel: str = _style(str, "ylabel", ylabelChanged, "")
     title_color: QColor = _style(
         QColor, "title_color", titleColorChanged, QColor("black")
     )
