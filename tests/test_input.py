@@ -210,6 +210,48 @@ def test_two_arrow_keys_pan_diagonally(app: QApplication) -> None:
     plot.hide()
 
 
+def test_releasing_one_of_two_opposite_keys_resumes_panning(app: QApplication) -> None:
+    """Both directions held cancel; releasing one must resume the other immediately (the
+    timer stays alive for the cancelled pair)."""
+    plot = _shown_plot()
+    camera = plot.plot.camera
+    camera.animationDuration = 100
+    quick = _focus(plot)
+    before = plot.view_bounds()
+    step = camera.input.keyPanStep * (before[1] - before[0])
+
+    QTest.keyPress(quick, Qt.Key_Left)
+    QTest.keyPress(quick, Qt.Key_Right)
+    QTest.qWait(100)
+    before_release = plot.view_bounds()
+    QTest.keyRelease(quick, Qt.Key_Right)
+    QTest.qWait(250)
+    QTest.keyRelease(quick, Qt.Key_Left)
+    after = _wait_until_still(plot)
+
+    assert after[0] < before_release[0] - step, \
+        "releasing the opposite key did not resume the held direction"
+    plot.hide()
+
+
+def test_held_zoom_key_keeps_zooming(app: QApplication) -> None:
+    plot = _shown_plot()
+    camera = plot.plot.camera
+    camera.animationDuration = 100
+    quick = _focus(plot)
+    before = plot.view_bounds()
+    span = before[1] - before[0]
+
+    QTest.keyPress(quick, Qt.Key_Equal)               # default zoom-in
+    QTest.qWait(300)
+    QTest.keyRelease(quick, Qt.Key_Equal)
+    after = _wait_until_still(plot)
+
+    assert after[1] - after[0] < span * camera.zoomStep ** 2.0, \
+        "holding the zoom key did not repeat the zoom"
+    plot.hide()
+
+
 def test_keyboard_and_pan_can_be_switched_off(app: QApplication) -> None:
     plot = _shown_plot()
     camera = plot.plot.camera

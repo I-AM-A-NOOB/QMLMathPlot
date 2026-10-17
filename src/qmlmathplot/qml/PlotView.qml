@@ -30,7 +30,7 @@ Item {
     }
     onActiveFocusChanged: {
         if (!activeFocus)
-            root._clearPan();
+            root._clearHeld();
     }
 
     // The model (injected by the host). Without injection the component brings its own plot;
@@ -69,30 +69,42 @@ Item {
     // host can rebind it; an empty string disables a command.
     //
     // Held keys are tracked here rather than relying on the OS auto-repeat (which begins with
-    // a ~0.5 s delay and then repeats in bursts): a Timer moves once per interval while any
-    // direction is held, and the directions combine (diagonal movement is normalised). The
-    // first press still moves immediately, so a tap moves exactly one step.
-    property var _heldPan: ({})
+    // a ~0.5 s delay and then repeats in bursts). One frame-rate Timer advances both pan and
+    // zoom by `dt / keyPanRepeatInterval` of a step, so movement is continuous and several
+    // keys combine (diagonal movement is normalised). The press itself still animates one
+    // step, so a tap keeps the one-step semantics.
+    property var _heldKeys: ({})
+    property real _lastTickMs: 0
 
     Timer {
-        id: panTimer
-        interval: root.plot.camera.input.keyPanRepeatInterval
+        id: keyTimer
+        interval: 16
         repeat: true
-        onTriggered: root._panTick()
+        onTriggered: root._keyTick()
     }
 
     Connections {
         target: root.plot.camera
         function onPanEnabledChanged() {
-            if (!root.plot.camera.panEnabled)
-                root._clearPan();
+            if (!root.plot.camera.panEnabled) {
+                root._dropHeld("left");
+                root._dropHeld("right");
+                root._dropHeld("up");
+                root._dropHeld("down");
+            }
+        }
+        function onZoomEnabledChanged() {
+            if (!root.plot.camera.zoomEnabled) {
+                root._dropHeld("zoomIn");
+                root._dropHeld("zoomOut");
+            }
         }
     }
     Connections {
         target: root.plot.camera.input
         function onKeyboardEnabledChanged() {
             if (!root.plot.camera.input.keyboardEnabled)
-                root._clearPan();
+                root._clearHeld();
         }
     }
 
@@ -124,39 +136,67 @@ Item {
             || command === "up" || command === "down";
     }
 
-    function _clearPan() {
-        root._heldPan = ({});
-        panTimer.stop();
+    function _clearHeld() {
+        root._heldKeys = ({});
+        keyTimer.stop();
     }
 
-    function _panTick() {
+    function _dropHeld(command) {
+        delete root._heldKeys[command];
+        if (Object.keys(root._heldKeys).length === 0)
+            keyTimer.stop();
+    }
+
+    function _ensureTimer() {
+        if (!keyTimer.running) {
+            root._lastTickMs = Date.now();
+            keyTimer.start();
+        }
+    }
+
+    // Frame-rate integration: a step per keyPanRepeatInterval, scaled by the real elapsed
+    // time (a delayed frame moves farther instead of slowing the pan down).
+    function _keyTick() {
         const camera = root.plot.camera;
         const input = camera.input;
-        if (!input.keyboardEnabled || !camera.panEnabled) {
-            root._clearPan();
+        if (!input.keyboardEnabled) {
+            root._clearHeld();
             return;
         }
+        const now = Date.now();
+        const dt = Math.min(100, Math.max(0, now - root._lastTickMs));
+        root._lastTickMs = now;
+        if (dt <= 0)
+            return;
+        const fraction = dt / Math.max(1, input.keyPanRepeatInterval);
+
         let dx = 0;
         let dy = 0;
-        if (root._heldPan.left)
+        if (root._heldKeys.left)
             dx += 1;
-        if (root._heldPan.right)
+        if (root._heldKeys.right)
             dx -= 1;
-        if (root._heldPan.up)
+        if (root._heldKeys.up)
             dy += 1;
-        if (root._heldPan.down)
+        if (root._heldKeys.down)
             dy -= 1;
-        if (dx === 0 && dy === 0) {
-            panTimer.stop();
-            return;
+        if ((dx !== 0 || dy !== 0) && camera.panEnabled) {
+            if (dx !== 0 && dy !== 0) {
+                dx *= Math.SQRT1_2;
+                dy *= Math.SQRT1_2;
+            }
+            camera.pan_pixels(input.keyPanStep * root.width * dx * fraction,
+                              input.keyPanStep * root.height * dy * fraction);
         }
-        if (dx !== 0 && dy !== 0) {
-            dx *= Math.SQRT1_2;                       // diagonal speed = straight speed
-            dy *= Math.SQRT1_2;
+
+        let zoom = 0;
+        if (root._heldKeys.zoomIn)
+            zoom += 1;
+        if (root._heldKeys.zoomOut)
+            zoom -= 1;
+        if (zoom !== 0 && camera.zoomEnabled) {
+            camera.zoom_by(120 * zoom * fraction, 0.5, 0.5, root.width, root.height);
         }
-        camera.animate_pan(input.keyPanStep * root.width * dx,
-                           input.keyPanStep * root.height * dy,
-                           camera.animationDuration);
     }
 
     function _handleKeyPress(event) {
@@ -167,11 +207,20 @@ Item {
             return true;
         const camera = root.plot.camera;
         const input = camera.input;
+        root._heldKeys[command] = true;
+        root._ensureTimer();
         if (root._isPanCommand(command)) {
-            root._heldPan[command] = true;
-            if (!panTimer.running)
-                panTimer.start();
-            root._panTick();                          // immediate first step (tap semantics)
+            // One eased step for a tap; the frame timer cancels it on the first held frame
+            // and takes over continuously.
+            const step = input.keyPanStep;
+            if (command === "left")
+                camera.animate_pan(step * root.width, 0, camera.animationDuration);
+            else if (command === "right")
+                camera.animate_pan(-step * root.width, 0, camera.animationDuration);
+            else if (command === "up")
+                camera.animate_pan(0, step * root.height, camera.animationDuration);
+            else
+                camera.animate_pan(0, -step * root.height, camera.animationDuration);
         } else if (command === "zoomIn") {
             camera.animate_zoom(120, 0.5, 0.5, root.width, root.height,
                                 camera.animationDuration);
@@ -188,11 +237,9 @@ Item {
             return false;
         if (event.isAutoRepeat)
             return true;
-        if (root._isPanCommand(command)) {
-            delete root._heldPan[command];
-            if (Object.keys(root._heldPan).length === 0)
-                panTimer.stop();
-        }
+        root._dropHeld(command);
+        if (Object.keys(root._heldKeys).length > 0)
+            root._ensureTimer();
         return true;
     }
 

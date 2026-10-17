@@ -99,7 +99,7 @@ class ViewInput(QObject):
         self._key_pan_repeat_interval = value
         self.keyPanRepeatIntervalChanged.emit()
 
-    #: Milliseconds between held-key pan steps (the first step is immediate).
+    #: Milliseconds per held-key step (the frame timer integrates at dt / this value).
     keyPanRepeatInterval: int = Property(
         int,
         _get_key_pan_repeat_interval,

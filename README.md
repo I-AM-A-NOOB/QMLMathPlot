@@ -300,8 +300,9 @@ plot.plot.camera.zoom_by(120, 0.5, 0.5, w, h)     # one wheel notch, anchored at
 ## Keyboard, touch and animation
 
 Clicking the plot gives it focus; while it has focus the arrow keys pan (10% of the viewport
-per press by default), `+`/`=` zooms in and `-`/`_` zooms out. Held directions repeat on a
-timer (100 ms by default, no OS key-repeat delay), and several arrows combine, so `Left+Up`
+per press by default), `+`/`=` zooms in and `-`/`_` zooms out. Held keys advance continuously:
+one `keyPanStep` per `keyPanRepeatInterval` (100 ms by default), integrated every frame, so
+there is no OS key-repeat delay or granular stepping. Several arrows combine, so `Left+Up`
 moves diagonally at the normal speed. Every command is a property on the camera's `input`
 object, so a host can rebind it — the value is a `QKeySequence` string, and `|` separates
 alternatives (empty disables the command). `input.keyPanStep`, `input.keyPanRepeatInterval`,
@@ -315,8 +316,8 @@ input.panRightShortcut = "D"
 input.zoomInShortcut = "Ctrl+="
 input.zoomOutShortcut = "Ctrl+-"
 input.keyPanStep = 0.2                # 20% of the viewport per step
-input.keyPanRepeatInterval = 80       # ms between held-key steps
-camera.animationDuration = 220        # ms; 0 disables easing
+input.keyPanRepeatInterval = 80       # ms per step; smaller = faster pan/zoom
+camera.animationDuration = 220        # ms; tap easing
 ```
 
 Wheel and keyboard moves are **eased** (scale interpolates geometrically, so a zoom feels like
