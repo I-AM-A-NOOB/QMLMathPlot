@@ -879,7 +879,10 @@ the full step budget in both directions plus both windows.
       block is inside `#if !USE_INTERVAL`.
     - **Band** — the exact `FI` column, filled only for an oscillation or a divergence/inverted/
       whole topology. The oscillation signal is **reversals inside the pixel's own column**
-      (`|t| <= 0.5` of the 16-sample window), not the whole ±2 window.
+      (`|t| <= 0.5` of the 16-sample window), not the whole ±2 window. The fill weight is
+      `smoothstep(1.5, 3.0, sturns)` so the band's edge feathers instead of cutting a hard
+      column; measured at the default `sin(1/x)` view the full-height part is **20 device
+      columns**, the same 20 the interval reference implementation produced.
     - **Poles** — a segment is skipped when `POLE(prev_x) * POLE(xi) <= 0`. The macro is
       printed with the substitution name (`_pole_glsl(expr, "u")`); printing it with the
       default `x` left `POLE(prev_x)` expanding to the pixel's own x, so `1/x` still drew a

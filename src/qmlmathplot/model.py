@@ -542,9 +542,11 @@ void main() {
     if (col.kind == IK_CONNECTED) {
         // Fill only when the column is not a polyline: an oscillation (>= 2 reversals in the
         // samples) or a divergence (infinite bound). A monotone column is the polyline.
-        if (sturns >= 2.0 || col.lo <= -IINF || col.hi >= IINF) {
-            band_cov = clamp((col.hi - y) * sy + BW, 0.0, 1.0)
-                     * clamp((y - col.lo) * sy + BW, 0.0, 1.0);
+        float fill = max(smoothstep(1.5, 3.0, sturns),
+                         (col.lo <= -IINF || col.hi >= IINF) ? 1.0 : 0.0);
+        if (fill > 0.0) {
+            band_cov = fill * clamp((col.hi - y) * sy + BW, 0.0, 1.0)
+                            * clamp((y - col.lo) * sy + BW, 0.0, 1.0);
         }
     } else if (col.kind == IK_INVERTED) {
         band_cov = max(clamp((col.lo - y) * sy + BW, 0.0, 1.0),

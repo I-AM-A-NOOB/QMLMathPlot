@@ -366,9 +366,9 @@ cannot be represented by a line.
    enclosure plus a half-stroke feather, and it is filled only when the column is not a
    polyline:
    - **two reversals inside the pixel's own column** (a sub-column oscillation such as
-     `sin(1/x)` near its singularity) — counting the wider sampling window instead bands
-     every column of a merely high-frequency curve, which rendered `sin(1/x)` as full-height
-     stripes;
+     `sin(1/x)` near its singularity), weighted by `smoothstep(1.5, 3.0, sturns)` so the
+     band edge feathers — counting the wider sampling window instead bands every column of a
+     merely high-frequency curve, which rendered `sin(1/x)` as full-height stripes;
    - a **divergence** (an infinite bound, e.g. `log`'s boundary) — a vertical ray extends the
      last valid sample to ±1e12, giving the descent the full stroke width;
    - an **inverted/whole** topology (`tan`/`1/x` poles): rays or a full column.
