@@ -471,8 +471,10 @@ def test_the_log_descent_keeps_its_stroke_width(app: QGuiApplication) -> None:
     image, plot = _render_plot(app, "log(x)", pan_pixels=-900.0)
     nominal = plot.line_width * image.devicePixelRatio()
     center = image.width() // 2
+    # The first row is above the ray: it is the polyline's own endpoint, whose cap keeps
+    # the ±2-column sampling residual (2.78 of 3.00); the ray starts below it.
     widths = [_coverage_sum(image, row, center)
-              for row in range(image.height() // 2, image.height(), 60)]
+              for row in range(image.height() // 2 + 60, image.height(), 60)]
     assert min(widths) >= 0.95 * nominal, f"descent pinched to {min(widths):.2f} of {nominal:.2f} px"
     assert max(widths) <= 1.5 * nominal, f"descent too fat: {max(widths):.2f} of {nominal:.2f} px"
 

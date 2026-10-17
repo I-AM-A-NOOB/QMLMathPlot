@@ -339,73 +339,50 @@ a Python-side assignment updates the view with no call in between. `view.py`, `P
 | Entry | `src/qmlmathplot/app.py` | command line / standalone window (the `qmlmathplot` script, `examples/minimal.py`) |
 | Examples | `examples/` | `minimal.py` (minimal), `explorer_qtwidgets.py` (input box + widget coexistence), `explorer_qtquick.py` (Qt Quick) |
 
-## Algorithm (the march + the interval column)
+## Algorithm (fixed-x sampled polyline + the interval column)
 
-For every pixel the shader **walks the curve** instead of sampling a fixed x grid, and
-that is what removes the whole class of "sampling wins/loses against the geometry":
+The supported path is GeoGebra's column idea implemented on the GPU: sample the function on a
+sub-pixel x grid, stroke the polyline, and fill the exact interval enclosure where a column
+cannot be represented by a line.
 
-1. **Seed** on the curve at this pixel's column (a pole or domain-edge column probes just
-   off itself), then **project the pixel onto the tangent there** — one dot product and one
-   evaluation — so the walk starts at the pixel's own foot. On a steep curve the column's
-   curve point can be a whole viewport away (in arc length), and no budget can walk that
-   far, which used to dash the line.
-2. **March** along the curve in both directions, one *logical pixel of arc length* per
-   step (the stride follows the estimated screen slope; `f'` bootstraps it). Stroke by
-   **distance to the joined polyline segments** (Desmos' approach): equal width at any
-   slope, naturally antialiased — the width is a property of the line, not of the slope
-   (measured on `k·x`: 3.00, 3.00, 3.00, 2.94 device px at slopes 2/10/40/200 against a
-   nominal 3.0, where the old ±1-column window gave 2.24/2.10/2.05/2.02).
-3. **Join invariant**: a segment only ever joins two samples within **2.5 px** of each
-   other. Chords of 1-px-arc steps are ~1.2 px on any continuous curve, so a jump across
-   a pole — *or across any discontinuity the static analysis never recognised* — is
-   hundreds of px: the connector is not detected and cut, it cannot be formed
-   (`x/sqrt(x**2)` = sign: measured a 454-px column at x=0 through the old pole guards).
-4. **Escape rule**: three *receding* steps outside the pixel's stroke-radius ball end a
-   direction — the curve is monotonically away. A reversal resets the count (it may well
-   come back). This bounds a steep monotone branch (`log`'s descent) without any
-   viewport-relative gap.
-5. **Interval column band** — GeoGebra's column idea, on the GPU. The whole expression is
-   also evaluated in interval arithmetic over the pixel's column (generated from sympy in
-   `interval.py`, compiled to the GLSL `IVal FI(xlo, xhi)`): a conservative y-enclosure with
-   topology **connected / two rays around a gap / whole / empty**. The band is that
-   enclosure plus a half-stroke feather. There is no ±8-column window, no violation-count
-   gate and no chord-stroke for supported expressions:
-   - `sin(1/x)`'s transition columns get the exact lobe (measured overfill: 1.66 world
-     units before, 0.0099 after);
-   - `tan`'s pole column is a gap, an extreme zoom-out is `whole` (the screen fills, as in
-     GeoGebra);
-   - `log`'s boundary is `[-∞, log h]` — the boundary ray is gone for supported
-     expressions;
-   - `x**(1/3)` uses the real odd root (and the scalar `F` prints `_real_pow`).
-   A wide finite enclosure is checked against the column's own samples for the interval
-   **dependency** artifact (a dependent quotient such as `x/sqrt(x**2)` is left to the
-   march). The band itself is always the pixel's own column.
+1. **Sub-pixel polyline stroke.** Each pixel evaluates `F` at **16 samples over ±2 columns**
+   (0.25 logical-px spacing). Adjacent valid samples form a polyline, and coverage is
+   `R - distance to the nearest segment` — Desmos' stroke rule. The sample spacing is
+   sub-pixel, so the vertices themselves are sub-pixel and the segments are diagonal: the
+   edge is smooth at any zoom, not a per-column staircase. ±2 columns (rather than the old
+   ±1) cover the perpendicular foot, which a steep line displaces along x by up to the
+   stroke radius; measured `k·x` 3.00/3.00/3.00/2.94 device px at screen slopes
+   2/10/40/200 against a nominal 3.0.
+2. **Pole/jump segment guard.** A segment is skipped when the expression's pole factor
+   changes sign between its endpoints (`POLE(prev_x) * POLE(xi) <= 0`) — the branches of
+   `tan`/`1/x` never join across a pole — and, for a dependent quotient such as
+   `x/sqrt(x**2)`, when the endpoint jump exceeds the join radius. The flat branches are
+   still drawn; measured `x/sqrt(x**2)` draws its ±1 branches without the old 454-px
+   connector at x = 0.
+3. **Interval column band** — GeoGebra's column idea, on the GPU. The expression is also
+   evaluated in interval arithmetic over the pixel's column (generated from sympy in
+   `interval.py`, compiled to the GLSL `IVal FI(xlo, xhi)`): a conservative y-enclosure
+   with topology **connected / two rays around a gap / whole / empty**. The band is that
+   enclosure plus a half-stroke feather, and it is filled only when the column is not a
+   polyline:
+   - **two reversals inside the pixel's own column** (a sub-column oscillation such as
+     `sin(1/x)` near its singularity) — counting the wider sampling window instead bands
+     every column of a merely high-frequency curve, which rendered `sin(1/x)` as full-height
+     stripes;
+   - a **divergence** (an infinite bound, e.g. `log`'s boundary) — a vertical ray extends the
+     last valid sample to ±1e12, giving the descent the full stroke width;
+   - an **inverted/whole** topology (`tan`/`1/x` poles): rays or a full column.
+   There is no ±8-column window, no violation-count gate and no chord-stroke. The band is
+   always the pixel's own exact column.
+4. **Domain.** `DOM`/`DOMS` (from sympy) guard every `F` evaluation, so `log(negative)` is
+   never evaluated; a pixel just outside the domain still gets the band, which is centred
+   on the boundary.
 
-6. **Column polyline, stroked — GeoGebra's sampling on the GPU.** GeoGebra samples one
-   interval per column and strokes the polyline through the samples with the vector line
-   width. A pixel's own column is at its own x (distance 0), so the shader evaluates the
-   **neighbouring** columns (`x ± dx`) too. For a finite monotone column it joins their
-   interval ranges with **diagonal chords** (previous→current, current→next) and strokes
-   the chords; that is the smooth stroke on a steep `tan`/`log` branch (the old vertical
-   column rectangles produced 1-column staircases, visible as comb edges). For a **diverging**
-   column (an infinite interval bound: `log`'s boundary, `1/x²`) it strokes the
-   **vertical column segments** instead. Measured: `1/x`/`tan` in a y∈[50,60] view are **3
-   full columns** (2 before), `log(x)`'s descent measures **3.00 device px at every sampled
-   row**, and a monotone `k·x` keeps one width. The band is zeroed for finite monotone
-   columns (those pixels are the chord/march) and kept for oscillatory ones, where it is the
-   exact column envelope. The march supplies the smooth curve's perpendicular stroke; the
-   gate (`x ± R` enclosure) admits it.
-
-`DOM` remains for the scalar march (never evaluate `log(negative)`); the interval evaluator
-is authoritative for the band and the domain. Expressions with an operation the interval
-backend does not implement (`floor`, `sign`, …) compile the previous sampled band + ray path
-(`#define USE_INTERVAL 0`); the ray is legacy-only now.
-
-An ordinary shallow pixel costs 1 `f` + 1 `f'` + the march (a handful of evaluations, stopped
-by the escape rule after a few steps) + four interval evaluations (the pixel's column, its
-stroke footprint, and the two neighbouring columns); a resolved steep pixel adds a tangent-foot
-projection. The midpoint probe runs only for a wide finite column (the dependency signal); the
-legacy probe and wide window are compiled out for supported expressions.
+An ordinary pixel costs **16 `F` evaluations** plus two interval evaluations; there is no
+march, no tangent-foot projection and no column probe on the supported path. Expressions
+with an operation the interval backend does not implement (`floor`, `sign`, …) compile the
+legacy sampled band + ray + march path (`#define USE_INTERVAL 0`); it is the only user of
+the arc-length march now.
 
 ## Tests
 
@@ -537,27 +514,16 @@ Startup to the first frame is about **230 ms**, attributed as follows
 | Expression analysis (sympy) | 0.6~3 ms | `unbounded_edges` only analyses **polynomial** boundaries (`tan(x)`'s `cos(x)=0` takes 94 ms via solve+limit, while tan diverges fast and sampling is naturally deep enough, so that ray is not needed) |
 
 Per-frame grab cycles (900×600, `grabToImage` — frame + readback, so an upper bound on
-the GPU cost: the old shader measured 31 ms of pure GPU at 2400×1500, ~1/7 of that at
-900×600): `sin(1/x)` default 27 ms, `tan(x)` default 34 ms, `sin(1/x)` at zoom 90
-(worst case) 33 ms mean / 36 ms peak. The 1-D fragment source is about 21 KB.
-Every visible curve is one full-screen fragment pass, so `Curve.visible` is the lever
-when a figure carries many of them.
+the GPU cost), steady state on the same window: `sin(1/x)` default **13.6 ms**, `tan(x)`
+default **12.4 ms**, `sin(1/x)` at zoom 90 (worst case) **12.5 ms**. The previous
+march/interval renderer measured 27/34/33 ms on the same machine: 16 samples are cheaper
+than the march's seed + tangent projection + walk + probe, and the march is now compiled
+only for the legacy path. The 1-D fragment source is about 21 KB.
 
-**Per-pixel `f` evaluations** (counter patched into the shader, mean/peak over 1-in-3
-pixels; the fixed-grid renderer's numbers alongside):
-
-| expression | fixed grid (mean/peak) | march (mean/peak) |
-|---|---|---|
-| `tan(x)` | 16.96 / 17 | **18.98 / 50** |
-| `x^3` | 16.45 / 17 | **16.53 / 50** |
-| `log(x)` | 8.50 / 33 | **7.97 / 50** |
-| `1/x` | 14.64 / 33 | **6.27 / 50** |
-| `exp(-x*x)*sin(10*x)` | 14.97 / 33 | **6.83 / 58** |
-| `sin(1/x)` | 12.56 / 33 | **5.32 / 58** |
-
-The mean is lower everywhere (shallow pixels cost a handful of evaluations and skip the
-probe entirely); the peak is the banded column — march budget in both directions plus
-the column probe — which is a small fraction of the pixels.
+**Per-pixel `F` evaluations.** The supported path is fixed: 16 samples for the polyline
+(plus two interval evaluations for the column and the stroke footprint); there is no
+march budget and no band-window evaluation. The old fixed-grid/march table is superseded
+and no longer describes the shipped path.
 
 ## Pitfalls already hit (do not repeat)
 

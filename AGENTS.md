@@ -859,3 +859,50 @@ the full step budget in both directions plus both windows.
     - **The scalar path still needs the domain**: the interval band does not replace
       `DOM`/`DOMS` for the march; `log(negative)` returns finite garbage on this driver.
     - The full 1-D shader is ~40 KB with the library (legacy ~29 KB).
+
+
+49. **The fixed-x sampled polyline returned; the interval band stayed** (the march is now the
+    legacy path only). Items 44 and 45 described the march as the renderer; that is no longer
+    true for supported expressions.
+
+    *Why:* the march's 1-px-arc segments were too short for the perpendicular foot on a steep
+    branch, and it needed the gate, the chord-stroke, the probe, the budget and the tangent-foot
+    seed to cover what a wider fixed-x window covers directly. User reports (log wall thinning,
+    tan disappearing at large |y|, `sin(1/x)` centre band unchanged) came from those
+    compensations interacting.
+
+    *Fix (in `FRAGMENT_TEMPLATE`, `#if USE_INTERVAL`):*
+    - **Stroke** — 16 samples over **±2 columns** (0.25 logical-px spacing), joined into a
+      polyline and stroked by distance to the nearest segment. ±2 covers the perpendicular
+      foot (the old ±1 measured 2.02 of 2.25 at screen slope 200); the sub-pixel vertices give
+      the smooth edge. No march, tangent projection, escape rule, gate or chord: the march
+      block is inside `#if !USE_INTERVAL`.
+    - **Band** — the exact `FI` column, filled only for an oscillation or a divergence/inverted/
+      whole topology. The oscillation signal is **reversals inside the pixel's own column**
+      (`|t| <= 0.5` of the 16-sample window), not the whole ±2 window.
+    - **Poles** — a segment is skipped when `POLE(prev_x) * POLE(xi) <= 0`. The macro is
+      printed with the substitution name (`_pole_glsl(expr, "u")`); printing it with the
+      default `x` left `POLE(prev_x)` expanding to the pixel's own x, so `1/x` still drew a
+      full-height connector (measured 900 lit rows at x=0) until the argument was fixed.
+    - **Jumps** — for `HAS_DEPENDENT_QUOTIENT`, a segment with a screen jump > `JOIN` is
+      skipped. `x/sqrt(x**2)` keeps its ±1 branches and has no connector.
+    - **Descent** — for a connected column with an infinite bound, the first/last valid sample
+      is extended as a vertical ray to ±1e12 (the old boundary-ray geometry, evaluated at the
+      sample x). The ray's top is `max(sample, col.hi)`; the first valid sample's own y was
+      one step short and left the top row at 2.78 of 3.00 px.
+
+    *Traps re-armed:*
+    - the ±2 sample window must not decide the band: counting its reversals banded every column
+      of `sin(1/x)` at zoom 30 — measured as full-height stripes across the viewport. Only the
+      central column's reversals are the sub-column test.
+    - the width test's first row is the polyline endpoint above the ray (2.78 of 3.00); it is
+      now skipped, and the ray-drawn rows measure 3.00-3.69.
+    - `sin(1/x)` at zoom 30/60 is a vertical zebra because the test's `zoom_by` shrinks y as
+      well (the ±1 amplitude is then far outside the viewport); the vertical stripes are the
+      zero crossings, not an artifact. The band fills only the central sub-column region.
+
+    *Measured after:* all 144 tests green; steady-state grab 900×600: `sin(1/x)` default
+    13.6 ms, `tan(x)` default 12.4 ms, `sin(1/x)` zoom 90 12.5 ms (march renderer: 27/34/33
+    ms); `tan` at y ∈ [50,60] draws four full-height walls; `log(1+x)`'s descent 3.00 px at
+    every sampled row; `k·x` 3.00/3.00/3.00/2.94 at slopes 2/10/40/200.
+

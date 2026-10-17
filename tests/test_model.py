@@ -99,8 +99,11 @@ def test_domain_analysis():
 def test_shader_sources_inject_domain():
     _, frag = model.shader_sources(1 / X)
     assert "#define DOM(u) ((u != 0))" in frag
-    # The join invariant replaced the pole-detection machinery: no POLE macro at all.
-    assert "POLE" not in frag
+    # The fixed-x polyline joins adjacent samples; a segment whose endpoints lie on
+    # opposite sides of a pole factor must not be stroked. The macro is evaluated at the
+    # sample coordinates, not the pixel's own column.
+    assert "#define POLE(u) ((u))" in frag
+    assert "POLE(prev_x) * POLE(xi) <= 0.0" in frag
     _, smooth = model.shader_sources(X**2)
     assert "#define DOM(u) true" in smooth               # not analysable => identically true
 

@@ -133,7 +133,7 @@ def _pole_factors(expr: sp.Expr) -> list[sp.Expr]:
     return out
 
 
-def _pole_glsl(expr: sp.Expr) -> str:
+def _pole_glsl(expr: sp.Expr, name: str = "x") -> str:
     """GLSL for the product of the expression's pole factors (``1.0`` when there are none).
 
     The implicit renderer evaluates it at the pixel and at its normal probes; a sign change
@@ -143,7 +143,7 @@ def _pole_glsl(expr: sp.Expr) -> str:
     finite-difference linearity test alone can pass through it.
     """
     factors = _pole_factors(expr)
-    return " * ".join(f"({func_glsl(factor)})" for factor in factors) if factors else "1.0"
+    return " * ".join(f"({func_glsl(factor, name)})" for factor in factors) if factors else "1.0"
 
 
 def _domain_conditions(expr: sp.Expr) -> list[sp.Expr]:
@@ -338,7 +338,9 @@ layout(std140, binding = 0) uniform buf {
 };
 
 #define USE_INTERVAL @USE_INTERVAL@
+#define HAS_SIGN_POLE @HAS_SIGN_POLE@
 #define FILL_WHOLE @HAS_SIGN_POLE@
+#define POLE(u) (@POLE@)
 #define HAS_DEPENDENT_QUOTIENT @HAS_DEPENDENT_QUOTIENT@
 
 // Argument reduction: the GPU's built-in sin/cos are unreliable for large arguments;
@@ -438,40 +440,120 @@ void main() {
     float y_bot = camera.y - 0.5 * spany;
 
 #if USE_INTERVAL
-    // The envelope band is the exact interval image of *this pixel's column*, plus the stroke
-    // radius as the vertical AA feather (a horizontal line's column is a point; the band must
-    // still be as tall as the stroke). No ±8-column window: the window mixed neighbouring
-    // phases and overfilled sin(1/x)'s transition columns by up to 1.66 world units.
-    IVal col = FI(x - 0.5 * dx, x + 0.5 * dx);
-    // The enclosure over the *whole stroke footprint* (x ± R). It is the exact mask for the
-    // march: a pixel within R of the curve has a curve point within R in x, so its y must be
-    // in this range (plus the R AA margin). It also carries the outer half of a domain
-    // boundary when this pixel's own column is empty.
+    IVal own = FI(x - 0.5 * dx, x + 0.5 * dx);
+    bool own_empty = own.kind == IK_EMPTY;
+    IVal col = own;
     IVal gate = FI(x - R * dx, x + R * dx);
     if (col.kind == IK_EMPTY && gate.kind != IK_EMPTY) {
         // The stroke's outer half may cross the domain boundary by up to one radius.
         col = gate;
     }
-    if (!DOM(x) && col.kind == IK_CONNECTED
-            && (col.lo <= -IINF || col.hi >= IINF
-                || gate.lo <= -IINF || gate.hi >= IINF)) {
-        col = gate;
+
+    // ---- fixed-x sub-pixel polyline (GeoGebra's sampled polyline, on the GPU) ----
+    // 16 samples over ±2 columns (0.25-column spacing) cover the perpendicular foot even at
+    // 89°: a ±1-column window lost 42 % of the width at 84°. Joining the samples gives a
+    // polyline whose segments are diagonal, so the stroke is smooth at any zoom. The interval
+    // band stays separate (below); it no longer has to be inferred from this window.
+    const int NS = 16;
+    float smp[NS];
+    float smpx[NS];
+    bool ok[NS];
+    float sturns = 0.0;       // reversals inside this pixel's own column only
+    float pmin = 1e30;
+    float prev_s = 0.0;
+    float prev_x = 0.0;
+    float prev_t = 0.0;
+    bool prev_ok = false;
+    float prev_d = 0.0;
+    bool prev_d_ok = false;
+    for (int i = 0; i < NS; i++) {
+        float t = -2.0 + (float(i) + 0.5) * (4.0 / float(NS));
+        float xi = x + t * dx;
+        float v = 1e30;
+        if (DOMS(xi)) {
+            v = F(xi);
+        }
+        smp[i] = v;
+        smpx[i] = xi;
+        ok[i] = (v == v) && (abs(v) < 1e30);
+        if (ok[i]) {
+            if (prev_ok) {
+                bool skip = (col.kind == IK_WHOLE || col.kind == IK_INVERTED)
+                        || (HAS_SIGN_POLE && POLE(prev_x) * POLE(xi) <= 0.0)
+                        || (HAS_DEPENDENT_QUOTIENT && abs(v - prev_s) * sy > JOIN);
+                if (!skip) {
+                    pmin = min(pmin, _seg_dist(vec2(x * sx, y * sy),
+                        vec2(prev_x * sx, prev_s * sy), vec2(xi * sx, v * sy)));
+                }
+                float d = v - prev_s;
+                if (abs(t) <= 0.5 && abs(prev_t) <= 0.5
+                        && prev_d_ok && prev_d * d < 0.0
+                        && abs(prev_d) > 1e-4 && abs(d) > 1e-4) {
+                    sturns += 1.0;
+                }
+                prev_d = d;
+                prev_d_ok = true;
+            } else {
+                prev_d_ok = false;
+            }
+            prev_s = v;
+            prev_x = xi;
+            prev_ok = true;
+        } else {
+            prev_ok = false;
+            prev_d_ok = false;
+        }
     }
-    // A dependent quotient (x/sqrt(x**2), x*sin(1/x)) can overestimate *any* column where the
-    // denominator gets small; the march draws the actual curve and its jump.
-    bool suppress_band = HAS_DEPENDENT_QUOTIENT && !FILL_WHOLE;
+
+    // A divergence's boundary is vertical: extend the column edge as a ray (log's descent
+    // is otherwise a sample polyline that ends one radius short of the boundary).
+    if (own_empty && col.kind == IK_CONNECTED && col.lo <= -IINF) {
+        // A pixel just outside the domain: the band centred on the boundary still covers it.
+        pmin = min(pmin, _seg_dist(vec2(x * sx, y * sy),
+            vec2((x - 0.5 * dx) * sx, 1e12), vec2((x - 0.5 * dx) * sx, -1e12)));
+    }
+    if (own_empty && col.kind == IK_CONNECTED && col.hi >= IINF) {
+        pmin = min(pmin, _seg_dist(vec2(x * sx, y * sy),
+            vec2((x + 0.5 * dx) * sx, 1e12), vec2((x + 0.5 * dx) * sx, -1e12)));
+    }
+    if (col.kind == IK_CONNECTED && col.lo <= -IINF) {
+        // The boundary is vertical and the polyline's first valid sample is one step inside it;
+        // the foot of a pixel between the two lies left of the segment, so extend the sample
+        // downwards as a ray (log's descent).
+        for (int i = 0; i < NS; i++) {
+            if (ok[i]) {
+                pmin = min(pmin, _seg_dist(vec2(x * sx, y * sy),
+                    vec2(smpx[i] * sx, max(smp[i], col.hi) * sy), vec2(smpx[i] * sx, -1e12)));
+                break;
+            }
+        }
+    }
+    if (col.kind == IK_CONNECTED && col.hi >= IINF) {
+        for (int i = NS - 1; i >= 0; i--) {
+            if (ok[i]) {
+                pmin = min(pmin, _seg_dist(vec2(x * sx, y * sy),
+                    vec2(smpx[i] * sx, min(smp[i], col.lo) * sy), vec2(smpx[i] * sx, 1e12)));
+                break;
+            }
+        }
+    }
+
     float band_cov = 0.0;
     if (col.kind == IK_CONNECTED) {
-        band_cov = clamp((col.hi - y) * sy + BW, 0.0, 1.0)
-                 * clamp((y - col.lo) * sy + BW, 0.0, 1.0);
+        // Fill only when the column is not a polyline: an oscillation (>= 2 reversals in the
+        // samples) or a divergence (infinite bound). A monotone column is the polyline.
+        if (sturns >= 2.0 || col.lo <= -IINF || col.hi >= IINF) {
+            band_cov = clamp((col.hi - y) * sy + BW, 0.0, 1.0)
+                     * clamp((y - col.lo) * sy + BW, 0.0, 1.0);
+        }
     } else if (col.kind == IK_INVERTED) {
         band_cov = max(clamp((col.lo - y) * sy + BW, 0.0, 1.0),
                        clamp((y - col.hi) * sy + BW, 0.0, 1.0));
     } else if (col.kind == IK_WHOLE && FILL_WHOLE) {
         band_cov = 1.0;
     }
-    if (suppress_band) {
-        band_cov = 0.0;
+    if (HAS_DEPENDENT_QUOTIENT && !FILL_WHOLE) {
+        band_cov = 0.0;   // dependency overestimation: the polyline draws the real branches
     }
     float cov = band_cov;
     if (!DOM(x)) {
@@ -574,6 +656,10 @@ void main() {
     }
 #endif
 
+#if !USE_INTERVAL
+    // The march and the legacy band: only the unsupported-expression path still needs them.
+    // The interval path is the fixed-x polyline above plus the exact column band, so it must
+    // not pay for a single march evaluation.
     float f0 = F(x);
     float d1 = DF;                       // f'(x) at the pixel's own column
     bool have_m0 = (d1 == d1) && (abs(d1) < 1e30);
@@ -749,40 +835,13 @@ void main() {
         }
     }
 
+#endif
     // ---- stroke ----
 #if USE_INTERVAL
-    // The march's polyline is the curve where it can serve this pixel; the column band and the
-    // neighbouring column segments are the fallback where it cannot (a steep wall whose seed is
-    // a whole view up the arc, an oscillation envelope). Mixing them over the same pixels is
-    // what produced the stair/comb edge and the double thin lines, so the local march wins.
-    float margin = R * camera.w;
-    bool in_gate = true;
-    if (gate.kind == IK_CONNECTED) {
-        in_gate = (y >= gate.lo - margin && y <= gate.hi + margin);
-    } else if (gate.kind == IK_INVERTED) {
-        in_gate = (y <= gate.lo + margin || y >= gate.hi - margin);
-    } else if (gate.kind == IK_EMPTY) {
-        in_gate = false;
-    }
-    float stroke_cov = in_gate ? clamp(R - dmin, 0.0, 1.0) : 0.0;
-    float ncov = 0.0;
-    if (!suppress_band) {
-        IVal pv = FI(x - 1.5 * dx, x - 0.5 * dx);
-        IVal nv = FI(x + 0.5 * dx, x + 1.5 * dx);
-        if (pv.kind == IK_CONNECTED) {
-            float y0 = clamp(pv.lo, -1e12, 1e12);
-            float y1 = clamp(pv.hi, -1e12, 1e12);
-            ncov = max(ncov, clamp(R - _seg_dist(
-                pp, vec2((x - dx) * sx, y0 * sy), vec2((x - dx) * sx, y1 * sy)), 0.0, 1.0));
-        }
-        if (nv.kind == IK_CONNECTED) {
-            float y0 = clamp(nv.lo, -1e12, 1e12);
-            float y1 = clamp(nv.hi, -1e12, 1e12);
-            ncov = max(ncov, clamp(R - _seg_dist(
-                pp, vec2((x + dx) * sx, y0 * sy), vec2((x + dx) * sx, y1 * sy)), 0.0, 1.0));
-        }
-    }
-    cov = max(cov, max(stroke_cov, ncov));
+    // The fixed-x polyline (above) is the stroke; the interval band is the fill. No march,
+    // gate, chord or neighbouring-column segment: the sample spacing is sub-pixel and the
+    // segment distance gives the constant width on a steep branch.
+    cov = max(cov, clamp(R - pmin, 0.0, 1.0));
 #else
     // Legacy: distance to the joined polyline, the boundary ray included. A slowly diverging
     // boundary such as log(x)'s is an honest vertical asymptote, and a column with no
@@ -1195,6 +1254,10 @@ def shader_sources(expr: sp.Expr) -> tuple[str, str]:
         .replace(
             "@HAS_DEPENDENT_QUOTIENT@",
             "true" if has_dependent_quotient(expr) else "false",
+        )
+        .replace(
+            "@POLE@",
+            _pole_glsl(expr, "u") if has_sign_pole(expr) else "1.0",
         )
     )
     if use_interval:
