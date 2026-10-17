@@ -168,7 +168,7 @@ W, H = 900.0, 600.0
 
 
 def _size(camera: Camera, width: float = W, height: float = H) -> None:
-    camera.setViewport(width, height)
+    camera.set_viewport(width, height)
 
 
 def test_the_first_size_shows_the_home_view():
@@ -176,7 +176,7 @@ def test_the_first_size_shows_the_home_view():
     scales, whatever size that report is."""
     for width, height in ((900.0, 600.0), (450.0, 300.0), (1500.0, 700.0)):
         camera = Camera()
-        camera.setViewport(width, height)
+        camera.set_viewport(width, height)
         xlim, ylim = camera.xlim, camera.ylim
         assert (xlim.x(), xlim.y()) == pytest.approx((-6.0, 6.0))
         assert (ylim.x(), ylim.y()) == pytest.approx((-2.0, 2.0))
@@ -188,7 +188,7 @@ def test_resize_keeps_the_scale_and_shows_more_canvas():
     camera = Camera()
     _size(camera)
     zoom, scale_y = camera.zoom, camera.scale_y
-    camera.setViewport(1800.0, 600.0)
+    camera.set_viewport(1800.0, 600.0)
     assert camera.zoom == zoom                      # nothing zooms while a splitter is dragged
     assert camera.scale_y == scale_y
     assert (camera.xlim.x(), camera.xlim.y()) == pytest.approx((-12.0, 12.0))
@@ -199,7 +199,7 @@ def test_a_configured_camera_is_not_overridden_by_the_first_report():
     camera = Camera()
     camera.zoom = 0.5
     camera.centre = (3.0, 1.0)
-    camera.setViewport(W, H)
+    camera.set_viewport(W, H)
     assert camera.zoom == 0.5
     assert (camera.centre.x(), camera.centre.y()) == pytest.approx((3.0, 1.0))
 
@@ -250,16 +250,17 @@ def test_shortcut_properties_and_matching():
     """Defaults match real key events (Shift+= reports Key_Plus), and rebinding changes both
     the match and the notify signal QML bindings depend on."""
     camera = Camera()
-    assert camera.panLeftShortcut == "Left"
-    assert camera.zoomInShortcut == "+|="
-    assert camera.zoomOutShortcut == "-|_"
-    assert camera.matchesShortcut(Qt.Key_Left.value, 0, camera.panLeftShortcut)
-    assert camera.matchesShortcut(Qt.Key_Plus.value, Qt.ShiftModifier.value,
-                                  camera.zoomInShortcut)
-    assert camera.matchesShortcut(Qt.Key_Equal.value, 0, camera.zoomInShortcut)
-    assert camera.matchesShortcut(Qt.Key_Minus.value, 0, camera.zoomOutShortcut)
-    assert not camera.matchesShortcut(Qt.Key_Right.value, 0, camera.panLeftShortcut)
-    assert not camera.matchesShortcut(Qt.Key_Plus.value, 0, "")       # empty disables
+    bindings = camera.input
+    assert bindings.panLeftShortcut == "Left"
+    assert bindings.zoomInShortcut == "+|="
+    assert bindings.zoomOutShortcut == "-|_"
+    assert bindings.matches(Qt.Key_Left.value, 0, bindings.panLeftShortcut)
+    assert bindings.matches(Qt.Key_Plus.value, Qt.ShiftModifier.value,
+                            bindings.zoomInShortcut)
+    assert bindings.matches(Qt.Key_Equal.value, 0, bindings.zoomInShortcut)
+    assert bindings.matches(Qt.Key_Minus.value, 0, bindings.zoomOutShortcut)
+    assert not bindings.matches(Qt.Key_Right.value, 0, bindings.panLeftShortcut)
+    assert not bindings.matches(Qt.Key_Plus.value, 0, "")       # empty disables
 
     seen = 0
 
@@ -267,27 +268,27 @@ def test_shortcut_properties_and_matching():
         nonlocal seen
         seen += 1
 
-    camera.shortcutsChanged.connect(note)
-    meta = camera.metaObject()
+    bindings.shortcutsChanged.connect(note)
+    meta = bindings.metaObject()
     index = meta.indexOfProperty("panLeftShortcut")
     assert index >= 0 and meta.property(index).notifySignal().isValid()
-    camera.panLeftShortcut = "A"
-    assert seen == 1 and camera.panLeftShortcut == "A"
-    camera.panLeftShortcut = "A"                     # idempotent
+    bindings.panLeftShortcut = "A"
+    assert seen == 1 and bindings.panLeftShortcut == "A"
+    bindings.panLeftShortcut = "A"                     # idempotent
     assert seen == 1
-    assert camera.matchesShortcut(Qt.Key_A.value, 0, camera.panLeftShortcut)
-    assert not camera.matchesShortcut(Qt.Key_A.value, Qt.ShiftModifier.value,
-                                      camera.panLeftShortcut)
+    assert bindings.matches(Qt.Key_A.value, 0, bindings.panLeftShortcut)
+    assert not bindings.matches(Qt.Key_A.value, Qt.ShiftModifier.value,
+                                bindings.panLeftShortcut)
 
-    camera.zoomInShortcut = "Ctrl+="
-    assert camera.matchesShortcut(Qt.Key_Equal.value, Qt.ControlModifier.value,
-                                  camera.zoomInShortcut)
-    assert not camera.matchesShortcut(Qt.Key_Equal.value, 0, camera.zoomInShortcut)
+    bindings.zoomInShortcut = "Ctrl+="
+    assert bindings.matches(Qt.Key_Equal.value, Qt.ControlModifier.value,
+                            bindings.zoomInShortcut)
+    assert not bindings.matches(Qt.Key_Equal.value, 0, bindings.zoomInShortcut)
 
-    camera.keyPanStep = 0.25
-    assert camera.keyPanStep == 0.25
+    bindings.keyPanStep = 0.25
+    assert bindings.keyPanStep == 0.25
     with pytest.raises(ValueError):
-        camera.keyPanStep = 0.0
+        bindings.keyPanStep = 0.0
     with pytest.raises(ValueError):
         camera.animationDuration = -1
 

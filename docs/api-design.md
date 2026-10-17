@@ -119,7 +119,10 @@ PlotView {
 `PlotView` exposes `mapToScreen(x, y)` and `mapFromScreen(point)` so any QML element can sit
 at world coordinates without re-deriving the transform. Without an injected `plot` the
 component creates an empty one; a standalone curve is explicit (`defaultExpression: "sin(x)"`),
-so the reusable component has no hidden artist.
+so the reusable component has no hidden artist. The implementation is split into
+`PlotCurves.qml` (shader passes), `PlotFurniture.qml` (grid, axes, ticks, title, labels) and
+`PlotInput.qml` (mouse/wheel/touch); `PlotView.qml` owns the model injection, the camera
+mapping and keyboard focus.
 
 ## 5. The Qt contract (what makes runtime changes free)
 
@@ -251,17 +254,19 @@ vector route).
   when the camera changes). Simple and crisp enough for the tens of lines a grid has; moving it
   into a static shader (tick positions as uniforms, baked once) stays the documented
   optimisation if a figure ever needs many lines.
-* **Input is a camera concern.** `PlotView` forwards wheel, drag, keyboard and touch to
-  `Camera` slots, so the same bindings work in both embedding modes and a host can drive the
-  view without synthesising events. Keys are active only while the view has focus
+* **Input policy lives beside the camera.** ``Camera.input`` is a `ViewInput` object, so the
+  camera stays geometry + ticks. `PlotView` forwards wheel, drag, keyboard and touch to
+  `Camera`/`ViewInput`, so the same bindings work in both embedding modes and a host can drive
+  the view without synthesising events. Keys are active only while the view has focus
   (`QQuickWidget` is `ClickFocus`, and the widget uses it as its focus proxy). The shortcuts
-  (`panLeftShortcut` … `zoomOutShortcut`) are `QKeySequence` text on the camera, so rebinding
-  needs no QML change; `|` separates alternatives. Discrete moves (wheel, keys) are animated
-  through one `QVariantAnimation` (`animationDuration`; scales interpolate geometrically),
-  which accumulates onto its target under a fast wheel; drags and touch gestures call the
-  direct slots and cancel any in-flight easing. Two-finger pinch is incremental
-  (`zoom_at(magnification)`) plus a centroid pan, which keeps the world point under the
-  fingers without storing gesture-start state in QML.
+  (`input.panLeftShortcut` … `input.zoomOutShortcut`) are `QKeySequence` text, so rebinding
+  needs no QML change; `|` separates alternatives. Methods are snake_case
+  (`set_viewport`, `zoom_by`, `pan_pixels`, `stop_animation`); Qt properties stay camelCase.
+  Discrete moves (wheel, keys) are animated through one `CameraAnimator`
+  (`Camera.animationDuration`; scales interpolate geometrically), which accumulates onto its
+  target under a fast wheel; drags and touch gestures call the direct slots and cancel any
+  in-flight easing. Two-finger pinch is incremental (`zoom_at(magnification)`) plus a centroid
+  pan, which keeps the world point under the fingers without storing gesture-start state in QML.
 
 ## 7b. Themes
 

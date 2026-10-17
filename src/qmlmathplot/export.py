@@ -153,13 +153,13 @@ def render(
         else:                               # "datalim": the live scales, the limits expand
             scale = (max(live[2], span_x / logical[0]), max(live[3], span_y / logical[1]))
 
-        camera.setViewport(logical[0], logical[1])
+        camera.set_viewport(logical[0], logical[1])
         camera.set_view(centre[0], centre[1], scale[0], scale[1])
         image = widget.grabFramebuffer()
     finally:
         # Restore before the event loop runs again, so no live view repaints the export state.
         camera.set_view(live[0], live[1], live[2], live[3])
-        camera.setViewport(live_size[0], live_size[1])
+        camera.set_viewport(live_size[0], live_size[1])
         plot.background = background
         widget.hide()
         widget.deleteLater()

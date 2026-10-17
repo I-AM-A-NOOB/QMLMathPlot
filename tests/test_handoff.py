@@ -25,7 +25,7 @@ pytest.importorskip("matplotlib", reason="the hand-off needs the matplotlib extr
 def _plot(*, aspect: str | float = "auto", position: str = "zero") -> Plot:
     plot = Plot()
     plot.line_width = 2.0
-    plot.camera.setViewport(800.0, 600.0)
+    plot.camera.set_viewport(800.0, 600.0)
     plot.camera.aspect = aspect
     plot.add_curve("sin(1/x)", color="#1f77b4", label="sin(1/x)")
     plot.axes_position = position

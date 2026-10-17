@@ -123,7 +123,7 @@ def test_arrow_keys_animate_the_pan(app: QApplication) -> None:
     quick = _focus(plot)
 
     before = plot.view_bounds()
-    step = camera.keyPanStep * (before[1] - before[0])   # 10% of the viewport
+    step = camera.input.keyPanStep * (before[1] - before[0])   # 10% of the viewport
     QTest.keyClick(quick, Qt.Key_Left)
 
     QTest.qWait(80)
@@ -138,7 +138,7 @@ def test_arrow_keys_animate_the_pan(app: QApplication) -> None:
 
     QTest.keyClick(quick, Qt.Key_Up)
     up = _wait_until_still(plot)
-    y_step = camera.keyPanStep * (before[3] - before[2])
+    y_step = camera.input.keyPanStep * (before[3] - before[2])
     assert up[2] == pytest.approx(after[2] + y_step)
     assert up[0] == pytest.approx(after[0])             # vertical only
     plot.hide()
@@ -150,14 +150,14 @@ def test_shortcuts_are_configurable(app: QApplication) -> None:
     camera.animationDuration = 0                        # immediate, so the test needs no waits
     quick = _focus(plot)
 
-    camera.panLeftShortcut = "A"
+    camera.input.panLeftShortcut = "A"
     before = plot.view_bounds()
     QTest.keyClick(quick, Qt.Key_Left)
     assert plot.view_bounds() == pytest.approx(before), "the old Left binding still fired"
     QTest.keyClick(quick, Qt.Key_A)
     assert plot.view_bounds()[0] < before[0], "the configured A binding did not pan"
 
-    camera.zoomInShortcut = "Ctrl+="
+    camera.input.zoomInShortcut = "Ctrl+="
     before = plot.view_bounds()
     width = before[1] - before[0]
     QTest.keyClick(quick, Qt.Key_Equal)
@@ -175,19 +175,19 @@ def test_keyboard_and_pan_can_be_switched_off(app: QApplication) -> None:
     quick = _focus(plot)
     before = plot.view_bounds()
 
-    camera.keyboardEnabled = False
+    camera.input.keyboardEnabled = False
     QTest.keyClick(quick, Qt.Key_Left)
     assert plot.view_bounds() == pytest.approx(before)
     assert camera.animationDuration == 0                # no unrelated side effect
 
-    camera.keyboardEnabled = True
+    camera.input.keyboardEnabled = True
     camera.panEnabled = False
     QTest.keyClick(quick, Qt.Key_Left)
     assert plot.view_bounds() == pytest.approx(before)
     camera.panEnabled = True
 
     camera.animationDuration = 200
-    camera.animate_pan(camera.keyPanStep * 600, 0, 100)
+    camera.animate_pan(camera.input.keyPanStep * 600, 0, 100)
     QTest.qWait(30)
     assert plot.view_bounds()[0] < before[0], "animate_pan did not start"
     QTest.qWait(250)

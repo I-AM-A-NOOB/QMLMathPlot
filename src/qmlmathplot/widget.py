@@ -122,7 +122,7 @@ class MathPlotWidget(QWidget):
         widget reports the authoritative size itself.
         """
         super().resizeEvent(event)
-        self._plot.camera.setViewport(float(self._quick.width()), float(self._quick.height()))
+        self._plot.camera.set_viewport(float(self._quick.width()), float(self._quick.height()))
 
     # ------------------------------------------------------------------ Model
     @property

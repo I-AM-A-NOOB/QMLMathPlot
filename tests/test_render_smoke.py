@@ -65,7 +65,7 @@ def _render_plot(app: QGuiApplication, expression: str | None = None,
 
     if plot is not None:
         camera = plot.camera
-        camera.setViewport(float(WIDTH), float(HEIGHT))
+        camera.set_viewport(float(WIDTH), float(HEIGHT))
         camera.xlim = xlim if xlim is not None else (HOME[0], HOME[1])
         camera.ylim = ylim if ylim is not None else (HOME[2], HOME[3])
         if pan_pixels:

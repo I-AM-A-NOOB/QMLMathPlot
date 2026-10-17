@@ -162,7 +162,7 @@ def _render(plot: Plot, app: QGuiApplication,
         pytest.skip("no usable display/GPU scenegraph")
 
     camera = plot.camera
-    camera.setViewport(float(WIDTH), float(HEIGHT))
+    camera.set_viewport(float(WIDTH), float(HEIGHT))
     if xlim is not None and ylim is not None:
         camera.xlim = xlim
         camera.ylim = ylim
@@ -284,7 +284,7 @@ def _export_plot(expression: str) -> Plot:
     plot.ticks_visible = False
     plot.line_width = 2.0
     plot.add_curve(expression)
-    plot.camera.setViewport(EXPORT_SIZE, EXPORT_SIZE)
+    plot.camera.set_viewport(EXPORT_SIZE, EXPORT_SIZE)
     plot.xlim = (-EXPORT_VIEW, EXPORT_VIEW)
     plot.ylim = (-EXPORT_VIEW, EXPORT_VIEW)
     return plot

@@ -131,7 +131,8 @@ The model:
 | Object | Members |
 |---|---|
 | `Plot` | `camera`, `curves`, `xlim`/`ylim`/`aspect` (forwarded), `add_curve()` / `add_implicit()` / `remove_curve()`, `available_themes`, and the style properties: `background`, `grid`, `grid_color`, `grid_width`, `grid_alpha`, `grid_style`, `axis_color`, `axis_width`, `axes_position`, `color_cycle`, `line_width`, `text_color`, `tick_color`, `tick_length`, `font_size`, `tick_font_size`, `title`, `xlabel`, `ylabel`, `title_color`, `title_font_size`, `title_bold`, `ticks_visible`, `theme` |
-| `Camera` | `centre`, `zoom` (world units per logical pixel), `aspect`, `xlim`/`ylim` (derived), `ticks_x`/`ticks_y`, `zoomStep` / `panEnabled` / `zoomEnabled`, `keyboardEnabled` / `keyPanStep`, `panLeftShortcut` / `panRightShortcut` / `panUpShortcut` / `panDownShortcut` / `zoomInShortcut` / `zoomOutShortcut`, `animationDuration`, slots `setViewport(w, h)` / `zoom_by(delta, u, v, w, h)` / `zoom_at(factor, u, v, w, h)` / `pan_pixels(dx, dy)` / `animate_zoom(...)` / `animate_pan(dx, dy, ms)` / `stop_animation()` / `reset()` |
+| `Camera` | `centre`, `zoom` (world units per logical pixel), `aspect`, `xlim`/`ylim` (derived), `ticks_x`/`ticks_y`, `zoomStep` / `panEnabled` / `zoomEnabled`, `animationDuration`, `input` (a `ViewInput`), slots `set_viewport(w, h)` / `zoom_by(delta, u, v, w, h)` / `zoom_at(factor, u, v, w, h)` / `pan_pixels(dx, dy)` / `animate_zoom(...)` / `animate_pan(dx, dy, ms)` / `stop_animation()` / `reset()` |
+| `ViewInput` | `keyboardEnabled`, `keyPanStep`, `panLeftShortcut` / `panRightShortcut` / `panUpShortcut` / `panDownShortcut` / `zoomInShortcut` / `zoomOutShortcut`, `matches(key, modifiers, shortcut)` |
 | `Curve` | `expression` (string or sympy expression), `expr` (the parsed expression, read-only), `implicit`, `color`, `lineWidth`, `visible`, `label`, `error` (read-only), the baked `vertexShader` / `fragmentShader` |
 | `CurveListModel` | the curves as a model (`curve`, `expression`, `color`, `lineWidth`, `visible`, `vertexShader`, `fragmentShader` roles) so QML puts one `ShaderEffect` behind each |
 
@@ -293,17 +294,18 @@ plot.plot.camera.zoom_by(120, 0.5, 0.5, w, h)     # one wheel notch, anchored at
 
 Clicking the plot gives it focus; while it has focus the arrow keys pan (10% of the viewport
 per press by default), `+`/`=` zooms in and `-`/`_` zooms out. Every command is a property on
-the camera, so a host can rebind it — the value is a `QKeySequence` string, and `|` separates
-alternatives (empty disables the command). `keyPanStep`, `keyboardEnabled`, `panEnabled` and
-`zoomEnabled` shape the behaviour the same way.
+the camera's `input` object, so a host can rebind it — the value is a `QKeySequence` string,
+and `|` separates alternatives (empty disables the command). `input.keyPanStep`,
+`input.keyboardEnabled`, `panEnabled` and `zoomEnabled` shape the behaviour the same way.
 
 ```python
 camera = plot.plot.camera
-camera.panLeftShortcut = "A"          # rebind one arrow
-camera.panRightShortcut = "D"
-camera.zoomInShortcut = "Ctrl+="
-camera.zoomOutShortcut = "Ctrl+-"
-camera.keyPanStep = 0.2               # 20% of the viewport per arrow press
+input = camera.input
+input.panLeftShortcut = "A"           # rebind one arrow
+input.panRightShortcut = "D"
+input.zoomInShortcut = "Ctrl+="
+input.zoomOutShortcut = "Ctrl+-"
+input.keyPanStep = 0.2                # 20% of the viewport per arrow press
 camera.animationDuration = 220        # ms; 0 disables easing
 ```
 
@@ -439,13 +441,14 @@ three import QtWidgets lazily, so a pure-QML host never loads it.
 |---|---|---|
 | Model | `src/qmlmathplot/model.py` | expression → GLSL, shader source template (no Qt dependency, unit-testable) |
 | Camera | `src/qmlmathplot/camera.py` | `Camera`: centre / zoom / aspect, the derived ranges, pan/zoom/reset, the nice-number tick algorithm |
+| Input | `src/qmlmathplot/input.py` | `ViewInput`: keyboard switch, pan step, rebindable shortcuts, key matching |
 | Animation | `src/qmlmathplot/animation.py` | `CameraAnimator`: the one eased interpolator behind wheel/keyboard moves |
 | Curves | `src/qmlmathplot/curve.py` | `Curve` (expression → baked `.qsb`, style, error; later edits bake on the thread pool) and `CurveListModel` |
 | Plot | `src/qmlmathplot/plot.py` | `Plot`: the camera, the curves and the styling the view binds to |
 | Facade | `src/qmlmathplot/figure.py` | `Figure` / `Axes`: Matplotlib-shaped names over one `Plot` (no Qt beyond the model) |
 | Facade host | `src/qmlmathplot/canvas.py` | `FigureCanvasQt`: a `MathPlotWidget` attached to a `Figure` (QtWidgets, lazy) |
 | Facade scripting | `src/qmlmathplot/pyplot.py` | `qmlmathplot.pyplot`: current figure, `plot`/`xlim`/`show`/`savefig` for scripts |
-| View | `src/qmlmathplot/qml/PlotView.qml` (+ `view.py`) | QML: background, grid, ticks/title, one `ShaderEffect` per curve, pan/zoom input; `view.py` registers the types and yields the component path |
+| View | `src/qmlmathplot/qml/PlotView.qml` (+ `PlotCurves.qml`, `PlotFurniture.qml`, `PlotInput.qml`, `view.py`) | composition: model injection, camera mapping and keyboard focus; curves, furniture and pointer input live in the three child components (one `ShaderEffect` per curve) |
 | Themes | `src/qmlmathplot/themes.py` + `themes/` | the vendored Matplotlib style sheets, resolved onto the `Plot`'s properties |
 | Export | `src/qmlmathplot/export.py` | `Plot.savefig()` / `to_image()`: the canvas region rendered offscreen at a pixel size (QtWidgets is imported lazily) |
 | Hand-off | `src/qmlmathplot/mpl.py` | `Plot.to_matplotlib()` / `to_sympy()` / `savefig(backend="matplotlib")`: a sampled second renderer for vector output (matplotlib is an optional extra, imported lazily) |

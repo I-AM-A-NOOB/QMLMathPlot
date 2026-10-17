@@ -62,7 +62,7 @@ def test_add_and_remove_curve_are_forwarded() -> None:
 
 def test_xlim_and_ylim_are_forwarded_to_the_camera() -> None:
     plot = Plot()
-    plot.camera.setViewport(900, 600)
+    plot.camera.set_viewport(900, 600)
     seen = []
     plot.viewChanged.connect(lambda: seen.append(1))
     plot.xlim = (-1.0, 1.0)

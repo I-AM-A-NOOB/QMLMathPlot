@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import Property, QObject, Qt, Signal, Slot
-from PySide6.QtGui import QKeySequence, QVector2D
+from PySide6.QtCore import Property, QObject, Signal, Slot
+from PySide6.QtGui import QVector2D
 
 from .animation import CameraAnimator, State
+from .input import ViewInput
 
 __all__ = ["HOME_SIZE", "HOME_VIEW", "Camera", "nice_ticks"]
 
@@ -24,7 +25,7 @@ __all__ = ["HOME_SIZE", "HOME_VIEW", "Camera", "nice_ticks"]
 #: the first reported size turns the home view into (zoom, y scale) for that widget, and
 #: the constants below are only the fallback used before any size is known.
 HOME_VIEW = (-6.0, 6.0, -2.0, 2.0)
-#: Reference size for the home view (before the first ``setViewport``).
+#: Reference size for the home view (before the first ``set_viewport``).
 HOME_SIZE = (900.0, 600.0)
 
 
@@ -79,25 +80,6 @@ def _qml_pairs(ticks: list[tuple[float, str]]) -> list[list[float | str]]:
     return [[value, label] for value, label in ticks]
 
 
-def _shortcut_property(storage: str, notify: Signal) -> Property:
-    """A shortcut string property backed by ``storage`` (one notify for the whole group).
-
-    The notify signal is passed as an *object*: PySide silently drops a notify signal given
-    by name, and QML bindings then never refresh (AGENTS item 30).
-    """
-    def getter(self: Camera) -> str:
-        return getattr(self, storage)
-
-    def setter(self: Camera, value: object) -> None:
-        text = str(value)
-        if text == getattr(self, storage):
-            return
-        setattr(self, storage, text)
-        notify.__get__(self, type(self)).emit()
-
-    return Property(str, getter, setter, notify=notify)
-
-
 class Camera(QObject):
     """The view onto the infinite canvas: centre, zoom (units per logical pixel) and aspect.
 
@@ -112,9 +94,6 @@ class Camera(QObject):
     zoomStepChanged = Signal()
     panEnabledChanged = Signal()
     zoomEnabledChanged = Signal()
-    keyboardEnabledChanged = Signal()
-    keyPanStepChanged = Signal()
-    shortcutsChanged = Signal()
     animationDurationChanged = Signal()
 
     #: Scale limits (world units per pixel), to keep panning/zooming reversible.
@@ -139,15 +118,8 @@ class Camera(QObject):
         self._ticks_y: list[tuple[float, str]] = []
         self._ticks_x_qml: list[list[float | str]] = []
         self._ticks_y_qml: list[list[float | str]] = []
-        self._keyboard_enabled = True
-        self._key_pan_step = 0.1
+        self._input = ViewInput(self)
         self._animation_duration = 160
-        self._pan_left = "Left"
-        self._pan_right = "Right"
-        self._pan_up = "Up"
-        self._pan_down = "Down"
-        self._zoom_in = "+|="
-        self._zoom_out = "-|_"
         # One animation drives every discrete camera move (a wheel notch, a keypress). Drags
         # and touch gestures are direct manipulation and must never be animated through.
         self._animator = CameraAnimator(self._apply_state, self)
@@ -344,46 +316,11 @@ class Camera(QObject):
         bool, _get_zoom_enabled, _set_zoom_enabled, notify=zoomEnabledChanged
     )
 
-    def _get_keyboard_enabled(self) -> bool:
-        return self._keyboard_enabled
+    def _get_input(self) -> ViewInput:
+        return self._input
 
-    def _set_keyboard_enabled(self, value: bool) -> None:
-        value = bool(value)
-        if value == self._keyboard_enabled:
-            return
-        self._keyboard_enabled = value
-        self.keyboardEnabledChanged.emit()
-
-    #: Whether the view reacts to the keyboard while it has focus.
-    keyboardEnabled: bool = Property(
-        bool, _get_keyboard_enabled, _set_keyboard_enabled, notify=keyboardEnabledChanged
-    )
-
-    def _get_key_pan_step(self) -> float:
-        return self._key_pan_step
-
-    def _set_key_pan_step(self, value: float) -> None:
-        value = float(value)
-        if value <= 0.0:
-            raise ValueError(f"keyPanStep must be positive, got {value!r}")
-        if value == self._key_pan_step:
-            return
-        self._key_pan_step = value
-        self.keyPanStepChanged.emit()
-
-    #: Fraction of the viewport moved by one arrow-key press (0.1 = 10%).
-    keyPanStep: float = Property(
-        float, _get_key_pan_step, _set_key_pan_step, notify=keyPanStepChanged
-    )
-
-    #: Key sequences (QKeySequence text) for the six view commands. ``|`` separates
-    #: alternatives, so the default zoom-in is ``"+|="`` (Shift+= and the unshifted key).
-    panLeftShortcut: str = _shortcut_property("_pan_left", shortcutsChanged)
-    panRightShortcut: str = _shortcut_property("_pan_right", shortcutsChanged)
-    panUpShortcut: str = _shortcut_property("_pan_up", shortcutsChanged)
-    panDownShortcut: str = _shortcut_property("_pan_down", shortcutsChanged)
-    zoomInShortcut: str = _shortcut_property("_zoom_in", shortcutsChanged)
-    zoomOutShortcut: str = _shortcut_property("_zoom_out", shortcutsChanged)
+    #: Keyboard bindings, focus switch and pan step (see :class:`ViewInput`).
+    input: ViewInput = Property(ViewInput, _get_input, constant=True)
 
     def _get_animation_duration(self) -> int:
         return self._animation_duration
@@ -401,35 +338,6 @@ class Camera(QObject):
     animationDuration: int = Property(
         int, _get_animation_duration, _set_animation_duration, notify=animationDurationChanged
     )
-
-    # -------------------------------------------------------------- shortcuts
-    @Slot(int, int, str, result=bool)
-    def matchesShortcut(self, key: int, modifiers: int, shortcut: str) -> bool:
-        """Whether a QML key event matches one of the ``|``-separated sequences in
-        ``shortcut`` (QKeySequence text). Empty or unparsable sequences never match."""
-        if not shortcut or key <= 0:
-            return False
-        event_mods = int(modifiers) & ~Qt.KeyboardModifier.KeypadModifier.value
-        for part in shortcut.split("|"):
-            sequence = QKeySequence(part.strip())
-            if sequence.count() == 0:
-                continue
-            combination = sequence[0]
-            if combination.key().value != int(key):
-                continue
-            target_mods = (
-                combination.keyboardModifiers().value
-                & ~Qt.KeyboardModifier.KeypadModifier.value
-            )
-            if target_mods == event_mods:
-                return True
-            # QKeySequence("+") is Key_Plus with no modifier, while a real keyboard reports
-            # Shift+Plus; letters are not forgiving (Shift+A must stay Shift+A).
-            if (target_mods == 0
-                    and event_mods == Qt.KeyboardModifier.ShiftModifier.value
-                    and not (Qt.Key.Key_A.value <= int(key) <= Qt.Key.Key_Z.value)):
-                return True
-        return False
 
     # --------------------------------------------------------------- animation
     def _state(self) -> tuple[float, float, float, float]:
@@ -574,7 +482,7 @@ class Camera(QObject):
 
     # --------------------------------------------------------------- slots
     @Slot(float, float)
-    def setViewport(self, width: float, height: float) -> None:
+    def set_viewport(self, width: float, height: float) -> None:
         """Record the widget size (logical pixels) — used by the derived ranges only.
 
         Drawing never depends on it: the shader derives its mapping from the camera and its

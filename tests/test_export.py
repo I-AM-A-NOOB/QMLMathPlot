@@ -43,7 +43,7 @@ def _plot(expression: str, *, scale_x: float = SCALE, scale_y: float | None = No
     plot.ticks_visible = False
     plot.line_width = 2.0
     plot.add_curve(expression)
-    plot.camera.setViewport(LOGICAL[0], LOGICAL[1])
+    plot.camera.set_viewport(LOGICAL[0], LOGICAL[1])
     plot.camera.set_view(0.0, 0.0, scale_x, scale_y if scale_y is not None else scale_x)
     return plot
 
@@ -91,7 +91,7 @@ def _visible_spans(image: QImage) -> tuple[float, float]:
 
 def _square_units_camera(plot: Plot, aspect: float) -> None:
     """A camera whose live unit ratio is `aspect = y_scale / x_scale` in pixels."""
-    plot.camera.setViewport(LOGICAL[0], LOGICAL[1])
+    plot.camera.set_viewport(LOGICAL[0], LOGICAL[1])
     plot.camera.aspect = aspect
     plot.camera.set_view(0.0, 0.0, 0.015, 0.015 / aspect)
 
@@ -258,7 +258,7 @@ def test_box_span_is_forced_when_the_other_axis_binds(app: QApplication) -> None
     plot.grid = False
     plot.ticks_visible = False
     plot.line_width = 2.0
-    plot.camera.setViewport(LOGICAL[0], LOGICAL[1])
+    plot.camera.set_viewport(LOGICAL[0], LOGICAL[1])
     plot.camera.aspect = 2.0
     plot.camera.set_view(0.0, 0.0, 0.015, 0.0075)
     plot.add_curve("x", color="#1f77b4")

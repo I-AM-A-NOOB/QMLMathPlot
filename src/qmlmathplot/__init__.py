@@ -53,6 +53,7 @@ from typing import TYPE_CHECKING
 from .camera import HOME_SIZE, HOME_VIEW, Camera, nice_ticks
 from .curve import Curve, CurveListModel, ImplicitCurve
 from .figure import Axes, Figure
+from .input import ViewInput
 from .plot import Plot
 from .view import QML_MAJOR, QML_MINOR, QML_URI, qml_component_path, register_qml_types
 
@@ -78,6 +79,7 @@ __all__ = [
     "QML_MINOR",
     "QML_URI",
     "register_qml_types",
+    "ViewInput",
 ]
 
 
