@@ -180,7 +180,6 @@ Item {
         Connections {
             target: root.plot.camera
             function onViewChanged() { gridCanvas.requestPaint(); }
-            function onTicksChanged() { gridCanvas.requestPaint(); }
         }
         Connections {
             target: root.plot

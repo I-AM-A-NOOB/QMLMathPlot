@@ -142,10 +142,11 @@ at world coordinates without re-deriving the transform.
 
 Rules: setters are idempotent and emit only on a real change; a failed expression keeps the
 last working shader and fills `error` (never a blank plot); the bake is cached by source hash,
-so re-setting the same expression is free. A new expression is baked **synchronously** on the
-calling (GUI) thread and the swap happens when `shadersChanged` fires; a cache miss costs about
-126 ms, which is acceptable for a one-off assignment but is the reason a live text field should
-debounce (an asynchronous bake is the documented next step, not current behaviour).
+so re-setting the same expression is free. The **initial** construction bakes synchronously, so
+a new `Curve` always has shaders. Later `expression` assignments generate GLSL on the calling
+thread (microseconds) and run qsb on Qt's thread pool; the result is applied only if its
+generation is still current, so a fast second edit discards the first. A cache miss costs about
+126 ms off the GUI thread, and a failed or pending bake keeps the previous shaders and `expr`.
 
 ## 6. Curves (many of them)
 
@@ -237,7 +238,9 @@ vector route).
   reason the camera exists.
 * Tick *values* are computed in Python (`Camera.tick_values()` — nice-number algorithm, pure
   and unit-tested) and pushed through `ticksChanged`; QML only positions and formats them.
-  Labels regenerate on camera changes, not per frame.
+  Both axes are computed once per distinct view and cached, and `ticksChanged` is emitted only
+  when the tick set actually changes, so a pan that keeps the same labels does not rebuild the
+  QML Repeaters (their screen positions still follow `viewChanged`).
 * The axes are drawn **through the origin** by default (`axes_position = "zero"`): the x-axis
   is the horizontal line at world y=0, the y-axis the vertical at x=0, and the tick marks and
   labels sit on them. When 0 is outside the visible range that axis sticks to the nearest edge,

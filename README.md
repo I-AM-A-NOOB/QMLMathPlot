@@ -430,7 +430,7 @@ three import QtWidgets lazily, so a pure-QML host never loads it.
 |---|---|---|
 | Model | `src/qmlmathplot/model.py` | expression → GLSL, shader source template (no Qt dependency, unit-testable) |
 | Camera | `src/qmlmathplot/camera.py` | `Camera`: centre / zoom / aspect, the derived ranges, pan/zoom/reset, the nice-number tick algorithm |
-| Curves | `src/qmlmathplot/curve.py` | `Curve` (expression → baked `.qsb`, style, error) and `CurveListModel` |
+| Curves | `src/qmlmathplot/curve.py` | `Curve` (expression → baked `.qsb`, style, error; later edits bake on the thread pool) and `CurveListModel` |
 | Plot | `src/qmlmathplot/plot.py` | `Plot`: the camera, the curves and the styling the view binds to |
 | Facade | `src/qmlmathplot/figure.py` | `Figure` / `Axes`: Matplotlib-shaped names over one `Plot` (no Qt beyond the model) |
 | Facade host | `src/qmlmathplot/canvas.py` | `FigureCanvasQt`: a `MathPlotWidget` attached to a `Figure` (QtWidgets, lazy) |
@@ -550,6 +550,8 @@ QSG_RHI_BACKEND=opengl uv run pytest -m gui
   `.pdf` and `.png`; `to_sympy().save()` writes a file and keeps per-curve colours; importing
   `qmlmathplot` does not import matplotlib, and hiding matplotlib produces an error naming the
   extra.
+- `test_async_bake.py`: a later expression assignment bakes on the thread pool, a stale bake
+  is discarded, and a failed bake keeps the drawn curve.
 - `test_compat.py`: the Matplotlib-shaped facade — expressions (and the refusal of x/y arrays),
   limits/title/labels/grid/aspect, the single-axes rule, `pyplot` current-figure semantics,
   `FigureCanvasQt` rendering and export, and that importing `qmlmathplot` does not load
@@ -629,7 +631,7 @@ Startup to the first frame is about **230 ms**, attributed as follows
 |---|---|---|
 | Qt graphics device init (RHI/D3D11) | **~160 ms** | exactly what the first window's `show→expose` costs; a **bare window (no ShaderEffect) is the same**, so it is not the shader's fault |
 | Window creation + QML load + first frame | ~80 ms | from the second window on (device already created) this is the order of magnitude |
-| `qsb` bake | 0 / ~126 ms | cached by source hash: 0.15 ms on a hit; after a source change (code edit) it must re-bake once |
+| `qsb` bake | 0 / ~126 ms | cached by source hash: 0.15 ms on a hit; later `expression` assignments bake on Qt's thread pool, so only the first curve construction blocks (tests force the synchronous path) |
 | Expression analysis (sympy) | 0.6~3 ms | `unbounded_edges` only analyses **polynomial** boundaries (`tan(x)`'s `cos(x)=0` takes 94 ms via solve+limit, while tan diverges fast and sampling is naturally deep enough, so that ray is not needed) |
 
 Per-frame grab cycles (900×600, `grabToImage` — frame + readback, so an upper bound on

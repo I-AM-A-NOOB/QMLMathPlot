@@ -15,8 +15,11 @@ import sympy as sp
 from PySide6.QtCore import (
     Property,
     QAbstractListModel,
+    QCoreApplication,
     QModelIndex,
     QObject,
+    QRunnable,
+    QThreadPool,
     Qt,
     QUrl,
     Signal,
@@ -28,6 +31,39 @@ from .model import implicit_shader_sources, shader_sources
 from .qsb import bake
 
 __all__ = ["Curve", "CurveListModel", "ImplicitCurve", "curve_for", "parsed"]
+
+
+class _BakeSignals(QObject):
+    """The result channel of one background bake (a ``QRunnable`` cannot own signals)."""
+
+    done = Signal(int, object)      # generation, (vertex, fragment) or an exception
+
+
+class _BakeJob(QRunnable):
+    """``expr -> GLSL -> qsb`` off the GUI thread (qsb is a subprocess)."""
+
+    def __init__(
+        self,
+        signals: _BakeSignals,
+        generation: int,
+        vertex_source: str,
+        fragment_source: str,
+    ) -> None:
+        super().__init__()
+        self._signals = signals
+        self._generation = generation
+        self._vertex_source = vertex_source
+        self._fragment_source = fragment_source
+
+    def run(self) -> None:  # noqa: D401 - QRunnable API
+        try:
+            vertex = bake(self._vertex_source, "vert")
+            fragment = bake(self._fragment_source, "frag")
+        except Exception as exc:  # noqa: BLE001 - reported to the curve, never swallowed
+            self._signals.done.emit(self._generation, exc)
+        else:
+            self._signals.done.emit(self._generation, (vertex, fragment))
+
 
 #: First colour of the default cycle (matplotlib's "tab10" blue, as in its default style).
 DEFAULT_COLOR = "#1f77b4"
@@ -95,7 +131,12 @@ class Curve(QObject):
     #: Forced to the level-set template (see ``ImplicitCurve``).
     _force_implicit = False
 
+    #: Bake expression changes on the thread pool (the initial construction always bakes
+    #: synchronously, so a curve has shaders the moment it exists). Tests turn this off.
+    bake_async: bool = True
+
     expressionChanged = Signal()
+    exprChanged = Signal()
     styleChanged = Signal()
     visibleChanged = Signal()
     labelChanged = Signal()
@@ -121,19 +162,30 @@ class Curve(QObject):
         self._error = ""
         self._vertex = QUrl()
         self._fragment = QUrl()
-        self._set_expression(expression)
+        self._generation = 0
+        self._pending_expr: sp.Expr | None = None
+        # Not parented: a job may outlive the curve; the signal object must stay valid for the
+        # queued connection (Qt disconnects the receiver when the curve is destroyed).
+        self._bake_signals = _BakeSignals()
+        self._bake_signals.done.connect(self._on_bake_done, Qt.ConnectionType.QueuedConnection)
+        self._set_expression(expression, synchronous=True)
 
     # ---------------------------------------------------------------- Expression
     def _get_expression(self) -> str:
         return self._expression
 
-    def _set_expression(self, source: str | sp.Expr) -> None:
+    def _set_expression(self, source: str | sp.Expr, *, synchronous: bool = False) -> None:
         """Set the expression from a string (parsed here, once) or from a sympy expression.
 
         The canonical **string** is what identifies the expression — ``sp.sin(x)`` and
         ``"sin(x)"`` are the same, and re-setting either is free — while the parsed
         ``sp.Expr`` is cached for the bake and for the matplotlib hand-off, so neither ever
         stringifies and re-parses again.
+
+        Parsing and source generation are synchronous (microseconds); the qsb subprocess runs
+        on the thread pool for later assignments. ``expr`` keeps the last successfully baked
+        expression until the new shaders arrive, so a failed or pending edit never draws an
+        incomplete curve.
         """
         if isinstance(source, str):
             canonical = source
@@ -141,27 +193,25 @@ class Curve(QObject):
             canonical = str(source)
         if canonical == self._expression:
             return
+        self._generation += 1
+        generation = self._generation
+        self._pending_expr = None
         if isinstance(source, sp.Basic):          # already an expression: use it as it is
             expr: sp.Expr = source
         else:
             try:
                 expr = sp.sympify(source, locals={"x": self._symbol, "y": sp.Symbol("y")})
             except Exception as exc:
-                # Keep the last parsed expression: the shaders stay, `expression` is what was
+                # Keep the last drawn expression: the shaders stay, `expression` is what was
                 # typed and `error` says why.
                 self._expression = str(canonical)
                 self._error = f"{type(exc).__name__}: {exc}"
                 self.expressionChanged.emit()
                 self.errorChanged.emit()
                 return
-        previous = self._expr
         self._expression = str(canonical)
-        self._expr = expr
         self.expressionChanged.emit()
-        if not self._compile(expr):
-            # `expression` stays what was set (the text field shows it), `expr` stays what is
-            # drawn — the same rule as the unparsable string above.
-            self._expr = previous
+        self._start_bake(generation, expr, synchronous=synchronous)
 
     # Annotate the value type (PySide6 idiom): Property is a descriptor, so without the
     # annotation a type checker only sees the Property object and flags every read and write.
@@ -176,7 +226,7 @@ class Curve(QObject):
     #: The parsed expression being drawn (read-only): the object form the setter accepts, and
     #: the one the bake and the matplotlib hand-off use. It follows the last expression that
     #: compiled, so `expression` can show a failing edit while `expr` keeps the drawn curve.
-    expr: sp.Expr = Property("QVariant", _get_expr, notify=expressionChanged)
+    expr: sp.Expr = Property("QVariant", _get_expr, notify=exprChanged)
 
     # ------------------------------------------------------------------ Style
     def _get_color(self) -> QColor:
@@ -254,7 +304,7 @@ class Curve(QObject):
 
     def _sources(self, expr: sp.Expr) -> tuple[str, str]:
         """The shader sources for this expression; anything unrenderable raises ``ValueError``
-        (which ``_compile`` turns into ``error``, keeping the last working shaders)."""
+        (which ``_start_bake`` turns into ``error``, keeping the last working shaders)."""
         names = {symbol.name for symbol in expr.free_symbols}
         if names - {"x", "y"}:
             raise ValueError(
@@ -264,23 +314,56 @@ class Curve(QObject):
         return implicit_shader_sources(expr) if (self._force_implicit or "y" in names) \
             else shader_sources(expr)
 
-    def _compile(self, expr: sp.Expr) -> bool:
-        """expr -> GLSL -> .qsb; on failure keep the last working shaders, write the reason into
-        ``error`` and return False. The expression is parsed by the setter, never here."""
+    def _start_bake(self, generation: int, expr: sp.Expr, *, synchronous: bool) -> None:
+        """Generate the GLSL now and bake it on the pool unless this curve is synchronous.
+
+        Source generation is cheap and stays on the caller's thread; only the qsb subprocess
+        (the ~126 ms cache miss) leaves it.
+        """
         try:
-            vert_src, frag_src = self._sources(expr)
-            vertex = bake(vert_src, "vert")
-            fragment = bake(frag_src, "frag")
-        except Exception as exc:  # noqa: BLE001 — expression or bake can fail; both reach the UI
+            vertex_source, fragment_source = self._sources(expr)
+        except Exception as exc:  # noqa: BLE001 - reported through error, previous shaders stay
             self._error = f"{type(exc).__name__}: {exc}"
             self.errorChanged.emit()
-            return False
+            return
+        self._pending_expr = expr
+        if synchronous or not self.bake_async or QCoreApplication.instance() is None:
+            self._run_bake(generation, vertex_source, fragment_source)
+            return
+        QThreadPool.globalInstance().start(
+            _BakeJob(self._bake_signals, generation, vertex_source, fragment_source)
+        )
+
+    def _run_bake(self, generation: int, vertex_source: str, fragment_source: str) -> None:
+        """The synchronous path (construction, headless scripts, tests)."""
+        try:
+            vertex = bake(vertex_source, "vert")
+            fragment = bake(fragment_source, "frag")
+        except Exception as exc:  # noqa: BLE001
+            self._on_bake_done(generation, exc)
+        else:
+            self._on_bake_done(generation, (vertex, fragment))
+
+    def _on_bake_done(self, generation: int, result: object) -> None:
+        """Apply a bake result unless a newer assignment superseded it."""
+        if generation != self._generation:
+            return
+        expr = self._pending_expr
+        self._pending_expr = None
+        if isinstance(result, Exception):
+            self._error = f"{type(result).__name__}: {result}"
+            self.errorChanged.emit()
+            return
+        if expr is None:
+            return
+        vertex, fragment = result           # type: ignore[misc]
+        self._expr = expr
         self._error = ""
         self._vertex = QUrl.fromLocalFile(str(vertex))
         self._fragment = QUrl.fromLocalFile(str(fragment))
+        self.exprChanged.emit()
         self.errorChanged.emit()
         self.shadersChanged.emit()
-        return True
 
 
 class ImplicitCurve(Curve):

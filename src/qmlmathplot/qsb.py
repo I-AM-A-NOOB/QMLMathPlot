@@ -77,20 +77,35 @@ def bake(source: str, stage: str, cache_dir: Path | str | None = None) -> Path:
     if out_path.exists():
         return out_path
 
-    src_path = out_dir / f"{stage}-{key}.{stage}"
-    src_path.write_text(source, encoding="utf-8")
-    tmp_out = out_path.with_suffix(".qsb.tmp")
-    # --qt6 == --glsl "100 es,120,150" --hlsl 50 --msl 12, the standard target set for Qt Quick
-    # materials
-    proc = subprocess.run(  # noqa: S603
-        [str(qsb_binary()), "--qt6", "-o", str(tmp_out), str(src_path)],
-        capture_output=True,
-        text=True,
-        check=False,
+    # Unique source/output names: two processes (or two curves on the pool) may bake the same
+    # source at the same time; a shared fixed temp name would let one truncate the other.
+    src_fd, src_name = tempfile.mkstemp(
+        prefix=f"{stage}-{key}-", suffix=f".{stage}", dir=out_dir
     )
-    if proc.returncode != 0 or not tmp_out.exists():
-        raise RuntimeError(
-            f"qsb bake failed ({stage}, rc={proc.returncode}):\n{proc.stdout}\n{proc.stderr}"
+    out_fd, tmp_name = tempfile.mkstemp(
+        prefix=f"{stage}-{key}-", suffix=".qsb.tmp", dir=out_dir
+    )
+    os.close(out_fd)
+    src_path = Path(src_name)
+    tmp_out = Path(tmp_name)
+    tmp_out.unlink(missing_ok=True)         # qsb creates the output itself
+    try:
+        with os.fdopen(src_fd, "w", encoding="utf-8") as source_file:
+            source_file.write(source)
+        # --qt6 == --glsl "100 es,120,150" --hlsl 50 --msl 12, the standard target set for Qt
+        # Quick materials
+        proc = subprocess.run(  # noqa: S603
+            [str(qsb_binary()), "--qt6", "-o", str(tmp_out), str(src_path)],
+            capture_output=True,
+            text=True,
+            check=False,
         )
-    tmp_out.replace(out_path)  # atomic replace: no half-written file on interrupt/concurrency
+        if proc.returncode != 0 or not tmp_out.exists():
+            raise RuntimeError(
+                f"qsb bake failed ({stage}, rc={proc.returncode}):\n{proc.stdout}\n{proc.stderr}"
+            )
+        tmp_out.replace(out_path)  # atomic: no half-written cache entry on interrupt
+    finally:
+        src_path.unlink(missing_ok=True)
+        tmp_out.unlink(missing_ok=True)
     return out_path

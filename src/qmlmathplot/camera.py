@@ -141,6 +141,11 @@ class Camera(QObject):
         self._zoom_step = 0.9
         self._pan_enabled = True
         self._zoom_enabled = True
+        self._ticks_key: tuple[float, float, float, float] | None = None
+        self._ticks_x: list[tuple[float, str]] = []
+        self._ticks_y: list[tuple[float, str]] = []
+        self._ticks_x_qml: list[list[float | str]] = []
+        self._ticks_y_qml: list[list[float | str]] = []
         self._keyboard_enabled = True
         self._key_pan_step = 0.1
         self._animation_duration = 160
@@ -283,16 +288,30 @@ class Camera(QObject):
     viewport: QVector2D = Property("QVariant", _get_viewport, notify=viewChanged)
 
     # --------------------------------------------------------------- ticks
+    def _ensure_ticks(self) -> None:
+        """Recompute both axes once per distinct view; the two properties share the result."""
+        xlim, ylim = self._get_xlim(), self._get_ylim()
+        key = (xlim.x(), xlim.y(), ylim.x(), ylim.y())
+        if key == self._ticks_key:
+            return
+        self._ticks_key = key
+        self._ticks_x = nice_ticks(xlim.x(), xlim.y())
+        self._ticks_y = nice_ticks(ylim.x(), ylim.y())
+        self._ticks_x_qml = _qml_pairs(self._ticks_x)
+        self._ticks_y_qml = _qml_pairs(self._ticks_y)
+
     def tick_values(self) -> tuple[list[tuple[float, str]], list[tuple[float, str]]]:
         """Ticks for both axes of the visible range, as ``(value, label)`` pairs."""
-        xlim, ylim = self._get_xlim(), self._get_ylim()
-        return nice_ticks(xlim.x(), xlim.y()), nice_ticks(ylim.x(), ylim.y())
+        self._ensure_ticks()
+        return self._ticks_x, self._ticks_y
 
     def _get_ticks_x(self) -> list[list[float | str]]:
-        return _qml_pairs(self.tick_values()[0])
+        self._ensure_ticks()
+        return self._ticks_x_qml
 
     def _get_ticks_y(self) -> list[list[float | str]]:
-        return _qml_pairs(self.tick_values()[1])
+        self._ensure_ticks()
+        return self._ticks_y_qml
 
     ticks_x: list[tuple[float, str]] = Property("QVariant", _get_ticks_x, notify=ticksChanged)
     ticks_y: list[tuple[float, str]] = Property("QVariant", _get_ticks_y, notify=ticksChanged)
@@ -571,8 +590,16 @@ class Camera(QObject):
         self._animate_to((bx - dx * bsx, by + dy * bsy, bsx, bsy), duration)
 
     def _view_changed(self) -> None:
+        previous_key = self._ticks_key
+        previous_x, previous_y = self._ticks_x, self._ticks_y
+        self._ensure_ticks()
         self.viewChanged.emit()
-        self.ticksChanged.emit()
+        # During a pan the tick labels usually stay the same; re-emitting TicksChanged would
+        # rebuild QML's tick Repeaters every frame for identical rows.
+        if (previous_key is None
+                or previous_x != self._ticks_x
+                or previous_y != self._ticks_y):
+            self.ticksChanged.emit()
 
     @Slot(float, float, float, float)
     def set_view(self, centre_x: float, centre_y: float, scale_x: float, scale_y: float) -> None:

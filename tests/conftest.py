@@ -14,6 +14,13 @@ import pytest
 from PySide6.QtWidgets import QApplication
 
 from qmlmathplot import register_qml_types
+from qmlmathplot.curve import Curve
+
+
+@pytest.fixture(autouse=True)
+def _synchronous_bakes(monkeypatch):
+    """Deterministic tests: qsb runs inline. The async path has its own test."""
+    monkeypatch.setattr(Curve, "bake_async", False)
 
 
 @pytest.fixture(scope="session")

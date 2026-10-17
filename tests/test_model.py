@@ -360,6 +360,33 @@ def test_xlim_and_ylim_move_the_camera_and_keep_the_ratio():
     assert (camera.xlim.x(), camera.xlim.y()) == pytest.approx((-1.0, 1.0))
 
 
+def test_ticks_are_computed_once_and_only_change_with_the_tick_set():
+    """A small pan keeps the same nice numbers: the cache returns the same lists and
+    ``ticksChanged`` stays quiet (QML would otherwise rebuild both Repeaters per frame)."""
+    camera = Camera()
+    _size(camera)
+    camera.xlim = (-7.0, 7.0)                                 # ticks sit inside the edges,
+    camera.ylim = (-3.0, 3.0)                                 # so a small pan keeps them
+    ticks_x, ticks_y = camera.tick_values()
+    assert camera.tick_values()[0] is ticks_x                 # one computation, shared
+    assert camera.tick_values()[1] is ticks_y
+
+    seen = 0
+
+    def note() -> None:
+        nonlocal seen
+        seen += 1
+
+    camera.ticksChanged.connect(note)
+    camera.pan_pixels(1.0, 0.0)                               # one pixel: same labels
+    assert camera.tick_values() == (ticks_x, ticks_y)
+    assert seen == 0, "an unchanged tick set must not rebuild the tick models"
+
+    camera.pan_pixels(900.0, 0.0)                             # a whole viewport: new labels
+    assert seen == 1
+    assert camera.tick_values() != (ticks_x, ticks_y)
+
+
 def test_reset_returns_to_the_home_view_and_keeps_the_aspect():
     camera = Camera()
     _size(camera)
