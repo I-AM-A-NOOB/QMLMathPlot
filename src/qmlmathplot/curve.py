@@ -80,19 +80,36 @@ def _color(value: object) -> QColor:
     return QColor(value) if not isinstance(value, QColor) else QColor(value)
 
 
-def parsed(value: str | sp.Expr) -> tuple[str, sp.Expr]:
+def _parse(value: str | sp.Basic) -> tuple[str, sp.Expr, bool]:
+    """Canonical text, normalized expression and whether the input was an equation.
+
+    ``Eq(lhs, rhs)`` becomes the level set ``lhs - rhs = 0`` and is flagged as implicit even
+    when only ``x`` is free (``Eq(x**2, 1)`` is two vertical lines, not ``y = x**2 - 1``).
+    """
+    if isinstance(value, sp.Basic):
+        text = str(value)
+        expr = value
+    else:
+        text = str(value)
+        expr = sp.sympify(value, locals={"x": sp.Symbol("x"), "y": sp.Symbol("y")})
+    if isinstance(expr, sp.Eq):
+        return text, expr.lhs - expr.rhs, True
+    return text, expr, False
+
+
+def parsed(value: str | sp.Basic) -> tuple[str, sp.Expr]:
     """The canonical string and the parsed expression of a curve input.
 
     A string is parsed here, once; a sympy expression is used as it is (no ``Expr -> str ->
-    Expr`` round trip). The canonical string is what identifies the expression.
+    Expr`` round trip). ``Eq(lhs, rhs)`` is normalized to ``lhs - rhs``. The canonical string
+    is what identifies the expression.
     """
-    if isinstance(value, sp.Basic):
-        return str(value), value
-    return str(value), sp.sympify(value, locals={"x": sp.Symbol("x"), "y": sp.Symbol("y")})
+    text, expr, _ = _parse(value)
+    return text, expr
 
 
 def curve_for(
-    expression: str | sp.Expr,
+    expression: str | sp.Basic,
     *,
     implicit: bool | None = None,
     color: object = None,
@@ -106,17 +123,25 @@ def curve_for(
     is an implicit curve (the level set ``F(x, y) = 0``), and anything else raises — a parameter
     must be substituted before it is plotted, and silently evaluating it as a pixel coordinate is
     exactly the trap this avoids. ``implicit=True`` picks the level-set artist regardless of the
-    symbols (``add_implicit``).
+    symbols (``add_implicit``). A sympy ``Eq`` is always a level set (``lhs - rhs = 0``), even
+    when only ``x`` is free; it keeps the ordinary ``Curve`` class so a later assignment can
+    re-route it.
     """
-    text, expr = parsed(expression)
+    text, expr, is_equation = _parse(expression)
     names = {symbol.name for symbol in expr.free_symbols}
     if names - {"x", "y"}:
         raise ValueError(
             f"{sorted(names - {'x', 'y'})} must be substituted first: only x (or x and y) may "
             f"be free, got {text!r}"
         )
-    cls: type[Curve] = ImplicitCurve if (implicit or "y" in names) else Curve
-    return cls(expr, color=color, line_width=line_width, label=label, parent=parent)
+    if implicit:
+        cls: type[Curve] = ImplicitCurve
+    elif is_equation:
+        cls = Curve
+    else:
+        cls = ImplicitCurve if "y" in names else Curve
+    source = expression if is_equation else expr
+    return cls(source, color=color, line_width=line_width, label=label, parent=parent)
 
 
 class Curve(QObject):
@@ -125,7 +150,8 @@ class Curve(QObject):
     The fragment shader follows the expression: ``y = f(x)`` while only ``x`` (or nothing) is
     free, the level set ``F(x, y) = 0`` as soon as ``y`` appears — so ``add_curve`` and assigning
     to ``expression`` both route themselves, and a text field can turn a function into a level
-    set. ``ImplicitCurve`` forces the level-set template regardless of the symbols.
+    set. A sympy ``Eq(lhs, rhs)`` is always a level set (``lhs - rhs = 0``), even when only ``x``
+    is free. ``ImplicitCurve`` forces the level-set template regardless of the symbols.
     """
 
     #: Forced to the level-set template (see ``ImplicitCurve``).
@@ -145,7 +171,7 @@ class Curve(QObject):
 
     def __init__(
         self,
-        expression: str | sp.Expr = "sin(x)",
+        expression: str | sp.Basic = "sin(x)",
         color: str | QColor = DEFAULT_COLOR,
         line_width: float = 1.5,
         label: str = "",
@@ -164,6 +190,7 @@ class Curve(QObject):
         self._fragment = QUrl()
         self._generation = 0
         self._pending_expr: sp.Expr | None = None
+        self._pending_implicit: bool | None = None
         # Not parented: a job may outlive the curve; the signal object must stay valid for the
         # queued connection (Qt disconnects the receiver when the curve is destroyed).
         self._bake_signals = _BakeSignals()
@@ -174,51 +201,50 @@ class Curve(QObject):
     def _get_expression(self) -> str:
         return self._expression
 
-    def _set_expression(self, source: str | sp.Expr, *, synchronous: bool = False) -> None:
+    def _set_expression(self, source: str | sp.Basic, *, synchronous: bool = False) -> None:
         """Set the expression from a string (parsed here, once) or from a sympy expression.
 
         The canonical **string** is what identifies the expression — ``sp.sin(x)`` and
         ``"sin(x)"`` are the same, and re-setting either is free — while the parsed
         ``sp.Expr`` is cached for the bake and for the matplotlib hand-off, so neither ever
-        stringifies and re-parses again.
+        stringifies and re-parses again. ``Eq(lhs, rhs)`` is normalized to ``lhs - rhs`` and
+        drawn as the level set, even when only ``x`` is free.
 
         Parsing and source generation are synchronous (microseconds); the qsb subprocess runs
         on the thread pool for later assignments. ``expr`` keeps the last successfully baked
         expression until the new shaders arrive, so a failed or pending edit never draws an
         incomplete curve.
         """
-        if isinstance(source, str):
-            canonical = source
-        else:
-            canonical = str(source)
+        canonical = source if isinstance(source, str) else str(source)
         if canonical == self._expression:
             return
         self._generation += 1
         generation = self._generation
         self._pending_expr = None
-        if isinstance(source, sp.Basic):          # already an expression: use it as it is
-            expr: sp.Expr = source
-        else:
-            try:
-                expr = sp.sympify(source, locals={"x": self._symbol, "y": sp.Symbol("y")})
-            except Exception as exc:
-                # Keep the last drawn expression: the shaders stay, `expression` is what was
-                # typed and `error` says why.
-                self._expression = str(canonical)
-                self._error = f"{type(exc).__name__}: {exc}"
-                self.expressionChanged.emit()
-                self.errorChanged.emit()
-                return
+        self._pending_implicit = None
+        try:
+            _, expr, is_equation = _parse(source)
+        except Exception as exc:
+            # Keep the last drawn expression: the shaders stay, `expression` is what was
+            # typed and `error` says why.
+            self._expression = str(canonical)
+            self._error = f"{type(exc).__name__}: {exc}"
+            self.expressionChanged.emit()
+            self.errorChanged.emit()
+            return
+        forced_implicit = type(self)._force_implicit or is_equation
         self._expression = str(canonical)
         self.expressionChanged.emit()
-        self._start_bake(generation, expr, synchronous=synchronous)
+        self._start_bake(
+            generation, expr, synchronous=synchronous, force_implicit=forced_implicit
+        )
 
     # Annotate the value type (PySide6 idiom): Property is a descriptor, so without the
     # annotation a type checker only sees the Property object and flags every read and write.
     # Declared "QVariant" so an ``sp.Expr`` reaches the setter unconverted; the getter is always
     # the canonical string (QML, a project file and the text field all want one).
-    expression: str | sp.Expr = Property("QVariant", _get_expression, _set_expression,
-                                         notify=expressionChanged)
+    expression: str | sp.Basic = Property("QVariant", _get_expression, _set_expression,
+                                          notify=expressionChanged)
 
     def _get_expr(self) -> sp.Expr:
         return self._expr
@@ -302,7 +328,9 @@ class Curve(QObject):
         """
         return self._force_implicit or "y" in {symbol.name for symbol in self._expr.free_symbols}
 
-    def _sources(self, expr: sp.Expr) -> tuple[str, str]:
+    def _sources(
+        self, expr: sp.Expr, *, force_implicit: bool | None = None
+    ) -> tuple[str, str]:
         """The shader sources for this expression; anything unrenderable raises ``ValueError``
         (which ``_start_bake`` turns into ``error``, keeping the last working shaders)."""
         names = {symbol.name for symbol in expr.free_symbols}
@@ -311,22 +339,33 @@ class Curve(QObject):
                 f"only x (or x and y) may be free, got {sorted(names)}: substitute parameters "
                 "first"
             )
-        return implicit_shader_sources(expr) if (self._force_implicit or "y" in names) \
+        implicit = self._force_implicit if force_implicit is None else force_implicit
+        return implicit_shader_sources(expr) if (implicit or "y" in names) \
             else shader_sources(expr)
 
-    def _start_bake(self, generation: int, expr: sp.Expr, *, synchronous: bool) -> None:
+    def _start_bake(
+        self,
+        generation: int,
+        expr: sp.Expr,
+        *,
+        synchronous: bool,
+        force_implicit: bool | None = None,
+    ) -> None:
         """Generate the GLSL now and bake it on the pool unless this curve is synchronous.
 
         Source generation is cheap and stays on the caller's thread; only the qsb subprocess
         (the ~126 ms cache miss) leaves it.
         """
         try:
-            vertex_source, fragment_source = self._sources(expr)
+            vertex_source, fragment_source = self._sources(
+                expr, force_implicit=force_implicit
+            )
         except Exception as exc:  # noqa: BLE001 - reported through error, previous shaders stay
             self._error = f"{type(exc).__name__}: {exc}"
             self.errorChanged.emit()
             return
         self._pending_expr = expr
+        self._pending_implicit = force_implicit
         if synchronous or not self.bake_async or QCoreApplication.instance() is None:
             self._run_bake(generation, vertex_source, fragment_source)
             return
@@ -349,7 +388,9 @@ class Curve(QObject):
         if generation != self._generation:
             return
         expr = self._pending_expr
+        implicit = self._pending_implicit
         self._pending_expr = None
+        self._pending_implicit = None
         if isinstance(result, Exception):
             self._error = f"{type(result).__name__}: {result}"
             self.errorChanged.emit()
@@ -358,6 +399,8 @@ class Curve(QObject):
             return
         vertex, fragment = result           # type: ignore[misc]
         self._expr = expr
+        if implicit is not None:
+            self._force_implicit = bool(implicit)
         self._error = ""
         self._vertex = QUrl.fromLocalFile(str(vertex))
         self._fragment = QUrl.fromLocalFile(str(fragment))
@@ -475,7 +518,7 @@ class CurveListModel(QAbstractListModel):
     @Slot("QVariant", result=QObject)
     def add_curve(
         self,
-        expression: str | sp.Expr,
+        expression: str | sp.Basic,
         color: object = None,
         line_width: object = None,
         label: str = "",
@@ -491,7 +534,7 @@ class CurveListModel(QAbstractListModel):
     @Slot("QVariant", result=QObject)
     def add_implicit(
         self,
-        expression: str | sp.Expr,
+        expression: str | sp.Basic,
         color: object = None,
         line_width: object = None,
         label: str = "",

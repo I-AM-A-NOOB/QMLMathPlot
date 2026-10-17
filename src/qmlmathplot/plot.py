@@ -152,7 +152,7 @@ class Plot(QObject):
     @Slot("QVariant", result=QObject)
     def add_curve(
         self,
-        expression: "str | sp.Expr",
+        expression: "str | sp.Basic",
         color: object = None,
         line_width: object = None,
         label: str = "",
@@ -162,7 +162,8 @@ class Plot(QObject):
         The artist follows the expression's free symbols: ``x`` (or none) is a 1-D curve
         ``y = f(x)``, ``x`` **and** ``y`` is an implicit curve — the level set ``F(x, y) = 0``,
         so ``add_curve("x**2 + y**2 - 1")`` is a circle — and any other free symbol raises
-        ``ValueError`` (substitute parameters first).
+        ``ValueError`` (substitute parameters first). A sympy ``Eq(lhs, rhs)`` is normalized to
+        ``lhs - rhs`` and treated as a level set even when only ``x`` is free.
         """
         return self._curves.add_curve(expression, color, line_width, label)
 
@@ -170,13 +171,14 @@ class Plot(QObject):
     @Slot("QVariant", result=QObject)
     def add_implicit(
         self,
-        expression: str | sp.Expr,
+        expression: str | sp.Basic,
         color: object = None,
         line_width: object = None,
         label: str = "",
     ) -> Curve:
         """Add an implicit curve — the level set ``F(x, y) = 0`` — explicitly, whatever the
-        expression's free symbols (``x`` alone gives vertical lines).
+        expression's free symbols (``x`` alone gives vertical lines; ``Eq(lhs, rhs)`` is
+        normalized to ``lhs - rhs``).
 
         Drawn per pixel like the other artists, with no sampling: ``|F|`` divided by ``|grad F|``
         in pixels is the distance to the level set. Smooth, single-sheet level sets only for now

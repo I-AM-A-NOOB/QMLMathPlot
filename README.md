@@ -226,9 +226,16 @@ and `add_implicit` asks for the level-set artist explicitly — also for a funct
 which is a pair of vertical lines. Only a *third* free symbol is refused: substitute parameters
 first.
 
+A sympy `Eq(lhs, rhs)` is always a level set: it is normalized to `lhs - rhs = 0`, and an
+equation with only `x` still means the vertical lines where it holds (`Eq(x**2, 1)`), not
+`y = x**2 - 1`. The canonical `expression` keeps the `Eq(...)` text and `expr` is the normalized
+difference.
+
 ```python
+x, y = sp.symbols("x y")
 plot.add_curve("x**2 + y**2 - 1")        # a circle: {x, y} routes to the level-set artist
-plot.add_implicit("x*y - 1")             # the same artist, asked for by name
+plot.add_curve(sp.Eq(x**2 + y**2, 1))    # the same circle in equation form
+plot.add_implicit(sp.Eq(x, sp.sin(y)))   # asked for by name, equation form
 plot.curves.at(0).expression = "x**2 + y**2 - 4"   # re-routes the curve that is already there
 plot.add_curve("a*sin(x)")               # ValueError: substitute `a` first
 ```

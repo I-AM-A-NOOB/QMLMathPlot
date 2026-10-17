@@ -181,6 +181,13 @@ are the explicit equivalents; unrelated files in the directory are never touched
 `add_implicit(...)` forces the level-set artist. Assignment re-routes the same curve, so the
 explorers' text field and `MathPlotWidget.expression` turn `sin(x)` into a circle in place.
 
+A sympy `Eq(lhs, rhs)` is normalized to `lhs - rhs` and treated as a level set **regardless of
+its free symbols**: `Eq(x**2, 1)` is the pair of vertical lines, not the function
+`y = x**2 - 1`. The canonical `expression` string keeps the `Eq(...)` form; `expr` is the
+normalized difference used by the shader and the hand-off. `add_curve(Eq(...))` keeps the
+ordinary `Curve` class so a later assignment can re-route it; `add_implicit(Eq(...))` is an
+`ImplicitCurve`.
+
 The renderer is unusually well suited to this: the coverage is the *same* idea as the 1-D
 stroke, one dimension up.
 

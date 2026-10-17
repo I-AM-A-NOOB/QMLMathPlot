@@ -19,9 +19,7 @@ from PySide6.QtQuick import QQuickView
 from PySide6.QtTest import QTest
 
 from qmlmathplot import Plot, model, qml_component_path
-from qmlmathplot.curve import Curve, CurveListModel, ImplicitCurve    # ImplicitCurve is new:
-# `qmlmathplot/__init__.py` (owned by another workstream) does not re-export it yet, so the tests
-# — and the LSP the maintainer wants kept clean — reach it where it lives.
+from qmlmathplot.curve import Curve, CurveListModel, ImplicitCurve, parsed
 
 WIDTH, HEIGHT = 600, 600                 # square, so a circle is round
 SPAN = 4.0                               # world units across the view: [-2, 2] in both axes
@@ -40,6 +38,49 @@ def test_routing_follows_the_free_symbols() -> None:
     assert model_.add_curve("x**2 - 1").implicit is False  # only x: a 1-D curve
     assert model_.add_curve(sp.cos(sp.Symbol("x"))).implicit is False
     assert model_.add_curve(sp.Symbol("x") ** 2 + sp.Symbol("y") ** 2 - 1).implicit is True
+
+
+def test_eq_is_always_a_level_set() -> None:
+    """``Eq(lhs, rhs)`` means ``lhs - rhs = 0`` and is an implicit curve even when only x is
+    free (``Eq(x**2, 1)`` is two vertical lines, not ``y = x**2 - 1``)."""
+    x, y = sp.symbols("x y")
+    model_ = CurveListModel()
+    circle = model_.add_curve(sp.Eq(x**2 + y**2, 1))
+    assert type(circle) is Curve                 # an ordinary curve can re-route later
+    assert circle.implicit is True
+    assert circle.expr == x**2 + y**2 - 1
+    assert circle.expression == "Eq(x**2 + y**2, 1)"
+    assert not circle.error
+    assert circle.fragmentShader.toString().endswith(".qsb")
+
+    vertical = model_.add_curve(sp.Eq(x**2, 1))
+    assert vertical.implicit is True and type(vertical) is Curve
+    assert vertical.expr == x**2 - 1
+
+    forced = model_.add_implicit(sp.Eq(x**2 + y**2, 1))
+    assert type(forced) is ImplicitCurve and forced.implicit
+
+
+def test_assigning_an_eq_reroutes_and_can_reroute_back() -> None:
+    x, y = sp.symbols("x y")
+    model_ = CurveListModel()
+    curve = model_.add_curve("sin(x)")
+    one_d_shader = curve.fragmentShader
+    curve.expression = sp.Eq(x**2 + y**2, 1)
+    assert curve.implicit is True
+    assert curve.expr == x**2 + y**2 - 1
+    assert curve.expression.startswith("Eq(")
+    assert curve.fragmentShader != one_d_shader
+    curve.expression = "sin(x)"
+    assert curve.implicit is False
+    assert curve.fragmentShader == one_d_shader
+
+
+def test_eq_string_form_is_parsed() -> None:
+    parsed_text, parsed_expr = parsed("Eq(x**2 + y**2, 1)")
+    assert parsed_text == "Eq(x**2 + y**2, 1)"
+    x, y = sp.symbols("x y")
+    assert parsed_expr == x**2 + y**2 - 1
 
 
 def test_assigning_an_expression_reroutes_the_same_curve() -> None:
@@ -223,6 +264,24 @@ def _radial_width(image: QImage, degrees: float, radius: float) -> float:
                                round(centre_y - offset * math.sin(angle)))
     assert total > 0, f"no stroke along {degrees} degrees"
     return total * step
+
+
+@pytest.mark.gui
+def test_eq_circle_renders_like_the_difference_form(app: QGuiApplication) -> None:
+    x, y = sp.symbols("x y")
+    plot = Plot()
+    plot.grid = False
+    plot.ticks_visible = False
+    plot.line_width = 2.0
+    plot.add_curve(sp.Eq(x**2 + y**2, 1))
+    image = _render(plot, app)
+    centre_x, centre_y = image.width() // 2, image.height() // 2
+    radius = round(image.width() / 4)            # 1 world unit in the [-2, 2] view
+    assert _lit(image, centre_x + radius, centre_y), "the Eq circle's right crossing is missing"
+    assert _lit(image, centre_x, centre_y + radius), "the Eq circle's bottom crossing is missing"
+    assert not any(_lit(image, centre_x + dx, centre_y + dy)
+                   for dx in range(-4, 5) for dy in range(-4, 5)), \
+        "the middle must stay blank"
 
 
 @pytest.mark.gui

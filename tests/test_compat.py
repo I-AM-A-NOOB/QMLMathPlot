@@ -31,6 +31,15 @@ def _clear_pyplot():
     plt.close("all")
 
 
+def test_axes_plot_accepts_an_eq_level_set():
+    x, y = sp.symbols("x y")
+    figure = Figure()
+    curve = figure.gca().plot(sp.Eq(x**2 + y**2, 1))[0]
+    assert curve.implicit is True
+    assert curve.expr == x**2 + y**2 - 1
+    assert curve.expression == "Eq(x**2 + y**2, 1)"
+
+
 def test_axes_plot_takes_expressions_and_styles():
     figure = Figure()
     axes = figure.gca()
