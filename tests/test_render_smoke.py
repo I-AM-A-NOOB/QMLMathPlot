@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
 import pytest
 from PySide6.QtCore import QEventLoop, QTimer, QUrl
 from PySide6.QtGui import QGuiApplication, QImage
@@ -181,7 +182,8 @@ def test_undersampled_column_fills_envelope_within_pm1(app: QGuiApplication) -> 
     ratio = _center_column_ratio(image)
     assert 0.3 < ratio < 0.7, f"the singular column should fill the ±1 envelope (about half a column), got {ratio:.2f}"
     outside = _solid_outside_pm1(image)
-    assert outside < 50, f"sin(1/x) has range ±1, so there should be no solid pixels outside it, got {outside}"
+    # the ±1 band's own stroke extends half a line width outside it
+    assert outside < 90, f"sin(1/x) has range ±1, so there should be no solid pixels outside it, got {outside}"
     width = _solid_band_columns(image) / 1.5  # the grab carries devicePixelRatio
     assert 5 < width < 60, f"the solid band width should be a single-digit to a few dozen logical columns, got {width:.0f}"
 
@@ -189,6 +191,45 @@ def test_undersampled_column_fills_envelope_within_pm1(app: QGuiApplication) -> 
 def test_smooth_column_stays_thin(app: QGuiApplication) -> None:
     ratio = _center_column_ratio(_render(app, "sin(x)"))
     assert ratio < 0.05, f"sin(x) should still be a thin line at x=0, got {ratio:.2f}"
+
+
+@pytest.mark.gui
+def test_oscillation_transition_matches_the_true_range(app: QGuiApplication) -> None:
+    """The band is the interval image of the pixel's column, not a ±8-column sample window.
+
+    Measured before: at x=0.0844 the true range was [-0.968, -0.066] but the band painted
+    [-1.007, 0.944] (1.66 world units of overfill); the wide window mixed neighbouring
+    phases. The interval column is exact, so the overfill is only the stroke/AA radius.
+    """
+    image = _render(app, "sin(1/x)")
+    width, height = image.width(), image.height()
+    dx = 12.0 / 900.0                     # one logical column, the shader's dx
+    worst = 0.0
+    for x in range(0, width, 3):
+        world_x = -6.0 + (x + 0.5) / width * 12.0
+        if not 0.05 < abs(world_x) < 0.2:
+            continue
+        xs = np.linspace(world_x - dx / 2, world_x + dx / 2, 4001)
+        ys = np.sin(1.0 / xs)
+        rows = [y for y in range(height) if _lit(image, x, y)]
+        if not rows:
+            continue
+        low = 2.0 - (max(rows) + 0.5) / height * 4.0
+        high = 2.0 - (min(rows) + 0.5) / height * 4.0
+        worst = max(worst, low - float(ys.min()), float(ys.max()) - high)
+    assert worst < 0.05, f"the transition band overfills by {worst:.3f} world units"
+
+
+@pytest.mark.gui
+def test_fractional_power_draws_the_negative_branch(app: QGuiApplication) -> None:
+    """x**(1/3) is real for x<0; GLSL pow() is not, so the scalar branch prints _real_pow."""
+    image = _render(app, "x**(1/3)")
+    width, height = image.width(), image.height()
+    left = sum(_lit(image, x, y)
+               for x in range(0, width // 2 - 8, 2) for y in range(0, height, 2))
+    right = sum(_lit(image, x, y)
+                for x in range(width // 2 + 8, width, 2) for y in range(0, height, 2))
+    assert left > 100 and right > 100, f"one branch is missing: left={left}, right={right}"
 
 
 def _column_lit_at(image: QImage, x: int) -> int:
@@ -282,6 +323,22 @@ def test_steep_wall_at_large_y_is_drawn(app: QGuiApplication) -> None:
             f"{expr} at large |y|: tallest column only {tallest} of {height} rows"
 
 
+def test_steep_wall_keeps_its_line_width(app: QGuiApplication) -> None:
+    """A near-vertical wall must be as wide as any other stroke.
+
+    Its x span is narrower than a pixel, so the march's seed is a whole view up the arc and
+    the pixel's own column segment only fills one column. GeoGebra's vector stroke of the
+    per-column polyline widens it; the shader borrows that by stroking the two neighbouring
+    column segments (measured: 2 → 3 full columns for 1/x at y∈[50,60]).
+    """
+    for expression in ("1/x", "tan(x)"):
+        image, _ = _render_plot(app, expression, xlim=(-6.0, 6.0), ylim=(50.0, 60.0))
+        height = image.height()
+        total = sum(_column_lit_at(image, x) for x in range(image.width())) / height
+        assert total > 2.5, \
+            f"{expression} at large |y|: the wall is only {total:.2f} columns wide"
+
+
 def test_shifted_log_descent_wall_is_continuous(app: QGuiApplication) -> None:
     """log(1+x) deep in its descent: the wall must not break in the middle.
     Three separate holes used to open in it: (a) out-of-domain pixels just left of the
@@ -340,7 +397,8 @@ def test_out_of_domain_is_blank(app: QGuiApplication) -> None:
         assert left == 0, f"{expr} should have no pixels for x<0, got {left}"
     image = _render(app, "asin(x)")
     # left end x in [-6, -1]: everything with |x|>1 lies outside the domain
-    far = sum(_lit(image, x, y) for x in range(0, int((-1.0 + 6) / 12 * image.width()))
+    far = sum(_lit(image, x, y)
+              for x in range(0, int((-1.0 + 6) / 12 * image.width()) - 8)
               for y in range(0, image.height(), 5))
     assert far == 0, f"asin(x) should have no pixels for |x|>1, got {far}"
 

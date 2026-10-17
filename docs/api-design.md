@@ -200,17 +200,21 @@ everything around it — camera, themes, export, QML — is already artist-agnos
   crossed by several branches (`F = sin(1/(x*x + y*y))`), and the first-order `|F|/|grad F|`
   cannot see them; an honest answer needs several samples per pixel plus a spread test, i.e. a
   two-dimensional version of the 1-D criteria (a2)/(d).
-* **Domain and poles in 2-D** — the 1-D `DOM`/`POLE` machinery does not generalise directly: a
-  pole is now a curve rather than a point. What the implicit renderer has instead is the same
-  sympy domain predicate (guarded *before* evaluating, since `log(negative)` returns finite
-  garbage on this driver) plus a linearisation-validity probe: at a pole or a diverging
-  boundary `|grad F|` explodes and `|F|/|grad F|` degenerates towards zero, so the probe pair
-  at `p ± R·n̂` must change `F` by a first-order amount with a small second difference. Both are
-  symbol-free. The residue is honest: within a stroke radius of a domain boundary the probes
-  cross out of the domain, so that strip stays dark — the inverse form (see `x + 1 - E**y` for
-  `log(1+x)`) has no such boundary and renders the full curve.
-* **Cost** — three evaluations per pixel, cheap next to the 1-D stroke's 1 + 8 + 16, but a bigger
-  shader, since `Fx`/`Fy` are inlined the way `DF` is.
+* **Domain and poles in 2-D** — a pole is a curve rather than a point, and
+  `|F|/|grad F|` is a pseudo-zero at both a pole and a diverging domain boundary. The renderer
+  keeps the sympy domain predicate (guarded *before* evaluating, since `log(negative)` returns
+  finite garbage on this driver) and **certifies** the first-order distance with two damped
+  Newton steps onto the level set: only a converged residual
+  (`|F| <= 0.25·R·|grad F|`) and a bounded step are accepted, and the coverage uses the
+  distance to the projected point. Outside the domain the projection starts from the nearest
+  in-domain sample (8 directions × 3 radii), so the domain clips the *curve*, not the stroke —
+  the old dark boundary strip is gone, and a curve approaching the boundary keeps its width.
+  A `POLE(x, y)` factor (e.g. `cos(y)` for `tan(y)`) rejects a normal probe that crosses a
+  singularity, so the asymptote is not painted. Both mechanisms are symbol-free.
+* **Cost** — three evaluations per pixel, plus two Newton iterations (`F` + two partials each)
+  inside the stroke-width candidate band; the 8×3 outside search only runs for pixels outside
+  the domain. Still cheap next to the 1-D stroke's 1 + 8 + 16, but a bigger shader, since
+  `Fx`/`Fy` are inlined the way `DF` is.
 
 Against Matplotlib: it has no first-class implicit plotter — `contour(X, Y, Z, levels=[0])` on a
 sampled grid is the idiom, grid-resolution limited but **vector** output. Ours would be

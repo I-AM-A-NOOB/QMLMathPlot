@@ -160,17 +160,26 @@ plot.add_curve("a*sin(x)")               # ValueError: substitute `a` first
 ```
 
 The renderer is the same idea as the 1-D stroke, one dimension up: one evaluation of `F` and its
-two partials per pixel give the distance to the level set in *pixels*,
-`d = |F| / sqrt((Fx·dx)² + (Fy·dy)²)`, and the coverage is `clamp(lineWidth/2 + 0.5 - d, 0, 1)` —
-analytic antialiasing and a stroke width that does not depend on the angle, with no sampling grid
-(the unit circle measures the same 3 device pixels at 0°, 45°, 90° and 135° for `lineWidth=2` at
-DPR 1.5).
+two partials per pixel give a *candidate* distance to the level set in pixels,
+`d = |F| / sqrt((Fx·dx)² + (Fy·dy)²)`, and the coverage is
+`clamp(lineWidth/2 + 0.5 - d, 0, 1)` — analytic antialiasing and a stroke width that does not
+depend on the angle, with no sampling grid (the unit circle measures the same 3 device pixels at
+0°, 45°, 90° and 135° for `lineWidth=2` at DPR 1.5).
+
+That quotient is a pseudo-zero at a pole and at a diverging domain boundary, so it is
+**certified by projecting onto the level set**: two damped Newton steps from the pixel (or, for
+a pixel outside the domain, from the nearest in-domain sample), accepting only a converged
+residual (`|F| <= 0.25·R·|grad F|`) and using the distance to the projected point. The domain
+therefore clips the *curve*, not the stroke: the half of the band lying outside is painted, so
+`x-log(y-1)` does not thin out as it approaches `y = 1` and `y-log(x)` reaches `x = 0` in a deep
+view. A `POLE(x,y)` factor (e.g. `cos(y)` for `tan(y)`) rejects a normal probe that crosses a
+singularity, so `x-tan(y)` does not paint its asymptotes; far-out garbage lines are still
+refused (the stroke is allowed one radius outside the domain, no more).
 
 Known limit: **smooth, single-sheet level sets**. Thin features and several branches through one
-pixel (`sin(1/(x*x + y*y))`), and 2-D domains/poles, are not handled yet — the assessment is
-`docs/api-design.md` §6b; pixels where `F` is undefined are dropped. The matplotlib hand-off
-skips implicit curves (a level set has no polyline to sample), while the Qt export renders them
-like anything else.
+pixel (`sin(1/(x*x + y*y))`) are not handled yet — the assessment is `docs/api-design.md` §6b.
+The matplotlib hand-off skips implicit curves (a level set has no polyline to sample), while the
+Qt export renders them like anything else.
 
 ## The camera (centre, zoom, aspect)
 
@@ -330,7 +339,7 @@ a Python-side assignment updates the view with no call in between. `view.py`, `P
 | Entry | `src/qmlmathplot/app.py` | command line / standalone window (the `qmlmathplot` script, `examples/minimal.py`) |
 | Examples | `examples/` | `minimal.py` (minimal), `explorer_qtwidgets.py` (input box + widget coexistence), `explorer_qtquick.py` (Qt Quick) |
 
-## Algorithm (one mechanism: the march)
+## Algorithm (the march + the interval column)
 
 For every pixel the shader **walks the curve** instead of sampling a fixed x grid, and
 that is what removes the whole class of "sampling wins/loses against the geometry":
@@ -355,38 +364,48 @@ that is what removes the whole class of "sampling wins/loses against the geometr
    direction — the curve is monotonically away. A reversal resets the count (it may well
    come back). This bounds a steep monotone branch (`log`'s descent) without any
    viewport-relative gap.
-5. **Envelope band** for the columns the march cannot resolve, each trigger tapering with
-   its count: the step budget ran out (sustained structure — `sin(1/x)` near its
-   singularity), the path reversed on itself twice inside the window (a sub-stroke
-   oscillation), it kept missing its own 1-px tangent prediction (aliasing), or a
-   **fixed-x column probe** found structure below the pair spacing (a midpoint outside its
-   pair's [min,max] — a pole lands in exactly one pair, which is why the trigger needs
-   two). The column probe is what sees a sub-column oscillation: along the arc it is
-   *resolved* — the march follows it faithfully for millions of pixels without ever
-   turning. The fill's edges come from a wider ±8-column, 16-point window, and the fill is
-   **gated by the violation count** (a pole or jump column's envelope brackets the whole
-   viewport without taking those values; a genuinely oversampled oscillation violates most
-   of its pairs) — the old 32×-viewport gap, without recognising the pole, and unlike a
-   pixel-unit gap it does not drift with zoom.
+5. **Interval column band** — GeoGebra's column idea, on the GPU. The whole expression is
+   also evaluated in interval arithmetic over the pixel's column (generated from sympy in
+   `interval.py`, compiled to the GLSL `IVal FI(xlo, xhi)`): a conservative y-enclosure with
+   topology **connected / two rays around a gap / whole / empty**. The band is that
+   enclosure plus a half-stroke feather. There is no ±8-column window, no violation-count
+   gate and no chord-stroke for supported expressions:
+   - `sin(1/x)`'s transition columns get the exact lobe (measured overfill: 1.66 world
+     units before, 0.0099 after);
+   - `tan`'s pole column is a gap, an extreme zoom-out is `whole` (the screen fills, as in
+     GeoGebra);
+   - `log`'s boundary is `[-∞, log h]` — the boundary ray is gone for supported
+     expressions;
+   - `x**(1/3)` uses the real odd root (and the scalar `F` prints `_real_pow`).
+   A wide finite enclosure is checked against the column's own samples for the interval
+   **dependency** artifact (a dependent quotient such as `x/sqrt(x**2)` is left to the
+   march). The band itself is always the pixel's own column.
 
-5. **Chord-stroke from the column probe** for the columns the march provably cannot
-   serve — a steep monotone wall (`1/x`/`tan(x)` at large |y|) whose pixel foot is a
-   whole view up the arc. A probe pair whose midpoint lands strictly inside its
-   [min,max] is a trustworthy chord (the connected curve passes through the values in
-   between; a pole or jump pair fails the midpoint test), so those chords are stroked
-   with the same coverage ramp and weight the band fill. This is the old fixed-x
-   renderer's long-chord coverage minus its connector, and the 1-px probe spacing is
-   load-bearing: a slope-adaptive spacing hugs the column's own value and brackets
-   nothing.
+6. **Column polyline, stroked — GeoGebra's sampling on the GPU.** GeoGebra samples one
+   interval per column and strokes the polyline through the samples with the vector line
+   width. A pixel's own column is at its own x (distance 0), so the shader evaluates the
+   **neighbouring** columns (`x ± dx`) too. For a finite monotone column it joins their
+   interval ranges with **diagonal chords** (previous→current, current→next) and strokes
+   the chords; that is the smooth stroke on a steep `tan`/`log` branch (the old vertical
+   column rectangles produced 1-column staircases, visible as comb edges). For a **diverging**
+   column (an infinite interval bound: `log`'s boundary, `1/x²`) it strokes the
+   **vertical column segments** instead. Measured: `1/x`/`tan` in a y∈[50,60] view are **3
+   full columns** (2 before), `log(x)`'s descent measures **3.00 device px at every sampled
+   row**, and a monotone `k·x` keeps one width. The band is zeroed for finite monotone
+   columns (those pixels are the chord/march) and kept for oscillatory ones, where it is the
+   exact column envelope. The march supplies the smooth curve's perpendicular stroke; the
+   gate (`x ± R` enclosure) admits it.
 
-`DOM` (domain: denominator ≠ 0, `log` argument > 0, `sqrt` ≥ 0, `asin/acos` ∈ [−1,1],
-NaN/inf) is unchanged, and the slowly diverging boundary ray (`log`'s descent) keeps its
-own mechanism: its arc is exactly the ray's job.
+`DOM` remains for the scalar march (never evaluate `log(negative)`); the interval evaluator
+is authoritative for the band and the domain. Expressions with an operation the interval
+backend does not implement (`floor`, `sign`, …) compile the previous sampled band + ray path
+(`#define USE_INTERVAL 0`); the ray is legacy-only now.
 
-An ordinary shallow pixel costs 1 `f` + 1 `f'` + the march (a handful of evaluations,
-stopped by the escape rule after a few steps); a resolved steep pixel a tangent-foot
-projection on top; the column probe and the wide window are only paid in the columns that
-have earned them.
+An ordinary shallow pixel costs 1 `f` + 1 `f'` + the march (a handful of evaluations, stopped
+by the escape rule after a few steps) + four interval evaluations (the pixel's column, its
+stroke footprint, and the two neighbouring columns); a resolved steep pixel adds a tangent-foot
+projection. The midpoint probe runs only for a wide finite column (the dependency signal); the
+legacy probe and wide window are compiled out for supported expressions.
 
 ## Tests
 
@@ -405,9 +424,12 @@ QSG_RHI_BACKEND=opengl uv run pytest -m gui
   setters are idempotent, and the list model reports the right roles — plus the
   `Expr`/string round-trip accounting (a string is parsed once, an expression never).
 - `test_implicit.py`: the routing by free symbols (and the `ValueError` for a third symbol), the
-  level-set shader text (same uniform block as the 1-D one, no sampling loop), and the rendered
-  geometry of a unit circle: crossings a quarter of the height from each edge, a blank middle,
-  radius 1 on both axes, and a stroke of the same width at 0°/45°/90°/135°.
+  level-set shader text (same uniform block as the 1-D one, no sampling loop), the rendered
+  geometry of a unit circle (crossings a quarter of the height from each edge, a blank middle,
+  radius 1 on both axes, and a stroke of the same width at 0°/45°/90°/135°), and the two
+  domain/pole guards: `x-tan(y)` has no connector at its poles or far pixels in a wide view,
+  `x-log(y-1)` keeps its stroke on both sides of `y = 1`, and `y-log(x)` reaches the axis in a
+  deep view.
 - `test_plot.py`: the plot's properties convert, notify exactly once and are wired
   (a PySide property with an unresolved notify name silently loses it), the defaults are
   matplotlib's default style, the limits are forwarded to the camera, and a theme applies
@@ -467,34 +489,39 @@ spells it out: **sample** the function into points, join them into **segments**,
 stroke along the segments; "break where neighbouring points suggest a jump". The same
 approach, with the sampling made uniform in *arc length* (the march above):
 
-- **Stroke = distance to the joined polyline segments** (not to the tangent): equal width
-  everywhere, including bracket-long steep stretches, because 1-px-arc chords represent
-  the curve to second order. There is no sampling window to calibrate against the band
-  criteria any more either — the march's coverage is bounded by the escape rule.
+- **Stroke = distance to the joined polyline segments** (not to the tangent), plus the
+  stroked **column segments** for what the march cannot reach: a pixel also measures the
+  vertical y-range of the two neighbouring columns and strokes it with the same ramp. That
+  is GeoGebra's per-column segment with a vector line width, on the GPU; a steep wall
+  (`1/x`/`tan` at large |y|, `log`'s descent) keeps its nominal width even though its x span
+  is narrower than a pixel and its march seed is a whole view up the arc.
 - **Break on jumps — by construction, not by detection**. The join invariant (a segment
   only joins samples within 2.5 px) refuses a connector of any origin: the poles of
   `1/x`/`tan(x)` and plain jump discontinuities alike (`x/sqrt(x**2)` had no pole
-  denominator for the old guards to find; measured: a 454-px column at x=0). A pole
-  column is itself dark: the march up its branches leaves through the viewport edge
-  before the pole, and its band fill is vetoed by the violation-count gate.
-- **Domain** (derived by sympy, injected as `DOM`): denominator ≠ 0, `log` argument
-  > 0, `sqrt` argument ≥ 0, `asin/acos` argument ∈ [−1,1]; pixels outside the domain
-  are discarded outright — except for the **boundary ray** of a slowly diverging edge
-  (`log(x)` as x→0+), which is a band centred *on* the boundary and therefore paints the few
-  pixels outside the domain that it covers (the whole outer half of that band, otherwise).
-  A step landing out of domain (NaN/inf) is retried once wider — stepping over a
-  measure-zero pole landing — and the direction ends there; the far side belongs to the
-  next column's march.
-- **Undersampled columns** are replaced by the envelope band, filled only where the
-  column probe's violation count says the column is genuinely dense: see item 5 of the
-  algorithm above. The march travels up the branches of a pole column and stops at the
-  viewport edge — the geometry that used to be a "32 viewport heights" gap, now free of
-  pixel/viewport units.
+  denominator for the old guards to find; measured: a 454-px column at x=0). The
+  interval band does not reintroduce one: a dependent quotient (`x/sqrt(x**2)`) is left to
+  the march, and a sign-changing pole (`tan`, `1/x`) is a gap or a `whole` column, not a
+  chord.
+- **Domain** (derived by sympy, injected as `DOM` for the scalar march): denominator ≠ 0,
+  `log` argument > 0, `sqrt`/even-root ≥ 0 (a negative power also excludes 0), `asin/acos`
+  ∈ [−1,1], `x**(1/3)` all reals. The *interval* evaluator is authoritative for the band:
+  it returns empty outside the domain, `[-∞, log h]` at a `log` boundary, and the half-open
+  values at a root endpoint. A pixel just outside the boundary is painted from the stroke
+  footprint (`x ± R`) and the neighbouring column segments — not by a symbol-derived ray.
+  The legacy ray remains only in the fallback shader (`USE_INTERVAL 0`).
+- **Undersampled columns** use the interval enclosure of the pixel's column: no ±8-column
+  window, no violation count, no chord-stroke. The midpoint probe survives only as an
+  **interval-dependency check** for a wide finite column (`x * 1/[a,b]` overestimation);
+  the band and the neighbour column segments are always the exact interval ranges.
 
-Measured: the steep stretch of `log(x)` keeps its stroke width (3.00 device px of a
-nominal 3.0 on the ray-drawn part, unchanged); `k·x` holds one width at every slope
-(3.00/3.00/3.00/2.94 at slopes 2/10/40/200); `1/x` and `tan(x)` draw nothing beyond
-their branch strokes near the poles; `sin(x)`/`x^2`/`exp(-x²)sin(10x)` are unaffected.
+Measured: `sin(1/x)`'s transition overfill went from 1.66 to **0.0099 world units**
+(threshold-20 pixels; the remaining edge is the stroke/AA radius); `x**(1/3)` draws both
+branches; the `log(x)` descent measures **3.00 device px at every sampled row** without the
+ray; `1/x`/`tan(x)` in a y∈[50,60] view are **3 full columns** (2 before the neighbour
+segments); `x/sqrt(x**2)` still draws no connector (worst column 4 px); `k·x` holds one
+width at every slope (the slope test at 2/10/40/200); `tan(x)` at an enormous y span fills
+the screen (the interval is `whole`, matching GeoGebra); `sin(x)`/`x^2`/`exp(-x²)sin(10x)`
+are unaffected.
 
 
 ## Performance (measured)

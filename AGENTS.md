@@ -711,4 +711,151 @@ the full step budget in both directions plus both windows.
     (`x+1-E**y`, `x-tan(y)` -> `y = atan(x)` by symmetry of the formulation) has no such
     boundary, which is why it renders "perfectly" — that is a property of the formulation,
     not a special case. Tests: 134 green, incl. `test_pole_of_tan_does_not_bridge_the_branches`
-    and `test_domain_boundary_draws_no_garbage_line`.
+    and `test_domain_boundary_draws_no_garbage_line`. The dark boundary strip is superseded by
+    item 49.
+
+49. **The implicit renderer clipped the stroke at the domain, and the
+    second-difference test did not certify a first-order distance** (symptom → cause → fix,
+    with the measurements that settled it).
+
+    *Symptoms (user-reported):* `x - log(y-1)` thins and then vanishes as the curve
+    approaches `y = 1` (visible from `x ≈ -4` to `-5`); `y - log(x)` does the same toward
+    `x = 0` in a deep view; `x - tan(y)` draws a connector through its poles in a wide
+    y view.
+
+    *Causes, three different ones:*
+    - **the domain clipped the stroke, not the curve.** `!DOM(x, y)` returned transparent,
+      and the two-sided validity probes rejected an inside pixel whenever one probe crossed
+      the boundary. But a stroke is a band around the level set: at `x = -5`,
+      `x - log(y-1)` is `1.0 px` above `y = 1` (y scale `4/600`), i.e. inside the `1.25 px`
+      stroke radius — the early return left only the upper ~0.25 px. That is the thinning
+      and disappearance; the same geometry applies to `y - log(x)` as `x -> 0+`.
+    - **`|F|/|grad F|` is a pseudo-zero at a *diverging boundary* even where the level set is
+      far.** At `x = -2`, `y = 1.0001`: `F = 7.21`, the screen gradient is `66.7`, so
+      `d = 0.11 px`; the old one-sided path would paint a horizontal line at `y = 1`
+      although the curve there is at `y = 1.135`.
+    - **a simple pole is monotone across the jump, so three finite differences can look
+      linear.** At `x = -6`, `y = 1.60` in a `y ∈ [-20, 20]` view
+      (`camera.w = 0.0222`), the old criterion accepted points whose true branch is
+      `~6.1 px` away; an offline scan of the same formulas found accepted points up to
+      `~143 px` away near the view edges. The connector's width scales with the y view,
+      which is why the old ±4-row test at `y ∈ [-4, 4]` passed.
+
+    *Fix, two general mechanisms + one exact guard:*
+    - **one-sided boundary extension** (outside pixels): search 8 directions × radii
+      `0.5R, R, 1.5R` for an in-domain sample `q`, project `q` onto the level set with two
+      damped Newton steps (a step that leaves the domain is halved up to 4 times), require
+      the residual `|F| <= 0.25 R |grad F|` and a bounded step, then use the distance from
+      the pixel to the projected point. This paints the stroke's outer half and rejects a
+      boundary line far from the curve.
+    - **projection certificate** (inside pixels): the same two damped Newton steps from the
+      pixel replace the second-difference validity test. The residual, not the first-order
+      quotient, decides. This is the 1-D tangent-foot seed one dimension up.
+    - **pole factor guard**: `_pole_glsl()` injects `POLE(x, y)` (the product of
+      `_pole_factors`; `cos(y)` for `tan`). A normal probe with
+      `POLE(p) * POLE(p ± R n̂) <= 0` crossed a singularity and is rejected.
+
+    *Measured after* (1350×900, DPR 1.5): at `x = -5` the `x - log(y-1)` column lights rows
+    222..225 — both sides of the boundary row (the curve is at 223.5) — and `x = -6` reads
+    `(31, 119, 180)` on the curve's own row; `y - log(x)` in
+    `x ∈ [-0.001, 0.001], y ∈ [-16, -13]` draws a full-height (900/900 rows) 3-column stroke
+    straddling `x = 0` down to the bottom row; `x - tan(y)` with `y ∈ [-20, 20]` has no lit
+    pixel farther than `4 px` from the true branch (sampled every 2nd pixel) and 0 lit pixels
+    in the ±2 rows around each pole. The old far-out `y - log(1+x)` garbage line stays gone:
+    its first lit column is one stroke radius left of the boundary, not a full-height line.
+    The unit-circle width/geometry tests are unchanged. Full suite: **138 green**.
+
+    *Regressions:* `test_implicit.py::test_tan_pole_has_no_connector_in_a_wide_y_view`,
+    `::test_tan_has_no_far_pixels_in_a_wide_y_view`,
+    `::test_a_domain_boundary_keeps_the_stroke_on_both_sides`,
+    `::test_the_deep_log_descent_reaches_the_boundary`.
+
+    *Still open:* the 1-D `log(x)` boundary ray (item 13) remains a separate, symbol-derived
+    special case; the principled replacement is interval/limit evaluation of the column, not
+    another patch to the ray. **Item 50 delivers that for supported expressions** (the ray
+    survives only in the legacy fallback `USE_INTERVAL 0`).
+
+50. **The 1-D band is now a GeoGebra-style interval column** (symptom → cause → fix, with
+    the traps that cost the rewrite).
+
+    *Symptoms:* `sin(1/x)`'s transition columns overfilled by **1.66 world units** (true
+    range at x=0.0844 is `[-0.968,-0.066]`, the ±8-column window painted `[-1.007,0.944]`);
+    `x**(1/3)` drew only the right branch (GLSL `pow(negative, 1/3)` is NaN); the
+    `log(x)` deep descent depended on a hard-coded vertical ray (`unbounded_edges`), which
+    is the "dog's-tail" patch the user rejected; domain endpoints were clipped by half a
+    stroke.
+
+    *Fix:* `src/qmlmathplot/interval.py` generates `IVal FI(xlo,xhi)` from sympy. It
+    implements the pieces of GeoGebra's `org.geogebra.common.kernel.interval` a fragment
+    shader needs: `IntervalSet` topology (empty / connected / inverted gap / whole),
+    `+ - * /`, integer and rational powers, `sqrt`, `exp`, `log`, `sin/cos/tan`,
+    `asin/acos/atan`, `abs`, `sinh/cosh/tanh`. The shader evaluates the pixel's **column**
+    (`x ± 0.5dx`) for the band, the **stroke footprint** (`x ± R dx`) as the march gate, and
+    the **neighbouring columns** (`x ± dx`) for the column-segment stroke. Four `IVal` trees
+    per pixel. The band is the enclosure plus a `BW = R-0.75` feather; the march remains for
+    the smooth curve's constant width. GeoGebra strokes its per-column polyline with the
+    vector line width; a pixel's own column segment is at its own x (distance 0) and cannot
+    paint its neighbours, so the shader joins the **neighbouring column intervals** with
+    diagonal chords and strokes those; a diverging column (infinite interval bound: `log`'s
+    boundary, `1/x**2`) strokes the vertical column segments instead. A finite monotone
+    column's vertical band is zeroed (those pixels are the chord/march); an oscillatory
+    column keeps the exact band. This is what gives a steep wall its width without the
+    vertical-band staircase (see measurements). A wide finite connected column runs the
+    midpoint probe only as an interval-dependency check; a dependent quotient
+    (`has_dependent_quotient`) is left to the march. For
+    `x**(1/3)` the scalar printer emits `_real_pow` (odd roots), `x**(2/3)` emits
+    `pow(abs(x), …)`, and `_domain_conditions` maps fractional exponents to the right
+    half-open domain (this also fixed `x**0.5`, whose Float exponent previously slipped
+    past the `Rational(1,2)` check).
+
+    *Measurements:* `sin(1/x)` transition overfill **0.0099 world** (all thresholds 20/100/
+    150); `x**(1/3)` left/right lit 860/867; `x/sqrt(x**2)` worst column **4 px** (not a
+    connector); `log(x)` descent measures **3.00 device px at every sampled row** without the
+    ray; `1/x`/`tan(x)` in a y∈[50,60] view are **3 full columns** (2 before the neighbour
+    segments); `tan(x)` with `x∈[-1e15,1e15]` fills every pixel (interval `whole`); full suite
+    **144 green**, including the new `test_oscillation_transition_matches_the_true_range`,
+    `test_fractional_power_draws_the_negative_branch`,
+    `test_fractional_powers_use_the_real_branch`,
+    `test_the_interval_backend_is_chosen_only_when_supported`,
+    `test_steep_wall_keeps_its_line_width`.
+
+    *Traps re-armed while rewriting (measured here):*
+    - **GLSL forbids recursion**, and Qt's `qsb` reports it only as `QSpirvCompiler: Link
+      failed` with no detail — after a successful parse. `i_mul` called itself for an
+      inverted second operand; several interval helpers (`i_asin`, `i_log`, `i_nroot`,
+      `i_pow_int`, `i_sinh`) recursed through their inverted branch. Fix: every operation
+      has a `_conn` helper and the wrappers split inverted sets into two rays, so the call
+      graph is acyclic. Diagnosed by stubbing functions from the end and bisecting (a
+      stub library with all bodies replaced still failed until `i_empty`'s stub was made
+      non-recursive).
+    - **`#define`s for `#if` must precede the first function definition** in the qsb
+      preprocessor; placing `#define USE_INTERVAL` after `_seg_dist` produced
+      `#if: bad expression` at the `#if` line. They now sit immediately after the uniform
+      block (which also keeps the implicit/1-D uniform-block test passing).
+    - **`float && true` is invalid** in GLSL: injecting `1`/`0` for a bool macro failed with
+      "wrong operand types: bool && int". Inject `true`/`false`.
+    - **The stroke gate must not be the pixel's own column.** Using it on oscillatory/steep
+      columns rejected the perpendicular stroke's outer pixels (the stroke reaches a
+      neighbour segment; the column's y-range does not), which is the reported thinning at
+      large dy/dx. The gate is the **stroke footprint**; the band stays the pixel's column.
+      (A monotone footprint *band* was also tried: it made steep straight lines thicker —
+      the slope widths went 1.33/1.17/1.14/1.11 — so it is not the vector stroke.)
+    - **A column segment at the pixel's own x cannot paint its neighbours** (distance 0 in
+      that column). Evaluating `prev = FI(x-1.5dx, x-0.5dx)` and `next` and stroking the
+      **chord** between their ranges is the correct GPU analogue of GeoGebra's
+      vector-stroked per-column polyline; it took the `1/x`/`tan` wall from 2 to 3 columns
+      and `log` to 3.00 px. The vertical column band itself is the staircase: its left/right
+      edge moves by one column at a time. Zero it for finite monotone columns; keep it only
+      for oscillatory envelopes and stroke vertical segments for infinite (diverging)
+      columns, where no finite chord endpoint exists. Clamp the infinite chord endpoints to
+      ±1e12 before `_seg_dist`: the dot product of two 1e30 coordinates is inf and the
+      coverage collapses to NaN (measured as a 184-row hole in `log(1+x)`).
+    - **Interval dependency is real**: `x/sqrt(x**2)` near 0 gives `[-3,-0.33]` for a
+      column that is entirely negative (true value −1) and `[-6e27,6e27]` for a straddling
+      column; the midpoint probe alone does not catch the mild case (violations 0, sample
+      span 2). The band is therefore suppressed entirely for a dependent quotient without a
+      sign pole; the march's join invariant draws the 4-px jump. `sin(1/x)` / `sin(1/x²)`
+      are not dependent quotients and keep their interval bands.
+    - **The scalar path still needs the domain**: the interval band does not replace
+      `DOM`/`DOMS` for the march; `log(negative)` returns finite garbage on this driver.
+    - The full 1-D shader is ~40 KB with the library (legacy ~29 KB).

@@ -111,20 +111,31 @@ def test_implicit_shader_uses_the_level_set_formula() -> None:
     x, y = sp.symbols("x y")
     _, fragment = model.implicit_shader_sources(x**2 + y**2 - 1)
     assert "#define F(x, y) " in fragment
-    assert "#define FX " in fragment and "#define FY " in fragment
+    assert "#define FX(x, y) " in fragment and "#define FY(x, y) " in fragment
+    assert "#define POLE(x, y) " in fragment
     # the distance to the level set, in pixels, and the same coverage ramp as the 1-D stroke
     assert "float gnorm = max(sqrt(gx * gx + gy * gy), 1e-9);" in fragment
-    assert "float d = abs(f) / gnorm;" in fragment
+    assert "d = abs(f) / gnorm;" in fragment
     assert "clamp(R - d, 0.0, 1.0)" in fragment
-    assert "float gx = FX * camera.z;" in fragment and "float gy = FY * camera.w;" in fragment
-    # the two general guards: the domain predicate (x > -1 for log's form) and the
-    # linearisation-validity probes along the gradient
+    assert "gx = FX(x, y) * camera.z;" in fragment
+    assert "gy = FY(x, y) * camera.w;" in fragment
+    # the three general guards: the domain predicate (never evaluate outside), the Newton
+    # projection certificate (a converged residual), and the pole factor crossing
     assert "#define DOM(x, y) " in fragment
-    assert "if (!DOM(x, y))" in fragment
-    assert "float curvature = fp - 2.0 * f + fm;" in fragment
+    assert "bool dom = DOM(x, y);" in fragment
+    assert "abs(rf) <= 0.25 * R * rg" in fragment
+    assert "POLE(pxp, pyp)" in fragment and "POLE(pxm, pym)" in fragment
     # no sampling loop and no envelope band: the minimal single-sheet version
     assert "smp" not in fragment
-    assert "isnan(f) || isinf(f)" in fragment               # the non-finite guard
+    assert "finite_here" in fragment                        # the non-finite guard
+
+
+def test_a_fractional_root_in_an_implicit_curve_uses_the_real_branch() -> None:
+    """The scalar printer emits _real_pow for an odd root; the implicit template must define it."""
+    x, y = sp.symbols("x y")
+    _, fragment = model.implicit_shader_sources(x ** sp.Rational(1, 3) + y)
+    assert "_real_pow" in fragment
+    assert "float _real_pow(" in fragment
 
 
 def test_the_implicit_shader_has_the_same_uniform_block_as_the_1d_one() -> None:
@@ -382,7 +393,8 @@ def test_pole_of_tan_does_not_bridge_the_branches(app: QGuiApplication) -> None:
 def test_domain_boundary_draws_no_garbage_line(app: QGuiApplication) -> None:
     """y = log(1+x) undefined for x <= -1: an *evaluated* log(negative) returns finite
     garbage on this driver, and the garbage paints the boundary as a vertical line. The
-    injected domain predicate guards before evaluating, so nothing is drawn outside.
+    injected domain predicate guards before evaluating, and the stroke's outer half (one
+    radius past the boundary) is the only thing allowed outside it.
     """
     import math
 
@@ -397,16 +409,106 @@ def test_domain_boundary_draws_no_garbage_line(app: QGuiApplication) -> None:
     for col in range(0, boundary - 3):
         assert not any(_lit(image, col, y) for y in range(height)), \
             f"a garbage line at column {col} (x = {-7.7592 + col / width * 13.037:+.4f})"
-    # the descent itself is drawn from just inside the boundary. A boundary strip stays
-    # dark — the probes cross out of the domain there, and the first-order idea has no
-    # honest answer within a stroke radius of the boundary (AGENTS item 48). The
-    # inverse form (x + 1 - E**y = 0) covers the strip, which is why that form renders
-    # the descent "perfectly"; the pin here is only that the descent is drawn at all.
+    # A stroke is a band around the level set, so the half lying outside the domain is
+    # painted too (the distance is extrapolated from the nearest in-domain point); only a
+    # *garbage line* farther out would be a bug. One stroke radius is the allowance.
     lit_cols = [x for x in range(width) if any(_lit(image, x, y) for y in range(height))]
     assert lit_cols, "nothing is drawn"
-    assert lit_cols[0] > boundary, \
-        f"the curve is drawn at column {lit_cols[0]}, left of the boundary at {boundary}"
+    assert lit_cols[0] >= boundary - 3, \
+        f"a garbage line at column {lit_cols[0]}, far left of the boundary at {boundary}"
     # the other end is where the geometry says: x = e^0.73 - 1
     true_end = int((math.exp(0.7309) - 1 + 7.7592) / 13.037 * (width - 1))
     assert abs(lit_cols[-1] - true_end) <= 6, \
         f"the curve ends at column {lit_cols[-1]}, expected {true_end}"
+
+
+@pytest.mark.gui
+def test_tan_pole_has_no_connector_in_a_wide_y_view(app: QGuiApplication) -> None:
+    """A simple pole is monotone across the jump, so the second-difference test can pass and
+    |F|/|grad F| becomes a pseudo-zero. Measured before the pole-factor guard: x - tan(y)
+    painted a horizontal connector through y = pi/2 + k*pi once the y view was wider than
+    ~12 units (the band scales with the y scale, which is why the old ±4-row test at y∈[-4,4]
+    passed). At the pole row the true level set is at x = ±inf, so the whole row is dark.
+    """
+    plot = Plot()
+    plot.grid = False
+    plot.ticks_visible = False
+    plot.add_curve("x-tan(y)")
+    image = _render(plot, app, xlim=(-6.0, 6.0), ylim=(-10.0, 10.0))
+    width, height = image.width(), image.height()
+    for pole in (-math.pi / 2, math.pi / 2):
+        row = int((10.0 - pole) / 20.0 * (height - 1))
+        neighbourhood = sum(_lit(image, x, y)
+                            for y in range(row - 2, row + 3)
+                            for x in range(width))
+        assert neighbourhood == 0, \
+            f"the pole at y={pole:+.3f} drew {neighbourhood} connector pixels"
+
+
+@pytest.mark.gui
+def test_tan_has_no_far_pixels_in_a_wide_y_view(app: QGuiApplication) -> None:
+    """The pseudo-zero is not confined to the pole row: in a y-view of ±20 the old
+    first-order distance/validity pair accepted points up to ~143 px away from the true
+    branch (the scan found them near the view edges). Every lit pixel must be within a
+    couple of stroke widths of the level set x = tan(y), i.e. y = atan(x) + k*pi.
+    """
+    plot = Plot()
+    plot.grid = False
+    plot.ticks_visible = False
+    plot.add_curve("x-tan(y)")
+    image = _render(plot, app, xlim=(-6.0, 6.0), ylim=(-20.0, 20.0))
+    width, height = image.width(), image.height()
+    y_scale = 40.0 / height
+    far = 0
+    for row in range(0, height, 2):
+        world_y = 20.0 - (row + 0.5) / height * 40.0
+        for column in range(0, width, 2):
+            if not _lit(image, column, row):
+                continue
+            world_x = -6.0 + (column + 0.5) / width * 12.0
+            base = math.atan(world_x)
+            distance = min(abs(world_y - (base + k * math.pi)) for k in range(-8, 9))
+            if distance / y_scale > 4.0:
+                far += 1
+    assert far == 0, f"{far} lit pixels are farther than 4 px from the level set"
+
+
+@pytest.mark.gui
+def test_a_domain_boundary_keeps_the_stroke_on_both_sides(app: QGuiApplication) -> None:
+    """x = log(y-1) approaches y = 1 from above; at x = -5 the visible curve is ~1 px above
+    the boundary, i.e. inside its own stroke radius. Clipping the stroke to the domain (the
+    old early return and two-sided probe) left only its upper half — the curve appeared to
+    thin out and then vanish. The stroke is a band around the level set: both sides paint.
+    """
+    plot = Plot()
+    plot.grid = False
+    plot.ticks_visible = False
+    plot.add_curve("x-log(y-1)")
+    image = _render(plot, app, xlim=(-6.0, 6.0), ylim=(-2.0, 2.0))
+    width, height = image.width(), image.height()
+    column = int((-5.0 + 6.0) / 12.0 * (width - 1))
+    boundary_row = int((2.0 - 1.0) / 4.0 * (height - 1))
+    assert _lit(image, column, boundary_row - 1), "the stroke is missing above the boundary"
+    assert _lit(image, column, boundary_row), "the stroke is missing below the boundary"
+    lit_rows = sum(_lit(image, column, y) for y in range(height))
+    assert lit_rows < 0.1 * height, f"the boundary column filled in: {lit_rows} rows"
+
+
+@pytest.mark.gui
+def test_the_deep_log_descent_reaches_the_boundary(app: QGuiApplication) -> None:
+    """y = log(x) hugs x = 0 in a deep view. The level set is at x > 0 and its stroke's left
+    half is outside the domain; dropping out-of-domain pixels removed that half and the
+    descent disappeared as it approached the axis. Both halves must be painted to the bottom.
+    """
+    plot = Plot()
+    plot.grid = False
+    plot.ticks_visible = False
+    plot.add_curve("y-log(x)")
+    image = _render(plot, app, xlim=(-0.001, 0.001), ylim=(-16.0, -13.0))
+    width, height = image.width(), image.height()
+    row = height - 5
+    columns = [x for x in range(width) if _lit(image, x, row)]
+    assert columns, "the descent disappears at the domain boundary"
+    centre = width // 2
+    assert any(x < centre for x in columns) and any(x >= centre for x in columns), \
+        f"the stroke does not straddle x=0: lit columns {columns}"

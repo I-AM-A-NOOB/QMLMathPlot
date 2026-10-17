@@ -30,6 +30,28 @@ def test_func_glsl_renames_variable():
     assert model.func_glsl(sp.sin(1 / X), "u") == "SIN(1.0/u)"
 
 
+def test_fractional_powers_use_the_real_branch():
+    """``pow`` is undefined for a negative base; odd roots are real there."""
+    assert "_real_pow" in model.func_glsl(X ** sp.Rational(1, 3))
+    assert "pow(abs(x)" in model.func_glsl(X ** sp.Rational(2, 3))
+    assert model.func_glsl(X ** sp.Rational(1, 3)).endswith("0.333333333)")
+    assert model.domain_glsl(X ** sp.Rational(1, 3)) is None       # all reals
+    assert model.domain_glsl(X ** sp.Rational(2, 3)) is None
+    # Float exponents and sqrt take the nonnegative branch.
+    assert model.domain_glsl(X**0.5) == "(x >= 0)"
+    assert model.domain_glsl(sp.sqrt(X)) == "(x >= 0)"
+    assert model.domain_glsl(X ** sp.Rational(-1, 3)) == "(x != 0)"
+
+
+def test_the_interval_backend_is_chosen_only_when_supported():
+    _, interval = model.shader_sources(sp.sin(1 / X))
+    assert "#define USE_INTERVAL 1" in interval
+    assert "IVal FI(" in interval
+    _, legacy = model.shader_sources(sp.floor(X))
+    assert "#define USE_INTERVAL 0" in legacy
+    assert "IVal FI(" not in legacy
+
+
 def test_dfunc_glsl():
     assert model.dfunc_glsl(sp.sin(1 / X)) == "-COS(1.0/x)/(x*x)"
 

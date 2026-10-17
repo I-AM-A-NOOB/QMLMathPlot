@@ -20,6 +20,15 @@ import sympy as sp
 from sympy.printing.glsl import GLSLPrinter
 from sympy.printing.precedence import PRECEDENCE
 
+from .interval import (
+    INTERVAL_LIB,
+    Unsupported,
+    as_rational,
+    has_dependent_quotient,
+    has_sign_pole,
+    interval_glsl,
+)
+
 __all__ = [
     "FRAGMENT_TEMPLATE",
     "IMPLICIT_FRAGMENT_TEMPLATE",
@@ -61,6 +70,21 @@ class _PlotGLSLPrinter(GLSLPrinter):
             # splits x**-2 into 1/x**2), and without parentheses it prints "a/x*x", which
             # parses as (a/x)*x.
             return f"(1.0/({product}))" if n < 0 else f"({product})"
+        rational = as_rational(exp) if exp.is_number else None
+        if rational is not None:
+            p_expr, q_expr = rational.as_numer_denom()
+            p, q = int(p_expr), int(q_expr)
+            if q != 1:
+                base = self.parenthesize(expr.base, PRECEDENCE["Pow"])
+                value = f"{float(rational):.9g}"
+                if q % 2 == 1:
+                    # Real q-th root: GLSL pow() is undefined for a negative base, and a
+                    # cube root (etc.) is defined there. An even numerator is nonnegative.
+                    if p % 2 == 0:
+                        return f"pow(abs({base}), {value})"
+                    return f"_real_pow({base}, {value})"
+                # Even denominator: the real function is x >= 0 only; pow() is NaN below.
+                return f"pow({base}, {value})"
         return super()._print_Pow(expr)
 
 
@@ -109,6 +133,19 @@ def _pole_factors(expr: sp.Expr) -> list[sp.Expr]:
     return out
 
 
+def _pole_glsl(expr: sp.Expr) -> str:
+    """GLSL for the product of the expression's pole factors (``1.0`` when there are none).
+
+    The implicit renderer evaluates it at the pixel and at its normal probes; a sign change
+    between them means the chord crossed a singularity, not a continuous piece of the level
+    set. The 1-D renderer no longer uses a pole macro (the join invariant replaced it), but the
+    implicit guard needs the factor itself: a simple pole is monotone across the jump, so the
+    finite-difference linearity test alone can pass through it.
+    """
+    factors = _pole_factors(expr)
+    return " * ".join(f"({func_glsl(factor)})" for factor in factors) if factors else "1.0"
+
+
 def _domain_conditions(expr: sp.Expr) -> list[sp.Expr]:
     """Collect domain conditions (sympy expressions; each must hold identically to be
     inside the domain).
@@ -117,10 +154,21 @@ def _domain_conditions(expr: sp.Expr) -> list[sp.Expr]:
     >= 0, asin/acos argument ∈ [-1,1], cos != 0 for tan/sec, sin != 0 for cot/csc.
     """
     out: list[sp.Expr] = []
-    if isinstance(expr, sp.Pow) and expr.exp.is_number and expr.exp.is_negative:
-        out.append(sp.Ne(expr.base, 0))
-    elif isinstance(expr, sp.Pow) and expr.exp == sp.Rational(1, 2):
-        out.append(sp.Ge(expr.base, 0))
+    if isinstance(expr, sp.Pow) and expr.exp.is_number:
+        rational = as_rational(expr.exp)
+        if rational is not None:
+            p_expr, q_expr = rational.as_numer_denom()
+            p, q = int(p_expr), int(q_expr)
+            if q % 2 == 0:
+                # Even root: the real branch is nonnegative, and a negative power also
+                # excludes zero.
+                out.append(sp.Gt(expr.base, 0) if p < 0 else sp.Ge(expr.base, 0))
+            elif p < 0:
+                out.append(sp.Ne(expr.base, 0))
+            # Odd denominator with a positive numerator: real on the whole line.
+        else:
+            # An irrational exponent is evaluated through exp/log, so x must be positive.
+            out.append(sp.Gt(expr.base, 0))
     if isinstance(expr, sp.log):
         out.append(sp.Gt(expr.args[0], 0))
     elif isinstance(expr, sp.asin | sp.acos):
@@ -289,6 +337,10 @@ layout(std140, binding = 0) uniform buf {
     vec4 color;       // non-premultiplied rgba
 };
 
+#define USE_INTERVAL @USE_INTERVAL@
+#define FILL_WHOLE @HAS_SIGN_POLE@
+#define HAS_DEPENDENT_QUOTIENT @HAS_DEPENDENT_QUOTIENT@
+
 // Argument reduction: the GPU's built-in sin/cos are unreliable for large arguments;
 // fold into [0,2π) before calling
 #define TAU 6.283185307179586
@@ -304,6 +356,19 @@ float _seg_dist(vec2 p, vec2 a, vec2 b) {
     return length(p - (a + t * ab));
 }
 
+// GLSL pow() is undefined for a negative base; odd roots are real there (x**(1/3)).
+float _real_pow(float v, float p) {
+    return v < 0.0 ? -pow(-v, p) : pow(v, p);
+}
+
+#if USE_INTERVAL
+// The interval backend: one enclosure per pixel column (GeoGebra's column idea, on the GPU).
+// The renderer keeps the per-pixel march for the stroke; this supplies the exact envelope
+// band, the domain, and the pole topology, and replaces both the sampled ±8-column window and
+// the boundary ray.
+@INTERVAL_LIB@
+@INTERVAL_FN@
+#else
 // Unbounded domain boundaries (injected from sympy one-sided limits): slowly diverging
 // boundaries such as log(x) as x→0+. A fixed-width sampling window cannot sample deep
 // enough, so the curve would vanish entirely in a deep viewport; here the polyline is
@@ -343,6 +408,7 @@ float _ray_dist(vec2 p, float ex, vec2 du, float nl, float nh, float rtop,
     }
     return d;
 }
+#endif
 
 #define F(u) (@FUNC@)
 #define DF @DFUNC@      // f'(x): the march's slope bootstrap (NaN/garbage => probe instead)
@@ -362,18 +428,61 @@ void main() {
     float x = camera.x + (vUV.x - 0.5) * size.x * camera.z;
     float y = camera.y + (0.5 - vUV.y) * size.y * camera.w;
 
-    // Domain: pixels outside are not drawn (x<0 for log(x), x<0 for sqrt(x), |x|>1 for asin, …)
-    // — with one exception, the unbounded-boundary ray. The stroke is a *band* centred on the
-    // boundary, and for a slowly diverging edge (log(x) as x→0+) that band hugs x = 0, so the
-    // half of it lying outside the domain must still be painted. Discarding those pixels
-    // outright left the descent with its right half only (measured: 1.5 of the nominal 3.0
-    // device px, and the missing side was exactly the x < 0 half).
+    float R = lineWidth * 0.5 + 0.5;   // stroke radius + AA ramp (logical px)
+    float BW = max(R - 0.75, 0.5);      // band feather: a filled edge, not a stroked one
     float spany = size.y * camera.w;   // visible y span (world units)
     float dx = camera.z;               // world x per pixel
     float sx = 1.0 / camera.z;         // pixels per world x
     float sy = 1.0 / camera.w;         // pixels per world y
     float y_top = camera.y + 0.5 * spany;
     float y_bot = camera.y - 0.5 * spany;
+
+#if USE_INTERVAL
+    // The envelope band is the exact interval image of *this pixel's column*, plus the stroke
+    // radius as the vertical AA feather (a horizontal line's column is a point; the band must
+    // still be as tall as the stroke). No ±8-column window: the window mixed neighbouring
+    // phases and overfilled sin(1/x)'s transition columns by up to 1.66 world units.
+    IVal col = FI(x - 0.5 * dx, x + 0.5 * dx);
+    // The enclosure over the *whole stroke footprint* (x ± R). It is the exact mask for the
+    // march: a pixel within R of the curve has a curve point within R in x, so its y must be
+    // in this range (plus the R AA margin). It also carries the outer half of a domain
+    // boundary when this pixel's own column is empty.
+    IVal gate = FI(x - R * dx, x + R * dx);
+    if (col.kind == IK_EMPTY && gate.kind != IK_EMPTY) {
+        // The stroke's outer half may cross the domain boundary by up to one radius.
+        col = gate;
+    }
+    if (!DOM(x) && col.kind == IK_CONNECTED
+            && (col.lo <= -IINF || col.hi >= IINF
+                || gate.lo <= -IINF || gate.hi >= IINF)) {
+        col = gate;
+    }
+    // A dependent quotient (x/sqrt(x**2), x*sin(1/x)) can overestimate *any* column where the
+    // denominator gets small; the march draws the actual curve and its jump.
+    bool suppress_band = HAS_DEPENDENT_QUOTIENT && !FILL_WHOLE;
+    float band_cov = 0.0;
+    if (col.kind == IK_CONNECTED) {
+        band_cov = clamp((col.hi - y) * sy + BW, 0.0, 1.0)
+                 * clamp((y - col.lo) * sy + BW, 0.0, 1.0);
+    } else if (col.kind == IK_INVERTED) {
+        band_cov = max(clamp((col.lo - y) * sy + BW, 0.0, 1.0),
+                       clamp((y - col.hi) * sy + BW, 0.0, 1.0));
+    } else if (col.kind == IK_WHOLE && FILL_WHOLE) {
+        band_cov = 1.0;
+    }
+    if (suppress_band) {
+        band_cov = 0.0;
+    }
+    float cov = band_cov;
+    if (!DOM(x)) {
+        float a = cov * color.a * qt_Opacity;
+        fragColor = vec4(color.rgb * a, a);
+        return;
+    }
+#else
+    // Legacy path (unsupported operations): the sampled envelope band plus the boundary ray.
+    // Pixels outside the domain are still inside the curve's stroke band, so the ray/chords
+    // below paint the half that the domain test would otherwise discard.
     // The boundary query is the sampled interval **widened by the stroke radius**
     // (lineWidth/2 + 0.5): the coverage ramp reaches that far, so a narrower window clips the
     // ray's own stroke (measured: the ray was evaluated only by the ±1-column band of pixels
@@ -463,11 +572,14 @@ void main() {
         fragColor = vec4(color.rgb * rcov * color.a * qt_Opacity, rcov * color.a * qt_Opacity);
         return;
     }
+#endif
 
     float f0 = F(x);
     float d1 = DF;                       // f'(x) at the pixel's own column
     bool have_m0 = (d1 == d1) && (abs(d1) < 1e30);
     float m0 = have_m0 ? d1 * camera.z / camera.w : 0.0;   // screen slope at the seed
+
+    bool marched = false;
 
     // ---- the march: arc-length sampling along the curve, both directions ----
     // Seed: the curve at this pixel's own column. A pole or domain-edge column probes
@@ -489,7 +601,6 @@ void main() {
         }
     }
 
-    float R = lineWidth * 0.5 + 0.5;    // stroke radius + AA ramp (logical px)
     vec2 pp = vec2(x * sx, y * sy);    // this pixel, screen space
 
     // Tangent-foot seed: on a steep curve the column's own curve point can be a
@@ -639,7 +750,41 @@ void main() {
     }
 
     // ---- stroke ----
-    // Distance to the joined polyline, the boundary ray included: a slowly diverging
+#if USE_INTERVAL
+    // The march's polyline is the curve where it can serve this pixel; the column band and the
+    // neighbouring column segments are the fallback where it cannot (a steep wall whose seed is
+    // a whole view up the arc, an oscillation envelope). Mixing them over the same pixels is
+    // what produced the stair/comb edge and the double thin lines, so the local march wins.
+    float margin = R * camera.w;
+    bool in_gate = true;
+    if (gate.kind == IK_CONNECTED) {
+        in_gate = (y >= gate.lo - margin && y <= gate.hi + margin);
+    } else if (gate.kind == IK_INVERTED) {
+        in_gate = (y <= gate.lo + margin || y >= gate.hi - margin);
+    } else if (gate.kind == IK_EMPTY) {
+        in_gate = false;
+    }
+    float stroke_cov = in_gate ? clamp(R - dmin, 0.0, 1.0) : 0.0;
+    float ncov = 0.0;
+    if (!suppress_band) {
+        IVal pv = FI(x - 1.5 * dx, x - 0.5 * dx);
+        IVal nv = FI(x + 0.5 * dx, x + 1.5 * dx);
+        if (pv.kind == IK_CONNECTED) {
+            float y0 = clamp(pv.lo, -1e12, 1e12);
+            float y1 = clamp(pv.hi, -1e12, 1e12);
+            ncov = max(ncov, clamp(R - _seg_dist(
+                pp, vec2((x - dx) * sx, y0 * sy), vec2((x - dx) * sx, y1 * sy)), 0.0, 1.0));
+        }
+        if (nv.kind == IK_CONNECTED) {
+            float y0 = clamp(nv.lo, -1e12, 1e12);
+            float y1 = clamp(nv.hi, -1e12, 1e12);
+            ncov = max(ncov, clamp(R - _seg_dist(
+                pp, vec2((x + dx) * sx, y0 * sy), vec2((x + dx) * sx, y1 * sy)), 0.0, 1.0));
+        }
+    }
+    cov = max(cov, max(stroke_cov, ncov));
+#else
+    // Legacy: distance to the joined polyline, the boundary ray included. A slowly diverging
     // boundary such as log(x)'s is an honest vertical asymptote, and a column with no
     // valid sample of its own borrows the probe from the ray setup above.
     float cov = clamp(R - min(dmin, _ray_dist(pp, ex_, du_, nl < 1e29 ? nl : edge_nl,
@@ -769,11 +914,14 @@ void main() {
         cov = max(cov, band * band_w * smoothstep(1.5, 4.0, (wh - wl) * sy)
                             * max(smoothstep(3.0, 6.0, violations), bracket));
     }
+#endif
 
     float a = cov * color.a * qt_Opacity;
+#if !USE_INTERVAL
     if (isnan(f0) || isinf(f0)) {
         a = 0.0;                       // discard points like sin(1/0), 1/0 outright
     }
+#endif
     fragColor = vec4(color.rgb * a, a);   // premultiplied alpha
 }
 """
@@ -785,18 +933,22 @@ void main() {
 #
 #     d = |F| / |grad F in pixels|,  cov = clamp(lineWidth/2 + 0.5 - d, 0, 1)
 #
-# Two guards keep that first-order idea honest, both inherited from the 1-D renderer and both
-# symbol-free (they work for any elementary F):
-#   - **domain** (sympy, injected as DOM): pixels where F is undefined are dropped, *before*
-#     F is evaluated — GLSL's log(negative) is undefined and this driver returns finite
-#     garbage there (item 46), which would otherwise paint the boundary itself.
-#   - **linearisation validity**: the distance is trusted only where F actually varies the way
-#     the gradient predicts across the stroke's width. At a pole or a diverging domain boundary
-#     |grad F| explodes and |F|/|grad F| degenerates to a pseudo-zero — the whole pole
-#     neighbourhood comes out "on the set" (measured: x - tan(y) drew a full-width line at
-#     every y = pi/2 + k*pi). Probing F at p ± R*n̂ must change it by ~2R|grad F|; if the
-#     change is off by more than a factor of four the local model is invalid and the pixel is
-#     dropped. That is the 1-D join invariant / prediction test, one dimension up.
+# Three guards keep that first-order idea honest, all symbol-free (they work for any
+# elementary F):
+#   - **domain** (sympy, injected as DOM): F is never evaluated where it is undefined — GLSL's
+#     log(negative) is undefined and this driver returns finite garbage there (item 46), which
+#     would otherwise paint the boundary itself. The domain clips the *curve*, not the stroke:
+#     a pixel just outside the boundary is still inside the stroke band, so the distance is
+#     extrapolated from the nearest in-domain point (otherwise x - log(y-1) thins to nothing as
+#     the visible curve approaches y = 1).
+#   - **linearisation validity**: the distance is trusted only where F varies the way the
+#     gradient predicts across the stroke width. Near a boundary one probe is undefined; the
+#     remaining side is compared with f ± R|grad F| instead of rejecting the pixel.
+#   - **pole guard**: at a simple pole |grad F| explodes and |F|/|grad F| is a pseudo-zero
+#     (measured: x - tan(y) painted the asymptote y = pi/2 + k*pi as a horizontal connector
+#     once the y view was wide). A simple pole is monotone across the jump, so the
+#     second-difference test can pass; a normal probe that crosses a zero of the pole factor
+#     (cos(y) for tan) is rejected outright.
 IMPLICIT_FRAGMENT_TEMPLATE = """#version 440
 layout(location = 0) in vec2 vUV;
 layout(location = 0) out vec4 fragColor;
@@ -816,80 +968,184 @@ float _wrap(float t) { return t - TAU * floor(t * (1.0 / TAU)); }
 #define SIN(t) sin(_wrap(t))
 #define COS(t) cos(_wrap(t))
 
+// GLSL pow() is undefined for a negative base; odd roots are real there (x**(1/3)).
+float _real_pow(float v, float p) {
+    return v < 0.0 ? -pow(-v, p) : pow(v, p);
+}
+
 // F is a macro with two parameters (text substitution; the call always passes the plain pixel
 // coordinates, so no extra parentheses are needed on the arguments — see the note in the 1-D
-// template). FX/FY are *object-like* macros, i.e. the definition is spliced into a product
-// (`gx = FX * camera.z`), so the definition itself must be parenthesized: a partial that is not
-// a single term, e.g. d/dx (x-1)^2 = 2*x - 2, otherwise expands to `2*x - 2 * camera.z` and the
-// gradient (hence the coverage) comes out wrong.
+// template). FX/FY are function-like too, because the one-sided boundary extension evaluates the
+// gradient at a nearby in-domain point. A partial that is not a single term, e.g.
+// d/dx (x-1)^2 = 2*x - 2, is wrapped so it can stand inside a product.
 #define F(x, y) (@FUNC@)
-#define FX (@DFUNCX@)
-#define FY (@DFUNCY@)
+#define FX(x, y) (@DFUNCX@)
+#define FY(x, y) (@DFUNCY@)
 #define DOM(x, y) (@DOMXY@)
+// Product of the expression's pole factors (cos(y) for tan(y), a denominator for 1/(...)).
+// A probe that crosses a zero of this product crossed a singularity, not a continuous chord.
+#define POLE(x, y) (@POLEXY@)
 
 void main() {
     float x = camera.x + (vUV.x - 0.5) * size.x * camera.z;
     float y = camera.y + (0.5 - vUV.y) * size.y * camera.w;
-
-    // Domain first: F is undefined outside it, and an evaluated-then-discarded call still
-    // poisons the optimiser (item 46) — and on this driver returns finite garbage.
-    if (!DOM(x, y)) {
-        fragColor = vec4(0.0);
-        return;
-    }
-
-    float f = F(x, y);
-    // |grad F| in pixels: the partial derivative per world unit times the world units per pixel
-    float gx = FX * camera.z;
-    float gy = FY * camera.w;
-    // Distance from this pixel to the level set, in pixels. The floor keeps a critical point of
-    // F (grad F = 0, e.g. the apex of a degenerate level set) from dividing by zero.
-    float gnorm = max(sqrt(gx * gx + gy * gy), 1e-9);
-    float d = abs(f) / gnorm;
     float R = lineWidth * 0.5 + 0.5;
 
-    // Linearisation validity: at a pole or a diverging domain boundary |grad F| explodes and
-    // |F|/|grad F| degenerates towards zero — the pole's whole neighbourhood would come out
-    // "on the set" (measured: x - tan(y) drew a full-width line at every pole). Probes at
-    // p ± R*n̂ must change F by a first-order amount with a small second difference: at a
-    // discontinuity the probes straddle a jump and the second difference is of the order of
-    // the change itself (measured at x - tan(y) near a pole). That is the 1-D probe's
-    // midpoint-violation test one dimension up. Everything is hoisted out of the coverage
-    // `if` on purpose — a shader whose output changes under an unrelated edit cannot be
-    // debugged (AGENTS item 46).
-    float nx = gx / gnorm;
-    float ny = gy / gnorm;
-    float stepx = nx * R * camera.z;
-    float stepy = ny * R * camera.w;
-    float fp = 1e30;
-    float fm = 1e30;
-    bool okp = false;
-    bool okm = false;
-    // Probe coordinates are hoisted into locals first: F's macro body is printed bare
-    // (`x*x`, not `(u)*(u)`), so a shifted argument would expand textually as
-    // `x + stepx*x + stepx` — AGENTS item 1, re-armed. A single-token argument is safe
-    // under any body form.
-    float pxp = x + stepx;
-    float pyp = y + stepy;
-    float pxm = x - stepx;
-    float pym = y - stepy;
-    if (DOM(pxp, pyp)) {
-        fp = F(pxp, pyp);
-        okp = (fp == fp) && (abs(fp) < 1e30);
+    bool dom = DOM(x, y);
+    float f = 0.0;
+    float gx = 0.0;
+    float gy = 0.0;
+    if (dom) {
+        f = F(x, y);
+        // |grad F| in pixels: the partial per world unit times the world units per pixel
+        gx = FX(x, y) * camera.z;
+        gy = FY(x, y) * camera.w;
     }
-    if (DOM(pxm, pym)) {
-        fm = F(pxm, pym);
-        okm = (fm == fm) && (abs(fm) < 1e30);
-    }
-    float curvature = fp - 2.0 * f + fm;
-    bool valid = okp && okm
-                 && abs(curvature) <= 0.9 * abs(fp - fm);
 
-    float cov = clamp(R - d, 0.0, 1.0);
-    float a = cov * color.a * qt_Opacity;
-    if (isnan(f) || isinf(f) || !valid) {
-        a = 0.0;                       // F undefined here, or not resolvable at all
+    // Distance to the level set, in pixels. Outside the domain the level set is still a
+    // geometric object: a stroke is a band around it, so the domain clips the *curve*, not the
+    // band. Without this, x - log(y-1) loses its lower half as the curve approaches y = 1
+    // (the visible curve sits within one stroke radius of the boundary), and y - log(x) does
+    // the same as x -> 0+. Evaluate the first-order model at the nearest in-domain point and
+    // extrapolate it to this pixel.
+    float d = 1e30;
+    if (dom) {
+        float gnorm = max(sqrt(gx * gx + gy * gy), 1e-9);
+        d = abs(f) / gnorm;
+    } else {
+        for (int i = 0; i < 8; i++) {
+            float a = float(i) * 0.7853981634;
+            float ux = cos(a);
+            float uy = sin(a);
+            for (int k = 1; k <= 3; k++) {
+                float rr = R * 0.5 * float(k);
+                float qx = x + ux * rr * camera.z;
+                float qy = y + uy * rr * camera.w;
+                if (DOM(qx, qy)) {
+                    float qf = F(qx, qy);
+                    float qfx = FX(qx, qy);
+                    float qfy = FY(qx, qy);
+                    bool okq = (qf == qf) && (abs(qf) < 1e30)
+                            && (qfx == qfx) && (qfy == qfy);
+                    if (okq && qfx * qfx + qfy * qfy > 1e-18) {
+                        // Project q onto the level set and measure the distance from p to
+                        // that point. Extrapolating q's linear model to p instead is wrong
+                        // across a boundary: log's model is only local, and far out it folds
+                        // back onto the visible branch as a fake line.
+                        float sx = qx;
+                        float sy = qy;
+                        for (int it = 0; it < 2; it++) {
+                            float ff = F(sx, sy);
+                            float fx = FX(sx, sy);
+                            float fy = FY(sx, sy);
+                            float den = fx * fx + fy * fy;
+                            if (den > 1e-18) {
+                                float tx = sx - ff * fx / den;
+                                float ty = sy - ff * fy / den;
+                                // Damp a step that leaves the domain: near log's boundary
+                                // the full Newton step overshoots into x < 0, although the
+                                // root is a fraction of a pixel inside it.
+                                for (int h = 0; h < 4 && !DOM(tx, ty); h++) {
+                                    tx = 0.5 * (sx + tx);
+                                    ty = 0.5 * (sy + ty);
+                                }
+                                sx = tx;
+                                sy = ty;
+                            }
+                        }
+                        float nx = (sx - qx) / camera.z;
+                        float ny = (sy - qy) / camera.w;
+                        if (nx * nx + ny * ny <= (R + rr + 1.0) * (R + rr + 1.0)
+                                && DOM(sx, sy)) {
+                            // A projection is only useful if it converged: the residual at
+                            // the new point must be below a quarter stroke radius.
+                            float rf = F(sx, sy);
+                            float rgx = FX(sx, sy) * camera.z;
+                            float rgy = FY(sx, sy) * camera.w;
+                            float rg = max(sqrt(rgx * rgx + rgy * rgy), 1e-9);
+                            bool okr = (rf == rf) && (abs(rf) < 1e30)
+                                    && (abs(rf) <= 0.25 * R * rg);
+                            if (okr) {
+                                float dxp = (x - sx) / camera.z;
+                                float dyp = (y - sy) / camera.w;
+                                d = min(d, sqrt(dxp * dxp + dyp * dyp));
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
+
+    float cov = 0.0;
+    if (dom) {
+        float gnorm = max(sqrt(gx * gx + gy * gy), 1e-9);
+        float nx = gx / gnorm;
+        float ny = gy / gnorm;
+        float stepx = nx * R * camera.z;
+        float stepy = ny * R * camera.w;
+        // Probe coordinates are hoisted into locals first: F's macro body is printed bare
+        // (`x*x`, not `(u)*(u)`), so a shifted argument would expand textually as
+        // `x + stepx*x + stepx` — AGENTS item 1, re-armed.
+        float pxp = x + stepx;
+        float pyp = y + stepy;
+        float pxm = x - stepx;
+        float pym = y - stepy;
+
+        // Pole guard: a simple pole (tan) is monotone across the jump, so the first-order
+        // distance can be a pseudo-zero and paint the asymptote (measured: a horizontal
+        // connector at y = pi/2 + k*pi when the y view is wide). A probe that crosses a
+        // zero of the pole product is not a continuous chord.
+        float pole = POLE(x, y);
+        bool crosses = pole * POLE(pxp, pyp) <= 0.0
+                    || pole * POLE(pxm, pym) <= 0.0;
+
+        // Certify the first-order distance by *projecting onto the level set* (Newton):
+        // |F|/|grad F| is a pseudo-zero at a pole and at a diverging domain boundary (log),
+        // where the value is large but the gradient is far larger. A converged projection
+        // leaves a residual below a quarter stroke radius, and its distance to the pixel is
+        // the actual distance. This is the 1-D march's tangent-foot seed, one dimension up.
+        bool ok = false;
+        float dproj = 1e30;
+        bool finite_here = (f == f) && (abs(f) < 1e30);
+        if (finite_here && !crosses && abs(f) / gnorm < R + 1.0) {
+            float sx = x;
+            float sy = y;
+            for (int it = 0; it < 2; it++) {
+                float ff = F(sx, sy);
+                float fx = FX(sx, sy);
+                float fy = FY(sx, sy);
+                float den = fx * fx + fy * fy;
+                if (den > 1e-18) {
+                    float tx = sx - ff * fx / den;
+                    float ty = sy - ff * fy / den;
+                    for (int h = 0; h < 4 && !DOM(tx, ty); h++) {
+                        tx = 0.5 * (sx + tx);
+                        ty = 0.5 * (sy + ty);
+                    }
+                    sx = tx;
+                    sy = ty;
+                }
+            }
+            float rf = F(sx, sy);
+            float rfx = FX(sx, sy) * camera.z;
+            float rfy = FY(sx, sy) * camera.w;
+            float rg = max(sqrt(rfx * rfx + rfy * rfy), 1e-9);
+            bool conv = (rf == rf) && (abs(rf) < 1e30) && DOM(sx, sy)
+                    && abs(rf) <= 0.25 * R * rg;
+            if (conv) {
+                float dxp = (x - sx) / camera.z;
+                float dyp = (y - sy) / camera.w;
+                dproj = sqrt(dxp * dxp + dyp * dyp);
+                ok = dproj <= R + 0.5;
+            }
+        }
+        cov = ok ? clamp(R - dproj, 0.0, 1.0) : 0.0;
+    } else {
+        cov = clamp(R - d, 0.0, 1.0);
+    }
+
+    float a = cov * color.a * qt_Opacity;
     fragColor = vec4(color.rgb * a, a);   // premultiplied alpha
 }
 """
@@ -908,7 +1164,8 @@ def implicit_shader_sources(expr: sp.Expr) -> tuple[str, str]:
             .replace("@FUNC@", func_glsl(expr, "x"))
             .replace("@DFUNCX@", func_glsl(sp.diff(expr, sp.Symbol("x")), "x"))
             .replace("@DFUNCY@", func_glsl(sp.diff(expr, sp.Symbol("y")), "x"))
-            .replace("@DOMXY@", dom))
+            .replace("@DOMXY@", dom)
+            .replace("@POLEXY@", _pole_glsl(expr)))
 
 def shader_sources(expr: sp.Expr) -> tuple[str, str]:
     """Vertex/fragment shader sources for the QML front end (implicit model)."""
@@ -919,11 +1176,31 @@ def shader_sources(expr: sp.Expr) -> tuple[str, str]:
         dfunc = dfunc_glsl(expr)
     except Exception:  # noqa: BLE001 — the printer raises its own error types
         dfunc = "0.0 / 0.0"
+    try:
+        interval_fn = interval_glsl(expr)
+        use_interval = 1
+    except Unsupported:
+        interval_fn = ""
+        use_interval = 0
     frag = (
         FRAGMENT_TEMPLATE.replace("@FUNC@", func_glsl(expr, "u", wrap=True))
         .replace("@DFUNC@", dfunc)
+        .replace("@USE_INTERVAL@", str(use_interval))
+        .replace("@INTERVAL_LIB@", INTERVAL_LIB if use_interval else "")
+        .replace("@INTERVAL_FN@", interval_fn)
+        .replace(
+            "@HAS_SIGN_POLE@",
+            "true" if (use_interval and has_sign_pole(expr)) else "false",
+        )
+        .replace(
+            "@HAS_DEPENDENT_QUOTIENT@",
+            "true" if has_dependent_quotient(expr) else "false",
+        )
     )
-    edge_hit, edge_du = _edge_glsl(expr)
+    if use_interval:
+        edge_hit = edge_du = ""
+    else:
+        edge_hit, edge_du = _edge_glsl(expr)
     frag = frag.replace("@EDGEHIT@", edge_hit).replace("@EDGEDU@", edge_du)
     # Domain: the macro argument is parenthesized, same reasoning as F (macros are
     # text substitution)
