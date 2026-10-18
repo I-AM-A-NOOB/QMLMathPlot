@@ -299,8 +299,9 @@ plot.plot.camera.zoom_by(120, 0.5, 0.5, w, h)     # one wheel notch, anchored at
 
 ## Keyboard, touch and animation
 
-Clicking the plot gives it focus; while it has focus the arrow keys pan (10% of the viewport
-per press by default), `+`/`=` zooms in and `-`/`_` zooms out. Held keys advance continuously:
+Clicking the plot or pressing Tab while it is in the focus chain gives it focus; while it has
+focus the arrow keys pan (10% of the viewport per press by default), `+`/`=` zooms in and
+`-`/`_` zooms out. Held keys advance continuously:
 one `keyPanStep` per `keyPanRepeatInterval` (100 ms by default), integrated every frame, so
 there is no OS key-repeat delay or granular stepping. Several arrows combine, so `Left+Up`
 moves diagonally at the normal speed. Every command is a property on the camera's `input`
@@ -566,11 +567,11 @@ uv run ruff check src tests examples   # bug-level lint (undefined names, unused
   appearing inside a layout, an expression change / an invalid expression keeping the
   previous graph, curves added/hidden/removed through the model, **the wheel over a
   scroll area being consumed by the plot (zoom instead of scrolling the parent)**, the
-  fixed aspect being undistorted by the widget's shape, and the plot staying out of the
-  Tab focus chain. `conftest.py` provides a session-scoped `QApplication` (QtWidgets
+  fixed aspect being undistorted by the widget's shape, and Tab reaching the plot and leaving
+  it again. `conftest.py` provides a session-scoped `QApplication` (QtWidgets
   needs one, and a process may only have one).
 - `test_qtquick_coexistence.py`: the same drag conflict in Qt Quick (a `Flickable`
-  must not steal the pan).
+  must not steal the pan), plus Tab focus entering and leaving the QML plot.
 - `test_handoff.py`: the matplotlib/sympy hand-off — the figure reflects the limits, aspect,
   `adjustable`, grid, title, spines at zero and per-curve style; the sampling is uniform and NaN
   outside the domain (so `log(x)` breaks); `savefig(backend="matplotlib")` writes real `.svg`,

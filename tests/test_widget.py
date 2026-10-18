@@ -155,8 +155,9 @@ def test_wheel_over_plot_zooms_and_does_not_scroll_parent(app: QApplication) -> 
     assert bar.value() == 0, "the wheel event leaked to the parent scroll area"
 
 
-def test_plot_does_not_join_tab_focus_chain(app: QApplication) -> None:
-    """The plot area does not join the Tab focus chain, so the line edit keeps its focus."""
+def test_plot_joins_the_tab_focus_chain(app: QApplication) -> None:
+    """Tab reaches the plot (QQuickWidget is StrongFocus and the QML root is
+    activeFocusOnTab), and Tab again leaves it."""
     window = QWidget()
     box = QVBoxLayout(window)
     edit = QLineEdit()
@@ -169,7 +170,17 @@ def test_plot_does_not_join_tab_focus_chain(app: QApplication) -> None:
     edit.setFocus()
     _settle(app, 10)
     assert edit.hasFocus()
-    assert _quick(plot).focusPolicy() is Qt.FocusPolicy.ClickFocus
+    quick = _quick(plot)
+    assert quick.focusPolicy() is Qt.FocusPolicy.StrongFocus
+
+    QTest.keyClick(edit, Qt.Key_Tab)
+    _settle(app, 10)
+    assert quick.hasFocus(), "Tab did not move focus into the plot"
+    assert quick.rootObject().property("activeFocus"), "the QML view did not receive focus"
+
+    QTest.keyClick(quick, Qt.Key_Tab)
+    _settle(app, 10)
+    assert edit.hasFocus(), "Tab did not leave the plot"
 
 
 def _is_curve_pixel(color: "QColor", hue: str = "blue", delta: int = 100) -> bool:

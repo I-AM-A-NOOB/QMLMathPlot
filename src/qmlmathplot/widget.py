@@ -73,9 +73,9 @@ class MathPlotWidget(QWidget):
 
         self._quick = QQuickWidget(self)
         self._quick.setResizeMode(QQuickWidget.ResizeMode.SizeRootObjectToView)
-        # The view owns the keyboard: focusing the widget (programmatically or by click)
-        # focuses the QML root, which is where the shortcuts are handled.
-        self._quick.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        # The view owns the keyboard: focusing the widget (programmatically, by click or by
+        # Tab) focuses the QML root, which is where the shortcuts are handled.
+        self._quick.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setFocusProxy(self._quick)
         self._quick.setSource(QUrl.fromLocalFile(qml_component_path()))
         if self._quick.status() is not QQuickWidget.Status.Ready:

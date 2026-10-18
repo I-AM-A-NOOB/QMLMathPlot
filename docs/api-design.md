@@ -272,7 +272,8 @@ vector route).
   camera stays geometry + ticks. `PlotView` forwards wheel, drag, keyboard and touch to
   `Camera`/`ViewInput`, so the same bindings work in both embedding modes and a host can drive
   the view without synthesising events. Keys are active only while the view has focus
-  (`QQuickWidget` is `ClickFocus`, and the widget uses it as its focus proxy). The shortcuts
+  (`QQuickWidget` is `StrongFocus`; the widget uses it as its focus proxy, and the QML root is
+  `activeFocusOnTab`). The shortcuts
   (`input.panLeftShortcut` … `input.zoomOutShortcut`) are `QKeySequence` text, so rebinding
   needs no QML change; `|` separates alternatives. Methods are snake_case
   (`set_viewport`, `zoom_by`, `pan_pixels`, `stop_animation`); Qt properties stay camelCase.

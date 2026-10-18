@@ -66,6 +66,46 @@ def _drag(window: QQuickView, start: QPointF, delta: QPointF, steps: int = 12) -
           Qt.MouseButton.NoButton)
 
 
+def test_plot_joins_the_qml_tab_chain(app: QGuiApplication, tmp_path: Path) -> None:
+    qml_file = tmp_path / "tab_plot.qml"
+    qml_file.write_text(
+        """
+import QtQuick
+import QmlMathPlot 1.0
+
+Item {
+    width: 480
+    height: 360
+    TextInput { objectName: "input"; focus: true; activeFocusOnTab: true; width: 120; height: 24 }
+    PlotView { objectName: "plot"; x: 0; y: 40; width: 480; height: 320; focus: false }
+}
+""",
+        encoding="utf-8",
+    )
+    view = QQuickView()
+    view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
+    view.setSource(QUrl.fromLocalFile(str(qml_file)))
+    assert view.status() is QQuickView.Status.Ready, [e.toString() for e in view.errors()]
+    view.show()
+    assert QTest.qWaitForWindowExposed(view)
+    app.processEvents()
+
+    root = view.rootObject()
+    input_item = root.findChild(QQuickItem, "input")
+    plot = root.findChild(QQuickItem, "plot")
+    assert input_item is not None and plot is not None
+    assert input_item.property("activeFocus")
+
+    QTest.keyClick(view, Qt.Key_Tab)
+    app.processEvents()
+    assert plot.property("activeFocus"), "Tab did not focus the QML plot"
+
+    QTest.keyClick(view, Qt.Key_Tab)
+    app.processEvents()
+    assert input_item.property("activeFocus"), "Tab did not leave the QML plot"
+    view.hide()
+
+
 def test_drag_over_plot_pans_instead_of_flicking(app: QGuiApplication, tmp_path: Path) -> None:
     qml_file = tmp_path / "flickable_plot.qml"
     qml_file.write_text(QML, encoding="utf-8")

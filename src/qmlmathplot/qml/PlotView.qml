@@ -15,11 +15,12 @@ Item {
     implicitWidth: 800
     implicitHeight: 600
 
-    // Keyboard navigation is opt-in by focus: a click (or a host focusing the QQuickWidget)
+    // Keyboard navigation is opt-in by focus: a click, Tab or a host focusing the QQuickWidget
     // makes this the active item, and the keys are handled only then, so a host's shortcuts
-    // keep working while the plot is idle. `focus: true` is the default *within* this scene,
-    // not a grab: the QQuickWidget is still ClickFocus and does not enter the Tab chain.
+    // keep working while the plot is idle. `activeFocusOnTab` places it in QML's Tab chain;
+    // the QQuickWidget is StrongFocus in the widgets chain.
     focus: true
+    activeFocusOnTab: true
     Keys.onPressed: (event) => {
         if (root._handleKeyPress(event))
             event.accepted = true;
