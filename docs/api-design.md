@@ -169,11 +169,11 @@ are the explicit equivalents; unrelated files in the directory are never touched
   but the pass is not free, so `visible` is the intended lever; "merge N curves into one
   generated shader" is the documented optimisation if a figure needs many at once (it costs a
   re-bake per curve-count change and a fixed maximum N).
-* The 1-D stroke samples **14 points over ±2 columns** in a static view. While the user is
-  dragging/pinching, `Plot.interacting` makes the shader skip every other sample (7 points,
-  0.57-column spacing); the interval band remains exact. Anti-aliasing is the analytic
-  coverage ramp, not the sample count. Measured tuning: 8 samples overfills `sin(1/x)` and
-  breaks the `log` descent, 12 still overfills slightly, 14 passes the render suite.
+* The 1-D stroke samples **14 points over ±2 columns** in the live view and in exports. An
+  earlier interaction mode halved the sample count while dragging, but it was visible as a
+  quality change and was removed. Anti-aliasing is the analytic coverage ramp, not the sample
+  count. Measured tuning: 8 samples overfills `sin(1/x)` and breaks the `log` descent, 12 still
+  overfills slightly, 14 passes the render suite.
 * **Data series are a different artist.** `plot(x, y)` with arrays is a QML-geometry polyline
   (a `Shape`), not a shader — finite data has no aliasing problem and does not need the
   per-pixel machinery. `add_series(x, y)` is reserved for it so `add_curve` never has to

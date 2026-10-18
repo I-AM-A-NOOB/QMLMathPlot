@@ -334,7 +334,6 @@ layout(std140, binding = 0) uniform buf {
     vec4 camera;      // centre.x, centre.y, world units per logical pixel (x, y)
     vec2 size;        // viewport size (logical pixels)
     float lineWidth;  // line width (logical pixels)
-    float interacting; // 1 while the user drags/pinches: sample every other point
     vec4 color;       // non-premultiplied rgba
 };
 
@@ -468,12 +467,6 @@ void main() {
     float prev_d = 0.0;
     bool prev_d_ok = false;
     for (int i = 0; i < NS; i++) {
-        // Direct manipulation (drag/pinch) halves the sample count: the polyline still has
-        // 0.5-column spacing, which is enough while the view is moving, and the interval band
-        // remains exact. Static views use all samples.
-        if (interacting > 0.5 && (i & 1) != 0) {
-            continue;
-        }
         float t = -2.0 + (float(i) + 0.5) * (4.0 / float(NS));
         float xi = x + t * dx;
         float v = 1e30;
@@ -1059,7 +1052,6 @@ layout(std140, binding = 0) uniform buf {
     vec4 camera;      // centre.x, centre.y, world units per logical pixel (x, y)
     vec2 size;        // viewport size (logical pixels)
     float lineWidth;  // line width (logical pixels)
-    float interacting; // 1 while the user drags/pinches: sample every other point
     vec4 color;       // non-premultiplied rgba
 };
 

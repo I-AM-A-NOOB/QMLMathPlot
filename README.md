@@ -740,14 +740,12 @@ march/interval renderer measured 27/34/33 ms on the same machine: 14 samples are
 than the march's seed + tangent projection + walk + probe, and the march is now compiled
 only for the legacy path. The 1-D fragment source is about 21 KB.
 
-**Per-pixel `F` evaluations.** The supported path uses 14 samples for the polyline in a
-static view and **7 while the user is dragging/pinching** (`Plot.interacting` halves the
-sample count); two interval evaluations cover the column and the stroke footprint. There is
-no march budget and no band-window evaluation. Anti-aliasing comes from the analytic
+**Per-pixel `F` evaluations.** The supported path uses 14 samples for the polyline in the live
+view and in exports; two interval evaluations cover the column and the stroke footprint. There
+is no march budget and no band-window evaluation. Anti-aliasing comes from the analytic
 coverage ramp, not from the sample count; the samples only approximate the polyline. Sampling
 was tuned by the render tests: 8 samples overfills the `sin(1/x)` transition and breaks the
-`log` descent, 12 still overfills slightly, 14 passes; the interval band stays exact
-regardless.
+`log` descent, 12 still overfills slightly, 14 passes.
 
 ## Shader cache
 
