@@ -17,16 +17,14 @@ from qmlmathplot.qsb import bake
 X = sp.Symbol("x")
 
 
-@pytest.mark.parametrize(("stage", "expected"), [
-    ("vert", QShader.Stage.VertexStage),
-    ("frag", QShader.Stage.FragmentStage),
-])
-def test_baked_stage_matches_use(stage, expected):
+def test_baked_stage_matches_use():
     vert_src, frag_src = model.shader_sources(sp.sin(1 / X))
-    data = bake(vert_src if stage == "vert" else frag_src, stage).read_bytes()
-    shader = QShader.fromSerialized(data)
-    assert shader.isValid()
-    assert shader.stage() == expected
+    for stage, expected in (("vert", QShader.Stage.VertexStage),
+                            ("frag", QShader.Stage.FragmentStage)):
+        data = bake(vert_src if stage == "vert" else frag_src, stage).read_bytes()
+        shader = QShader.fromSerialized(data)
+        assert shader.isValid()
+        assert shader.stage() == expected
 
 
 def test_baked_shader_covers_every_backend():

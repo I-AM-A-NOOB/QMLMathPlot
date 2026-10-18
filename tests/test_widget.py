@@ -219,21 +219,18 @@ def _line_slope(image: QImage, hue: str = "blue") -> float:
     return abs(num / den)
 
 
-@pytest.mark.parametrize(("width", "height"), [(640, 400), (400, 640)])
-def test_fixed_aspect_is_not_distorted_by_the_widget_shape(
-    app: QApplication, width: int, height: int
-) -> None:
+def test_fixed_aspect_is_not_distorted_by_the_widget_shape(app: QApplication) -> None:
     """With ``aspect=1`` a 45-degree line in world units is drawn at 45 degrees in pixels,
     whatever the widget's shape (that is the point of a fixed ratio)."""
-    plot = MathPlotWidget("x", aspect=1.0)
-    _furniture_off(plot)                            # the slope is about the curve
-    plot.resize(width, height)
-    plot.show()
-    assert QTest.qWaitForWindowExposed(plot), "no usable display/GPU scene graph"
-    _settle(app)
-
-    assert _line_slope(_grab(plot)) == pytest.approx(1.0, abs=0.05)
-    plot.hide()
+    for width, height in ((640, 400), (400, 640)):
+        plot = MathPlotWidget("x", aspect=1.0)
+        _furniture_off(plot)                            # the slope is about the curve
+        plot.resize(width, height)
+        plot.show()
+        assert QTest.qWaitForWindowExposed(plot), "no usable display/GPU scene graph"
+        _settle(app)
+        assert _line_slope(_grab(plot)) == pytest.approx(1.0, abs=0.05), (width, height)
+        plot.hide()
 
 
 def test_auto_aspect_distorts_as_before(app: QApplication) -> None:

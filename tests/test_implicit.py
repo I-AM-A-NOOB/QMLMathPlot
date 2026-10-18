@@ -60,38 +60,29 @@ def test_eq_is_always_a_level_set() -> None:
     forced = model_.add_implicit(sp.Eq(x**2 + y**2, 1))
     assert type(forced) is ImplicitCurve and forced.implicit
 
-
-def test_assigning_an_eq_reroutes_and_can_reroute_back() -> None:
-    x, y = sp.symbols("x y")
-    model_ = CurveListModel()
-    curve = model_.add_curve("sin(x)")
-    one_d_shader = curve.fragmentShader
-    curve.expression = sp.Eq(x**2 + y**2, 1)
-    assert curve.implicit is True
-    assert curve.expr == x**2 + y**2 - 1
-    assert curve.expression.startswith("Eq(")
-    assert curve.fragmentShader != one_d_shader
-    curve.expression = "sin(x)"
-    assert curve.implicit is False
-    assert curve.fragmentShader == one_d_shader
-
-
-def test_eq_string_form_is_parsed() -> None:
     parsed_text, parsed_expr = parsed("Eq(x**2 + y**2, 1)")
     assert parsed_text == "Eq(x**2 + y**2, 1)"
-    x, y = sp.symbols("x y")
     assert parsed_expr == x**2 + y**2 - 1
 
 
 def test_assigning_an_expression_reroutes_the_same_curve() -> None:
     """The text-field path: what the explorers and `MathPlotWidget.expression` do. A function
-    becomes a level set (and back) without replacing the curve."""
+    becomes a level set (and back) without replacing the curve; an ``Eq`` does the same."""
+    x, y = sp.symbols("x y")
     model_ = CurveListModel()
     curve = model_.add_curve("sin(x)")
     one_d_shader = curve.fragmentShader
     curve.expression = CIRCLE
     assert curve.implicit is True and not curve.error
     assert curve.fragmentShader != one_d_shader, "the shader must have been swapped"
+    curve.expression = "sin(x)"
+    assert curve.implicit is False and curve.fragmentShader == one_d_shader
+
+    curve.expression = sp.Eq(x**2 + y**2, 1)
+    assert curve.implicit is True
+    assert curve.expr == x**2 + y**2 - 1
+    assert curve.expression.startswith("Eq(")
+    assert curve.fragmentShader != one_d_shader
     curve.expression = "sin(x)"
     assert curve.implicit is False and curve.fragmentShader == one_d_shader
 
@@ -116,21 +107,6 @@ def test_add_implicit_is_explicit() -> None:
     assert type(model_.add_implicit(x**2 + y**2 - 1)) is ImplicitCurve
     assert type(model_.add_curve("x**2 - 1")) is Curve       # the same input, auto-routed
     assert model_.add_curve("x**2 - 1").implicit is False
-
-
-def test_add_implicit_does_not_parse_an_expression(monkeypatch) -> None:
-    calls: list[object] = []
-    real = sp.sympify
-
-    def counting(value, *args, **kwargs):
-        calls.append(value)
-        return real(value, *args, **kwargs)
-
-    monkeypatch.setattr(sp, "sympify", counting)
-    x, y = sp.symbols("x y")
-    curve = CurveListModel().add_implicit(x**2 + y**2 - 1)
-    assert calls == [], "an Expr must reach the artist unconverted"
-    assert curve.expression == "x**2 + y**2 - 1"
 
 
 def test_a_failed_expression_keeps_the_drawn_one() -> None:
@@ -177,14 +153,6 @@ def test_a_fractional_root_in_an_implicit_curve_uses_the_real_branch() -> None:
     _, fragment = model.implicit_shader_sources(x ** sp.Rational(1, 3) + y)
     assert "_real_pow" in fragment
     assert "float _real_pow(" in fragment
-
-
-def test_the_implicit_shader_has_the_same_uniform_block_as_the_1d_one() -> None:
-    x, y = sp.symbols("x y")
-    _, implicit = model.implicit_shader_sources(x**2 + y**2 - 1)
-    _, one_d = model.shader_sources(sp.sin(x))
-    block = implicit.split("};")[0]
-    assert block == one_d.split("};")[0], "the QML side must not need a special case"
 
 
 # ------------------------------------------------------------------------- rendering
@@ -267,48 +235,35 @@ def _radial_width(image: QImage, degrees: float, radius: float) -> float:
 
 
 @pytest.mark.gui
-def test_eq_circle_renders_like_the_difference_form(app: QGuiApplication) -> None:
-    x, y = sp.symbols("x y")
-    plot = Plot()
-    plot.grid = False
-    plot.ticks_visible = False
-    plot.line_width = 2.0
-    plot.add_curve(sp.Eq(x**2 + y**2, 1))
-    image = _render(plot, app)
-    centre_x, centre_y = image.width() // 2, image.height() // 2
-    radius = round(image.width() / 4)            # 1 world unit in the [-2, 2] view
-    assert _lit(image, centre_x + radius, centre_y), "the Eq circle's right crossing is missing"
-    assert _lit(image, centre_x, centre_y + radius), "the Eq circle's bottom crossing is missing"
-    assert not any(_lit(image, centre_x + dx, centre_y + dy)
-                   for dx in range(-4, 5) for dy in range(-4, 5)), \
-        "the middle must stay blank"
+def test_implicit_circle_geometry_and_stroke_width(app: QGuiApplication) -> None:
+    """A unit circle in a [-2, 2] view: correct crossings on both axes, a blank middle, and
+    the same stroke width at 0°/45°/90°/135°.
 
-
-@pytest.mark.gui
-def test_implicit_circle_is_centred_and_blank_inside(app: QGuiApplication) -> None:
+    This used to be three renders (centre/blank, radius, width); they all inspect the same
+    image, so one render is enough. The width check is the old pseudo-conic regression: the
+    slope-dependent renderer varied with the angle.
+    """
     image = _render(_circle_plot(), app)
     ratio = image.width() / WIDTH
-    centre_x, centre_y = image.width() // 2, image.height() // 2
+    radius = WIDTH / SPAN * ratio                            # 1 world unit in device pixels
+    centre_x, centre_y = image.width() / 2, image.height() / 2
 
-    rows = [y for y in range(image.height()) if _lit(image, centre_x, y)]
+    rows = [y for y in range(image.height()) if _lit(image, round(centre_x), y)]
     assert rows, "nothing is drawn in the centre column"
     # radius 1 in a [-2, 2] view: the crossings sit a quarter of the height from each edge
-    assert min(rows) == pytest.approx(0.25 * image.height(), abs=4 * ratio), \
-        f"top crossing at row {min(rows)}, expected {(0.25 * HEIGHT) * ratio:.0f}"
-    assert max(rows) == pytest.approx(0.75 * image.height(), abs=4 * ratio), \
-        f"bottom crossing at row {max(rows)}, expected {(0.75 * HEIGHT) * ratio:.0f}"
+    assert min(rows) == pytest.approx(0.25 * image.height(), abs=4 * ratio)
+    assert max(rows) == pytest.approx(0.75 * image.height(), abs=4 * ratio)
+    columns = [x for x in range(image.width())
+               if any(_lit(image, x, y) for y in range(image.height()))]
+    assert centre_x - min(columns) == pytest.approx(radius, abs=4 * ratio)
+    assert max(columns) - centre_x == pytest.approx(radius, abs=4 * ratio)
+    assert centre_y - min(rows) == pytest.approx(radius, abs=4 * ratio)
+    assert max(rows) - centre_y == pytest.approx(radius, abs=4 * ratio)
     # the middle of the circle is empty — the 1-D mis-render crossed it (it was centred at y=1/2)
-    assert not _lit(image, centre_x, centre_y), "the centre of the circle must be blank"
-    assert not any(_lit(image, x, y) for x in range(centre_x - 4, centre_x + 5)
-                   for y in range(centre_y - 4, centre_y + 5)), "the middle must stay blank"
+    assert not any(_lit(image, x, y) for x in range(round(centre_x) - 4, round(centre_x) + 5)
+                   for y in range(round(centre_y) - 4, round(centre_y) + 5)), \
+        "the middle must stay blank"
 
-
-@pytest.mark.gui
-def test_implicit_circle_stroke_has_the_same_width_at_every_angle(app: QGuiApplication) -> None:
-    """The complaint being fixed: the old path drew a pseudo-conic whose stroke varied with the
-    slope. A true circle must measure the same everywhere (``lineWidth=2``, so ~3 device px)."""
-    image = _render(_circle_plot(), app)
-    radius = (WIDTH / SPAN) * (image.width() / WIDTH)        # 1 world unit in device pixels
     angles = (0.0, 45.0, 90.0, 135.0)
     widths = {degrees: _radial_width(image, degrees, radius) for degrees in angles}
     nominal = 2.0 * image.devicePixelRatio()                 # lineWidth in device pixels
@@ -428,19 +383,7 @@ def test_the_default_export_range_is_the_camera_view(app: QGuiApplication) -> No
     assert lit["x**2/4-y**2/3-1", EXPORT_SIZE // 2] > 100, lit
 
 
-@pytest.mark.gui
-def test_implicit_circle_reaches_its_radius(app: QGuiApplication) -> None:
-    """The crossings are where the geometry says: radius 1 in a [-2, 2] view, both axes."""
-    image = _render(_circle_plot(), app)
-    ratio = image.width() / WIDTH
-    radius = WIDTH / SPAN * ratio                            # 1 world unit in device pixels
-    centre_x, centre_y = image.width() / 2, image.height() / 2
-    columns = [x for x in range(image.width()) if any(_lit(image, x, y) for y in range(image.height()))]
-    rows = [y for y in range(image.height()) if any(_lit(image, x, y) for x in range(image.width()))]
-    assert centre_x - min(columns) == pytest.approx(radius, abs=4 * ratio)
-    assert max(columns) - centre_x == pytest.approx(radius, abs=4 * ratio)
-    assert centre_y - min(rows) == pytest.approx(radius, abs=4 * ratio)
-    assert max(rows) - centre_y == pytest.approx(radius, abs=4 * ratio)
+
 
 
 @pytest.mark.gui

@@ -136,7 +136,7 @@ histories and numbers belong here.
     from the middle down) the width went **1.00-1.67 → 3.00-3.23** device px against a nominal
     3.00; the rows above it are drawn by the polyline alone and keep the steep-slope residual of
     the ±1-column window (item 24). Regression:
-    `test_render_smoke.py::test_the_log_descent_keeps_its_stroke_width` and
+    `test_render_smoke.py::test_log_descent_is_not_cut_and_keeps_its_width` and
     `::test_a_shifted_log_does_not_draw_a_line_at_its_boundary`. The `y ∈ [−16, −12]` column is
     still lit 100 %, at full width (3.00 on every sampled row).
 14. **`unbounded_edges()` must only analyse polynomial boundaries.** `tan(x)`'s condition
@@ -818,11 +818,11 @@ the full step budget in both directions plus both windows.
     connector); `log(x)` descent measures **3.00 device px at every sampled row** without the
     ray; `1/x`/`tan(x)` in a y∈[50,60] view are **3 full columns** (2 before the neighbour
     segments); `tan(x)` with `x∈[-1e15,1e15]` fills every pixel (interval `whole`); full suite
-    **144 green**, including the new `test_oscillation_transition_matches_the_true_range`,
+    **144 green**, including the new `test_undersampled_column_fills_envelope_within_pm1`,
     `test_fractional_power_draws_the_negative_branch`,
     `test_fractional_powers_use_the_real_branch`,
     `test_the_interval_backend_is_chosen_only_when_supported`,
-    `test_steep_wall_keeps_its_line_width`.
+    `test_steep_wall_at_large_y_is_drawn_and_keeps_its_width`.
 
     *Traps re-armed while rewriting (measured here):*
     - **GLSL forbids recursion**, and Qt's `qsb` reports it only as `QSpirvCompiler: Link

@@ -13,18 +13,19 @@ from qmlmathplot import Camera, model, nice_ticks
 X = sp.Symbol("x")
 
 
-@pytest.mark.parametrize(("expr", "expected"), [
-    (X**2, "(x*x)"),
-    (X**-2, "(1.0/(x*x))"),
-    (X**9, "pow(x, 9.0)"),
-    (sp.sin(X) / X, "SIN(x)/x"),
-    (sp.exp(-X * X) * sp.sin(10 * X), "exp(-(x*x))*SIN(10*x)"),
-])
-def test_func_glsl(expr, expected):
+def test_func_glsl():
     """Small integer powers must be expanded into repeated multiplication (GLSL's
     pow(x, y) is undefined for x<0 and drivers often return NaN); sin/cos must be
     wrapped as SIN/COS (argument reduction, see the note in model)."""
-    assert model.func_glsl(expr) == expected
+    cases = [
+        (X**2, "(x*x)"),
+        (X**-2, "(1.0/(x*x))"),
+        (X**9, "pow(x, 9.0)"),
+        (sp.sin(X) / X, "SIN(x)/x"),
+        (sp.exp(-X * X) * sp.sin(10 * X), "exp(-(x*x))*SIN(10*x)"),
+    ]
+    for expr, expected in cases:
+        assert model.func_glsl(expr) == expected, expr
 
 
 def test_func_glsl_renames_variable():

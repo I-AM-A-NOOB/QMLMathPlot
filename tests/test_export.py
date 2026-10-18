@@ -153,10 +153,6 @@ def test_the_image_has_exactly_the_requested_device_size(app: QApplication) -> N
     for width, height in ((600, 400), (300, 200), (401, 199), (97, 53)):
         image = plot.to_image(width=width, height=height)
         assert image.size() == QSize(width, height), f"{width}x{height} came out {image.size()}"
-
-
-def test_dpi_multiplies_the_device_size(app: QApplication) -> None:
-    plot = _plot("sin(x)")
     assert plot.to_image(width=300, height=200, dpi=2.0).size() == QSize(600, 400)
     assert plot.to_image(width=300, height=200, dpi=0.5).size() == QSize(150, 100)
 

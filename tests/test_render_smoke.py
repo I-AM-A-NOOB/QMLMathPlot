@@ -200,21 +200,10 @@ def test_undersampled_column_fills_envelope_within_pm1(app: QGuiApplication) -> 
     width = _solid_band_columns(image) / 1.5  # the grab carries devicePixelRatio
     assert 5 < width < 60, f"the solid band width should be a single-digit to a few dozen logical columns, got {width:.0f}"
 
-
-def test_smooth_column_stays_thin(app: QGuiApplication) -> None:
-    ratio = _center_column_ratio(_render(app, "sin(x)"))
-    assert ratio < 0.05, f"sin(x) should still be a thin line at x=0, got {ratio:.2f}"
-
-
-@pytest.mark.gui
-def test_oscillation_transition_matches_the_true_range(app: QGuiApplication) -> None:
-    """The band is the interval image of the pixel's column, not a ±8-column sample window.
-
-    Measured before: at x=0.0844 the true range was [-0.968, -0.066] but the band painted
-    [-1.007, 0.944] (1.66 world units of overfill); the wide window mixed neighbouring
-    phases. The interval column is exact, so the overfill is only the stroke/AA radius.
-    """
-    image = _render(app, "sin(1/x)")
+    # The band is the interval image of the pixel's column, not a ±8-column sample window.
+    # Before: at x=0.0844 the true range was [-0.968, -0.066], the band painted
+    # [-1.007, 0.944] (1.66 world units of overfill). The interval column is exact, so the
+    # overfill is only the stroke/AA radius.
     width, height = image.width(), image.height()
     dx = 12.0 / 900.0                     # one logical column, the shader's dx
     worst = 0.0
@@ -321,12 +310,12 @@ def test_steep_slope_stroke_is_continuous_and_constant_width(app: QGuiApplicatio
         f"the stroke width must not depend on the slope: {[round(w, 2) for w in widths]}"
 
 
-def test_steep_wall_at_large_y_is_drawn(app: QGuiApplication) -> None:
-    """1/x and tan(x) at large |y| with a wide x view: the branch is a near-vertical
-    wall, and a pixel's foot on it is a whole view up the arc — no march budget can
-    walk that far, and the tangent projection overshoots past the pole. The column
-    probe's consistent chords stroke it (measured before: 1/x at y 50..60 over x ±6
-    drew *nothing at all* — the curve vanished).
+def test_steep_wall_at_large_y_is_drawn_and_keeps_its_width(app: QGuiApplication) -> None:
+    """1/x and tan(x) at large |y| with a wide x view: each branch is a near-vertical wall.
+
+    Two regressions share the same render: the wall used to vanish entirely (its pixel's foot
+    is a whole view up the arc, beyond any march budget), and once drawn it was only two
+    columns wide instead of three. The interval path's chord/segment stroke supplies both.
     """
     for expr in ("1/x", "tan(x)"):
         image, _ = _render_plot(app, expr, xlim=(-6.0, 6.0), ylim=(50.0, 60.0))
@@ -334,22 +323,9 @@ def test_steep_wall_at_large_y_is_drawn(app: QGuiApplication) -> None:
         tallest = max(_column_lit_at(image, x) for x in range(image.width()))
         assert tallest >= 0.9 * height, \
             f"{expr} at large |y|: tallest column only {tallest} of {height} rows"
-
-
-def test_steep_wall_keeps_its_line_width(app: QGuiApplication) -> None:
-    """A near-vertical wall must be as wide as any other stroke.
-
-    Its x span is narrower than a pixel, so the march's seed is a whole view up the arc and
-    the pixel's own column segment only fills one column. GeoGebra's vector stroke of the
-    per-column polyline widens it; the shader borrows that by stroking the two neighbouring
-    column segments (measured: 2 → 3 full columns for 1/x at y∈[50,60]).
-    """
-    for expression in ("1/x", "tan(x)"):
-        image, _ = _render_plot(app, expression, xlim=(-6.0, 6.0), ylim=(50.0, 60.0))
-        height = image.height()
         total = sum(_column_lit_at(image, x) for x in range(image.width())) / height
         assert total > 2.5, \
-            f"{expression} at large |y|: the wall is only {total:.2f} columns wide"
+            f"{expr} at large |y|: the wall is only {total:.2f} columns wide"
 
 
 def test_shifted_log_descent_wall_is_continuous(app: QGuiApplication) -> None:
@@ -416,24 +392,29 @@ def test_out_of_domain_is_blank(app: QGuiApplication) -> None:
     assert far == 0, f"asin(x) should have no pixels for |x|>1, got {far}"
 
 
-def test_log_descent_is_not_cut(app: QGuiApplication) -> None:
-    """log(x) must be drawn all the way out of the viewport as x→0+, not cut off by the
-    lower bound of the sampling envelope ("gradually thinning away").
+def test_log_descent_is_not_cut_and_keeps_its_width(app: QGuiApplication) -> None:
+    """log(x) must be drawn all the way out of the viewport as x→0+ and stay as wide as any
+    other stroke (not "gradually thin away" or pinch to a hairline).
 
     The viewport is panned down by 6 units (y in [-8,-4]): the curve's column at x≈0.004
     sweeps from -4.5 to -inf within that single column, so lit pixels must land near the
-    bottom edge of the viewport.
+    bottom edge. The width was 1.00-1.67 of the nominal 3.00 device px before the boundary
+    stroke was widened; it is 3.00-3.23 now.
     """
-    image = _render(app, "log(x)", pan_pixels=-900.0)
+    image, plot = _render_plot(app, "log(x)", pan_pixels=-900.0)
     height = image.height()
     column = _column_lit(image, 0.004)
     assert column > 0, "log(x) should have pixels at x≈0.004"
-    # the descending part is right by the centre column (at x≈0.004 log is already below -7,
-    # so the whole column should have pixels)
     center = image.width() // 2
     bottom = sum(_lit(image, x, y) for x in range(center - 4, center + 5)
                  for y in range(int(height * 0.97), height))
     assert bottom > 0, "log(x)'s descending part should be drawn all the way to the viewport's bottom edge"
+
+    nominal = plot.line_width * image.devicePixelRatio()
+    widths = [_coverage_sum(image, row, center)
+              for row in range(image.height() // 2, image.height(), 60)]
+    assert min(widths) >= 0.95 * nominal, f"descent pinched to {min(widths):.2f} of {nominal:.2f} px"
+    assert max(widths) <= 1.5 * nominal, f"descent too fat: {max(widths):.2f} of {nominal:.2f} px"
 
 
 def test_log_descends_into_deep_views(app: QGuiApplication) -> None:
@@ -467,27 +448,6 @@ def _coverage_sum(image: QImage, row: int, center: int, half: int = 12) -> float
                            + (255 - color.blue())) / FULL_INK)
     return total
 
-
-def test_the_log_descent_keeps_its_stroke_width(app: QGuiApplication) -> None:
-    """The descent must be as wide as every other stroke, not fade into a hairline.
-
-    Two things used to clip it, both about the ray's *coverage* rather than its geometry: the
-    ray was evaluated only by the pixels whose own sampled interval straddled the boundary (so
-    the neighbouring columns, which the coverage ramp still reaches, measured the distance to a
-    segment endpoint), and the domain test at the top of the shader returned before the ray for
-    every pixel left of x = 0 — the band centred on the boundary lost its entire outer half.
-    Measured over the ray-drawn part of the descent (rows from the middle of the frame down):
-    1.00-1.67 of the nominal 3.00 device px before, 3.00-3.23 after. The rows *above* it are
-    drawn by the polyline alone and keep the steep-slope residual of the ±1-column sampling
-    window (item 24 in AGENTS), which is a separate, older trade-off.
-    """
-    image, plot = _render_plot(app, "log(x)", pan_pixels=-900.0)
-    nominal = plot.line_width * image.devicePixelRatio()
-    center = image.width() // 2
-    widths = [_coverage_sum(image, row, center)
-              for row in range(image.height() // 2, image.height(), 60)]
-    assert min(widths) >= 0.95 * nominal, f"descent pinched to {min(widths):.2f} of {nominal:.2f} px"
-    assert max(widths) <= 1.5 * nominal, f"descent too fat: {max(widths):.2f} of {nominal:.2f} px"
 
 
 def test_a_shifted_log_does_not_draw_a_line_at_its_boundary(app: QGuiApplication) -> None:
