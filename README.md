@@ -807,6 +807,9 @@ measurement that settled each one). The Qt/packaging ones that shaped the code:
   **device** pixels with an integral device width (`_deviceWidth`/`_snapLine`), not logical
   half-pixels: the 1.07-logical axis is 2 device px at DPR 1.5 and otherwise alternated
   between one and two rows as it drifted with the zoom.
+- `qsb.exe` is a **console-subsystem** program. A windowed/frozen host (`pythonw`,
+  PyInstaller `--windowed`) would flash a cmd window on every cache-miss bake; `qsb.bake()`
+  passes `CREATE_NO_WINDOW` on Windows. `capture_output=True` alone does not prevent it.
 - `QQuickWidget.setProperty(name, …)` sets it on the **widget**, not on the QML root (the
   widget has no such property, so it silently does nothing): inject the model with
   `widget.rootObject().setProperty("plot", plot)`, as `MathPlotWidget` does.

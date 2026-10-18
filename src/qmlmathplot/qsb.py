@@ -34,6 +34,11 @@ __all__ = [
 
 _EXE = "qsb.exe" if os.name == "nt" else "qsb"
 
+#: ``qsb.exe`` is a console-subsystem program. A windowed/frozen host (``pythonw``, PyInstaller
+#: ``--windowed``) has no console, so Windows would allocate one for the child and flash a
+#: black cmd window on every bake. ``CREATE_NO_WINDOW`` gives the child an invisible console.
+_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+
 #: The cache lives in the platform temp directory: ``%TEMP%`` on Windows, the per-user
 #: ``/var/folders/.../T`` on macOS, ``$TMPDIR`` or ``/tmp`` on Linux.
 CACHE_NAME = "qmlmathplot-qsb"
@@ -257,6 +262,7 @@ def bake(source: str, stage: str, cache_dir: Path | str | None = None) -> Path:
             capture_output=True,
             text=True,
             check=False,
+            creationflags=_CREATE_NO_WINDOW,
         )
         if proc.returncode != 0 or not tmp_out.exists():
             raise RuntimeError(

@@ -1013,3 +1013,12 @@ the full step budget in both directions plus both windows.
     recomputes the same samples. The larger win would be a pre-pass that stores the 14 samples
     (and the interval topology) per column in a texture; the reserve is the render architecture.
 
+57. **A windowed/frozen app must launch `qsb.exe` with `CREATE_NO_WINDOW`.** Measured: the
+    PySide6 `qsb.exe` PE subsystem is **3** (console), so from a host with no console
+    (`pythonw.exe`, PyInstaller `--windowed`/`--noconsole`) Windows allocates a console for the
+    child and a black cmd window flashes for the bake (~126 ms on a cold cache).
+    `capture_output=True` does **not** prevent that — it only redirects the streams. Fix:
+    `subprocess.run(..., creationflags=subprocess.CREATE_NO_WINDOW)` in `qsb.bake()` (Windows
+    only; the constant is `0` elsewhere). The child still gets a console, just an invisible one,
+    so its own console children inherit the hidden console. A cache hit never starts qsb at all.
+
