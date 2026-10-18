@@ -317,6 +317,25 @@ def test_transparent_clears_to_alpha_zero(app: QApplication) -> None:
     assert plot.background.alpha() > 0, "the live background must be restored"
 
 
+def test_interacting_quality_still_draws(app: QApplication) -> None:
+    plot = Plot()
+    plot.grid = False
+    plot.ticks_visible = False
+    plot.line_width = 2.0
+    plot.add_curve("sin(x)", color="#1f77b4")
+    plot.camera.set_viewport(LOGICAL[0], LOGICAL[1])
+    plot.camera.set_view(0.0, 0.0, SCALE, SCALE)
+    plot.interacting = True
+    image = plot.to_image(width=400, height=300)
+    blue = sum(
+        1
+        for y in range(0, image.height(), 2)
+        for x in range(0, image.width(), 2)
+        if image.pixelColor(x, y).blue() - image.pixelColor(x, y).red() > 60
+    )
+    assert blue > 20, "the interacting (half-sample) shader drew no curve"
+
+
 def test_boxed_matplotlib_furniture_is_exported(app: QApplication) -> None:
     plot = Plot()
     plot.grid = False

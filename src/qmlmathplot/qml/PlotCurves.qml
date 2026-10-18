@@ -20,6 +20,7 @@ Item {
                                                   curvesRoot.view.plot.camera.scale_y)
             property vector2d size: Qt.vector2d(curvesRoot.width, curvesRoot.height)
             property real lineWidth: model.lineWidth
+            property real interacting: curvesRoot.view.plot.interacting ? 1.0 : 0.0
             property color color: model.color
 
             vertexShader: model.vertexShader

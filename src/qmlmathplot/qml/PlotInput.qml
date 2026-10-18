@@ -8,6 +8,11 @@ Item {
 
     property Item view
 
+    Component.onDestruction: {
+        if (inputRoot.view)
+            inputRoot.view.plot.interacting = false;
+    }
+
     MouseArea {
         anchors.fill: parent
         acceptedButtons: Qt.LeftButton
@@ -22,6 +27,7 @@ Item {
         onPressed: (mouse) => {
             inputRoot.view.forceActiveFocus();
             inputRoot.view.plot.camera.stop_animation();
+            inputRoot.view.plot.interacting = true;
             lastX = mouse.x;
             lastY = mouse.y;
         }
@@ -31,6 +37,12 @@ Item {
             inputRoot.view.plot.camera.pan_pixels(mouse.x - lastX, mouse.y - lastY);
             lastX = mouse.x;
             lastY = mouse.y;
+        }
+        onReleased: (mouse) => {
+            inputRoot.view.plot.interacting = false;
+        }
+        onCanceled: (mouse) => {
+            inputRoot.view.plot.interacting = false;
         }
     }
 
@@ -82,6 +94,7 @@ Item {
         onPressed: (points) => {
             inputRoot.view.forceActiveFocus();
             inputRoot.view.plot.camera.stop_animation();
+            inputRoot.view.plot.interacting = true;
             _baseline(points);
         }
         onUpdated: (points) => {
@@ -108,9 +121,11 @@ Item {
             lastSpread = _spread(points);
         }
         onReleased: (points) => {
+            inputRoot.view.plot.interacting = false;
             lastCount = 0;
         }
         onCanceled: (points) => {
+            inputRoot.view.plot.interacting = false;
             lastCount = 0;
         }
     }

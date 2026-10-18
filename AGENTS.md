@@ -986,3 +986,21 @@ the full step budget in both directions plus both windows.
     is. `Canvas.renderStrategy: Canvas.Immediate` alone did **not** fix it. The export now
     drains events before `grabFramebuffer()` (see `export.render`).
 
+55. **Sampling count: 14 static, 7 while dragging.** The fixed-x polyline sampled 16 points
+    over ±2 columns; the render tests were used to find the smallest count that keeps the
+    correctness guarantees:
+    - **8** samples: `sin(1/x)` transition overfill **0.273** world units (limit 0.05), the
+      `log(1+x)` descent breaks with a **334-row** gap, and the descent width falls to
+      **2.00** of 3.00 px.
+    - **12** (center-aligned): transition overfill **0.064** — still over the limit.
+    - **14** (center-aligned): all render smoke tests pass.
+    So the static constant is `NS = 14` (0.286-column spacing).
+    For direct manipulation, `Plot.interacting` is set by `PlotInput` on mouse/touch press and
+    cleared on release; the shader then skips every other sample (7 of 14, 0.57-column
+    spacing). Measured offscreen full-image renders at 900×600: **0.98 s** static vs
+    **0.36 s** interacting (includes Qt startup/bake, so it is a ratio, not frame cost).
+    The interval band remains exact in both modes; only the polyline/sturn approximation is
+    coarser while the view is moving. Anti-aliasing is the analytic coverage ramp, not the
+    sample count, so reducing samples does not change AA quality much — it changes how well
+    the polyline follows steep/oscillating geometry.
+

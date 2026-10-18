@@ -544,7 +544,7 @@ The supported path is GeoGebra's column idea implemented on the GPU: sample the 
 sub-pixel x grid, stroke the polyline, and fill the exact interval enclosure where a column
 cannot be represented by a line.
 
-1. **Sub-pixel polyline stroke.** Each pixel evaluates `F` at **16 samples over ±2 columns**
+1. **Sub-pixel polyline stroke.** Each pixel evaluates `F` at **14 samples over ±2 columns**
    (0.25 logical-px spacing). Adjacent valid samples form a polyline, and coverage is
    `R - distance to the nearest segment` — Desmos' stroke rule. The sample spacing is
    sub-pixel, so the vertices themselves are sub-pixel and the segments are diagonal: the
@@ -579,7 +579,7 @@ cannot be represented by a line.
      viewport bottom; no filled ray.
    - **whole**: `DrawInterval.drawWhole` — one vertical segment at `x.low`.
    Deliberate deviations, because this is a fragment shader and not the Java tuple list: the
-   16-sample polyline supersamples GGB's one interval per column for resolved stretches; a
+   14-sample polyline supersamples GGB's one interval per column for resolved stretches; a
    dependent quotient's whole column is still suppressed (the fixed-x polyline draws the real
    branches, avoiding the `x/sqrt(x**2)` connector); and a joined inverted column uses those
    sample branches instead of replaying `JoinLines.inverted`'s neighbour decisions.
@@ -587,7 +587,7 @@ cannot be represented by a line.
    never evaluated; a pixel just outside the domain still gets the band, which is centred
    on the boundary.
 
-An ordinary pixel costs **16 `F` evaluations** plus two interval evaluations; there is no
+An ordinary pixel costs **14 `F` evaluations** plus two interval evaluations; there is no
 march, no tangent-foot projection and no column probe on the supported path. Expressions
 with an operation the interval backend does not implement (`floor`, `sign`, …) compile the
 legacy sampled band + ray + march path (`#define USE_INTERVAL 0`); it is the only user of
@@ -736,14 +736,18 @@ Startup to the first frame is about **230 ms**, attributed as follows
 Per-frame grab cycles (900×600, `grabToImage` — frame + readback, so an upper bound on
 the GPU cost), steady state on the same window: `sin(1/x)` default **13.6 ms**, `tan(x)`
 default **12.4 ms**, `sin(1/x)` at zoom 90 (worst case) **12.5 ms**. The previous
-march/interval renderer measured 27/34/33 ms on the same machine: 16 samples are cheaper
+march/interval renderer measured 27/34/33 ms on the same machine: 14 samples are cheaper
 than the march's seed + tangent projection + walk + probe, and the march is now compiled
 only for the legacy path. The 1-D fragment source is about 21 KB.
 
-**Per-pixel `F` evaluations.** The supported path is fixed: 16 samples for the polyline
-(plus two interval evaluations for the column and the stroke footprint); there is no
-march budget and no band-window evaluation. The old fixed-grid/march table is superseded
-and no longer describes the shipped path.
+**Per-pixel `F` evaluations.** The supported path uses 14 samples for the polyline in a
+static view and **7 while the user is dragging/pinching** (`Plot.interacting` halves the
+sample count); two interval evaluations cover the column and the stroke footprint. There is
+no march budget and no band-window evaluation. Anti-aliasing comes from the analytic
+coverage ramp, not from the sample count; the samples only approximate the polyline. Sampling
+was tuned by the render tests: 8 samples overfills the `sin(1/x)` transition and breaks the
+`log` descent, 12 still overfills slightly, 14 passes; the interval band stays exact
+regardless.
 
 ## Shader cache
 

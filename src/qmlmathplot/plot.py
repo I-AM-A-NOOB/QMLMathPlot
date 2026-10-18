@@ -128,6 +128,7 @@ class Plot(QObject):
     spineBottomChanged = Signal()
     spineLeftChanged = Signal()
     spineRightChanged = Signal()
+    interactingChanged = Signal()
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -550,6 +551,10 @@ class Plot(QObject):
     spine_bottom: bool = _style(bool, "spine_bottom", spineBottomChanged, True)
     spine_left: bool = _style(bool, "spine_left", spineLeftChanged, True)
     spine_right: bool = _style(bool, "spine_right", spineRightChanged, True)
+
+    #: Set by the view while a drag/pinch is in progress; the shader then samples every other
+    #: point (0.5-column spacing) and returns to the full grid when the gesture ends.
+    interacting: bool = _style(bool, "interacting", interactingChanged, False)
 
     def _get_color_cycle(self) -> list[str]:
         return list(getattr(self, "_color_cycle", DEFAULT_COLOR_CYCLE))
