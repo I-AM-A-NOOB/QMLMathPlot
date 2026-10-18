@@ -174,6 +174,9 @@ are the explicit equivalents; unrelated files in the directory are never touched
   quality change and was removed. Anti-aliasing is the analytic coverage ramp, not the sample
   count. Measured tuning: 8 samples overfills `sin(1/x)` and breaks the `log` descent, 12 still
   overfills slightly, 14 passes the render suite.
+* A conservative interval over the ±2-column sample window rejects a pixel before the sample
+  loop when its `y` is farther than the stroke radius from that window's range. It is not a
+  column cache: each row still evaluates the same samples; it only removes background work.
 * **Data series are a different artist.** `plot(x, y)` with arrays is a QML-geometry polyline
   (a `Shape`), not a shader — finite data has no aliasing problem and does not need the
   per-pixel machinery. `add_series(x, y)` is reserved for it so `add_curve` never has to

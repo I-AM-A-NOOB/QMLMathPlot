@@ -440,6 +440,25 @@ void main() {
     float y_bot = camera.y - 0.5 * spany;
 
 #if USE_INTERVAL
+    // Conservative reject: every sample/segment used below lies within ±2 columns, so the
+    // interval over that window bounds the curve's y values there. A pixel farther than the
+    // stroke radius from that range cannot be painted; skip the 14 F evaluations and the
+    // column/stroke-footprint intervals. This is the cheap analogue of a column cache: one
+    // interval evaluation instead of the whole per-pixel sample loop. Whole/infinite columns
+    // do not reject (the envelope may fill the viewport); empty columns have no curve at all.
+    IVal wide = FI(x - 2.0 * dx, x + 2.0 * dx);
+    if (wide.kind == IK_EMPTY) {
+        fragColor = vec4(0.0);
+        return;
+    }
+    if (wide.kind == IK_CONNECTED && wide.lo > -IINF && wide.hi < IINF) {
+        float pad = R * camera.w;
+        if (y < wide.lo - pad || y > wide.hi + pad) {
+            fragColor = vec4(0.0);
+            return;
+        }
+    }
+
     IVal own = FI(x - 0.5 * dx, x + 0.5 * dx);
     bool own_empty = own.kind == IK_EMPTY;
     IVal col = own;
@@ -450,7 +469,7 @@ void main() {
     }
 
     // ---- fixed-x sub-pixel polyline (GeoGebra's sampled polyline, on the GPU) ----
-    // 16 samples over ±2 columns (0.25-column spacing) cover the perpendicular foot even at
+    // 14 samples over ±2 columns (0.286-column spacing) cover the perpendicular foot even at
     // 89°: a ±1-column window lost 42 % of the width at 84°. Joining the samples gives a
     // polyline whose segments are diagonal, so the stroke is smooth at any zoom. The interval
     // band stays separate (below); it no longer has to be inferred from this window.

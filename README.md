@@ -747,6 +747,13 @@ coverage ramp, not from the sample count; the samples only approximate the polyl
 was tuned by the render tests: 8 samples overfills the `sin(1/x)` transition and breaks the
 `log` descent, 12 still overfills slightly, 14 passes.
 
+An interval early-out over ±2 columns rejects background pixels before the sample loop: if the
+pixel is farther than the stroke radius from the curve's y range in that window, it returns
+transparent without evaluating `F`. Measured by alternating two live 900×600 views (15 pans
+each, `grabToImage`, including readback): `sin(x)` 23.7 → 22.2 ms, `sin(1/x)` 23.6 → 21.0 ms,
+`x**2` 22.7 → 20.4 ms. Whole/infinite columns keep the full path, so `tan`/`1/x` near a pole
+are unchanged.
+
 ## Shader cache
 
 `qsb` binaries are cached in the platform temp directory:

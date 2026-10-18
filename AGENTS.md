@@ -1000,3 +1000,16 @@ the full step budget in both directions plus both windows.
     coverage ramp, not the sample count, so reducing samples does not change AA quality much —
     it changes how well the polyline follows steep/oscillating geometry.
 
+56. **A conservative ±2-column interval rejects background pixels before sampling.** Dragging
+    re-renders the whole fragment pass every frame; the per-pixel 14-sample loop dominated even
+    where no curve was near. The shader now evaluates `wide = FI(x - 2dx, x + 2dx)` first: every
+    sample/segment it uses lies in that window, so a pixel whose `y` is farther than
+    `R * camera.w` from `[wide.lo, wide.hi]` cannot be painted. `wide` empty returns
+    transparent; whole/infinite columns do not reject (the envelope may fill the viewport).
+    The reject is before `own`/`gate`, so skipped pixels also avoid those interval evaluations.
+    Measured by alternating two live 900×600 views with and without the block, 15 pans each
+    (`grabToImage`, includes readback): `sin(x)` **23.7 → 22.2 ms**, `sin(1/x)` **23.6 → 21.0
+    ms**, `x**2` **22.7 → 20.4 ms**. This is not a column cache: every row in a column still
+    recomputes the same samples. The larger win would be a pre-pass that stores the 14 samples
+    (and the interval topology) per column in a texture; the reserve is the render architecture.
+
