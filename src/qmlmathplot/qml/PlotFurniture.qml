@@ -85,10 +85,12 @@ Item {
         anchors.fill: parent
         visible: furnitureRoot.plot.ticks_visible
 
-        // The axes are the lines through world (0,0). When 0 is off screen the axis sticks to
-        // the nearest edge instead, so its labels are never lost (the grid stays where it is).
-        // "edge" pins both axes to the item's edges and draws no axis line.
+        // The axes are the lines through world (0,0) in "zero" mode. When 0 is off screen the
+        // axis sticks to the nearest edge instead, so its labels are never lost (the grid
+        // stays where it is). "edge" pins both axes to the item's edges and draws no axis
+        // line; "box" draws the four Matplotlib-style spines around the viewport.
         readonly property bool atZero: furnitureRoot.plot.axes_position === "zero"
+        readonly property bool boxed: furnitureRoot.plot.axes_position === "box"
         readonly property real xAxisY: atZero
                                        ? Math.max(0, Math.min(height,
                                            furnitureRoot.view.mapToScreen(0, 0).y))
@@ -111,6 +113,42 @@ Item {
         Rectangle {
             visible: furniture.atZero
             x: furnitureRoot._snapLine(furniture.yAxisX, furniture.axisThickness) - width / 2
+            y: 0
+            width: furniture.axisThickness
+            height: parent.height
+            color: furnitureRoot.plot.axis_color
+        }
+
+        // Matplotlib-style box: four spines around the viewport, with the ticks/labels still
+        // on the bottom and left edges (the same delegates below). The lines sit inside the
+        // item so the offscreen export captures them without clipping.
+        Rectangle {
+            visible: furniture.boxed
+            x: 0
+            y: 0
+            width: parent.width
+            height: furniture.axisThickness
+            color: furnitureRoot.plot.axis_color
+        }
+        Rectangle {
+            visible: furniture.boxed
+            x: 0
+            y: parent.height - height
+            width: parent.width
+            height: furniture.axisThickness
+            color: furnitureRoot.plot.axis_color
+        }
+        Rectangle {
+            visible: furniture.boxed
+            x: 0
+            y: 0
+            width: furniture.axisThickness
+            height: parent.height
+            color: furnitureRoot.plot.axis_color
+        }
+        Rectangle {
+            visible: furniture.boxed
+            x: parent.width - width
             y: 0
             width: furniture.axisThickness
             height: parent.height

@@ -156,7 +156,9 @@ def test_axes_position_is_validated() -> None:
     assert plot.axes_position == "zero"
     plot.axes_position = "edge"
     assert plot.axes_position == "edge"
-    plot.axes_position = "edge"                           # idempotent
+    plot.axes_position = "box"                            # Matplotlib-style spines
+    assert plot.axes_position == "box"
+    plot.axes_position = "box"                            # idempotent
     with pytest.raises(ValueError):
         plot.axes_position = "centre"
 

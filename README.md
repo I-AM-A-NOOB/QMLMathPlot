@@ -347,7 +347,7 @@ plot.available_themes                 # the names, for a host's picker (both dem
 The 26 bundled sheets are Matplotlib's own styles, vendored verbatim into
 `qmlmathplot/themes/*.mplstyle` and converted at load time: Matplotlib's `rcParams` keys are
 mapped onto this library's property names, and keys describing things this library does not
-have (spines, figure size, dpi, legend, marker styles, …) are ignored. `themes.names()` lists
+have (figure size, dpi, legend, marker styles, …) are ignored. `themes.names()` lists
 them (`"default"` plus the 26 sheets). An unknown name raises `KeyError` and leaves the current
 theme alone.
 
@@ -359,7 +359,18 @@ theme alone.
   `x = 0` — drawn in `axis_color` / `axis_width`, and the **tick marks and labels ride those
   axes** instead of hugging the item's edges. When 0 is off screen the axis sticks to the
   nearest edge, so its labels are never lost (and a label never leaves the item); the grid
-  stays where it is. `plot.axes_position = "edge"` restores the edge-pinned behaviour.
+  stays where it is. `plot.axes_position = "edge"` keeps the labels at the edges without
+  drawing axis lines.
+- `plot.axes_position = "box"` draws the four Matplotlib-style **spines** around the viewport
+  (same `axis_color` / `axis_width`), with ticks and labels on the bottom/left edges. It is a
+  property, not a separate theme, so it composes with any theme:
+  ```python
+  plot.axes_position = "box"
+  plot.grid = True
+  ```
+- Furniture is part of the same QML scene, so `to_image()` / `savefig()` capture the box,
+  grid, ticks, labels and title exactly as the live view renders them (there is an export
+  regression test for the four spines).
 - `camera.viewport` reports the last size the view sent, so a host can size an export from it.
 - The tick *values* are nice numbers computed in Python (`Camera.tick_values()` /
   `nice_ticks()`, steps of 1/2/5 x 10^n) and pushed through `ticksChanged`; QML only positions

@@ -317,6 +317,30 @@ def test_transparent_clears_to_alpha_zero(app: QApplication) -> None:
     assert plot.background.alpha() > 0, "the live background must be restored"
 
 
+def test_boxed_matplotlib_furniture_is_exported(app: QApplication) -> None:
+    plot = Plot()
+    plot.grid = False
+    plot.ticks_visible = True
+    plot.axes_position = "box"
+    plot.line_width = 2.0
+    plot.title = "boxed"
+    plot.xlabel = "x"
+    plot.ylabel = "y"
+    plot.add_curve("sin(x)")
+    plot.camera.set_viewport(LOGICAL[0], LOGICAL[1])
+    plot.camera.set_view(0.0, 0.0, SCALE, SCALE)
+    image = plot.to_image(width=400, height=300)
+
+    def dark(color) -> bool:
+        return max(255 - color.red(), 255 - color.green(), 255 - color.blue()) > 80
+
+    width, height = image.width(), image.height()
+    assert sum(dark(image.pixelColor(x, 0)) for x in range(width)) > 0.8 * width
+    assert sum(dark(image.pixelColor(x, height - 1)) for x in range(width)) > 0.8 * width
+    assert sum(dark(image.pixelColor(0, y)) for y in range(height)) > 0.8 * height
+    assert sum(dark(image.pixelColor(width - 1, y)) for y in range(height)) > 0.8 * height
+
+
 def test_the_live_camera_and_background_survive_the_export(app: QApplication) -> None:
     plot = _plot("sin(x)", scale_x=0.013, scale_y=0.007)
     camera = plot.camera

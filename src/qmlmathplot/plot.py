@@ -361,14 +361,17 @@ class Plot(QObject):
 
     def _set_axes_position(self, value: str) -> None:
         value = str(value)
-        if value not in ("zero", "edge"):
-            raise ValueError(f'axesPosition must be "zero" or "edge", got {value!r}')
+        if value not in ("zero", "edge", "box"):
+            raise ValueError(
+                f'axesPosition must be "zero", "edge" or "box", got {value!r}'
+            )
         if value == self._get_axes_position():
             return
         self._axes_position = value
         self.axesPositionChanged.emit()
 
-    #: Where the ticks ride: the axes through world (0,0), or the item's edges.
+    #: Where the ticks ride: axes through world (0,0) ("zero"), the item's edges without
+    #: lines ("edge"), or four Matplotlib-style spines around the viewport ("box").
     axes_position: str = Property(
         str, _get_axes_position, _set_axes_position, notify=axesPositionChanged
     )

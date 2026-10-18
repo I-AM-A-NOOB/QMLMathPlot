@@ -263,7 +263,10 @@ vector route).
 * The axes are drawn **through the origin** by default (`axes_position = "zero"`): the x-axis
   is the horizontal line at world y=0, the y-axis the vertical at x=0, and the tick marks and
   labels sit on them. When 0 is outside the visible range that axis sticks to the nearest edge,
-  so labels are never lost while panning (`"edge"` restores the old edge-pinned behaviour).
+  so labels are never lost while panning (`"edge"` keeps the labels at the edges without line
+  axes; `"box"` draws the four Matplotlib-style spines around the viewport, with ticks and
+  labels on the bottom/left edges). The box is QML furniture like the rest, so an offscreen
+  export captures it.
 * The grid, axes, tick marks and labels are **drawn in QML** (a `Canvas`/`Shape` regenerated
   when the camera changes). Simple and crisp enough for the tens of lines a grid has; moving it
   into a static shader (tick positions as uniforms, baked once) stays the documented
