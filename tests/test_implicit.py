@@ -319,6 +319,50 @@ def test_implicit_circle_stroke_has_the_same_width_at_every_angle(app: QGuiAppli
 
 
 @pytest.mark.gui
+def test_a_scaled_rational_level_set_does_not_fill_far_fields(app: QGuiApplication) -> None:
+    """``(x+y)/(x*y) = 0`` is the line ``y = -x``; the singular-cell disc must not fill the
+    far quadrants.
+
+    The singular test originally required only ``|Fx|+|Fy| < 1e-3`` and ``|F| < 0.05``. For this
+    expression both hold over huge regions around |x|,|y| ≈ 50: F and its gradient are tiny even
+    though the level set is far away. The extra ``|F| < R*|grad F|`` gate is scale-invariant and
+    asks the point to be on the set to first order; an isolated point such as ``x²+y²=0`` still
+    passes because both sides are zero there.
+    """
+    plot = Plot()
+    plot.grid = False
+    plot.ticks_visible = False
+    plot.line_width = 2.0
+    plot.add_curve("(x+y)/(x*y)")
+    image = _render(plot, app, xlim=(-120.0, 120.0), ylim=(-60.0, 60.0))
+
+    def screen(wx: float, wy: float) -> tuple[int, int]:
+        return (round((wx + 120.0) / 240.0 * image.width()),
+                round((60.0 - wy) / 120.0 * image.height()))
+
+    # Far from y = -x: these were fully filled by the singular-cell disc.
+    for wx, wy in ((50.0, 50.0), (-50.0, -50.0), (90.0, 30.0), (-90.0, -30.0)):
+        px, py = screen(wx, wy)
+        assert not _lit(image, px, py), f"unexpected fill at ({wx}, {wy})"
+
+    # The level set itself is still drawn: (50, -50) is on y = -x.
+    px, py = screen(50.0, -50.0)
+    assert _lit(image, px, py), "the level set disappeared"
+
+
+@pytest.mark.gui
+def test_an_isolated_singular_point_is_still_drawn(app: QGuiApplication) -> None:
+    """``x²+y² = 0`` has no sign change around its only solution; the singular-cell disc draws
+    it. The new distance gate must keep this case (both F and its gradient vanish there)."""
+    plot = Plot()
+    plot.grid = False
+    plot.ticks_visible = False
+    plot.add_curve("x**2 + y**2")
+    image = _render(plot, app)
+    assert _lit(image, image.width() // 2, image.height() // 2)
+
+
+@pytest.mark.gui
 def test_implicit_curve_exports_through_the_qt_path(app: QGuiApplication) -> None:
     """The export reuses the same shaders, so an implicit curve needs nothing special there."""
     from PySide6.QtCore import QSize

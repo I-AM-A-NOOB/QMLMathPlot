@@ -268,8 +268,11 @@ corner is in the domain and no pole factor changes sign between them; the edge c
 interpolated and the cell's contour segment is stroked (the saddle case is paired using the cell
 centre's sign). The first-order/Newton path still supplies the sub-pixel width; the cell term
 adds the coverage of a thin or tangent branch whose centre projection fails. A **singular cell**
-(`|Fx| + |Fy| < 1e-3` in world units, plus `|F| < 0.05`) gets a small disc, so an isolated point
-such as `x**2 + y**2 = 0` is not left to the projection alone.
+(`|Fx| + |Fy| < 1e-3` in world units, `|F| < 0.05`, **and** `|F| < R·|grad F|` in pixels) gets
+a small disc, so an isolated point such as `x**2 + y**2 = 0` is not left to the projection alone.
+The last test is the scale-invariant one: it requires the point to be on the set to first order,
+so a scaled expression such as `(x+y)/(x·y)` — whose F and gradient are tiny far from its line —
+no longer fills whole quadrants with the disc.
 
 Still not ported: GGB's Bernstein subdivision (**polynomial-only**), its adaptive quad-tree
 refinement and the `ContourAssembler`/`ContourLinker` (they exist to produce a selectable vector

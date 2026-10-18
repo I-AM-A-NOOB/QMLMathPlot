@@ -1031,3 +1031,17 @@ the full step budget in both directions plus both windows.
     two interval evaluations (`wide`, `own`) instead of three; the pole/domain path is
     unchanged.
 
+
+59. **The singular-cell test needs a scale-invariant distance gate.** Reported on
+    `(x+y)/(x*y) = 0` (the line `y = -x`): the far quadrants around |x|,|y| ≈ 50 were filled
+    solid. Cause: the isolated-point branch accepted `|Fx| + |Fy| < 1e-3` **and** `|F| < 0.05`,
+    but for this expression both are true over huge regions — F and its gradient are tiny far
+    from the line, although the set is far away. Scaling the expression (`1/x+1/y` vs
+    `(x+y)/(x*y)`) changes the absolute thresholds without changing the geometry. Fix: also
+    require `|F| < R * |grad F|` (pixels), i.e. the point must be on the set to first order.
+    The ratio is scale-invariant; an isolated point such as `x² + y² = 0` still passes because
+    both sides vanish there (measured: its centre is still painted). Regression:
+    `test_implicit.py::test_a_scaled_rational_level_set_does_not_fill_far_fields` and
+    `::test_an_isolated_singular_point_is_still_drawn`; the former samples (±50, ±50) and
+    (±90, ±30), which were solid before the fix and are background after it, while (50, −50)
+    on the line remains lit.

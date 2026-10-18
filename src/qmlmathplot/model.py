@@ -1287,8 +1287,14 @@ void main() {
     // such as x² + y² = 0 is not left to the projection alone.
     // GGB measures the singular cell in *world* derivative units (|Fx| + |Fy| < 0.001);
     // the per-pixel gradient of an ordinary circle is ~0.01 and must not qualify.
+    // The distance gate is essential for a scaled expression: (x+y)/(x*y) has |F| < 0.05 and
+    // |Fx|+|Fy| < 0.001 over huge regions around ±50, although the level set is far away. A
+    // singular point must also be *on* the set to the first order: |F| ~ R*|grad F|. The
+    // ratio is scale-invariant, unlike the two absolute thresholds above.
     float gw_s = abs(FX(x, y)) + abs(FY(x, y));
-    if (dom && (f == f) && (abs(f) < 1e30) && gw_s < 1e-3 && abs(f) < 0.05) {
+    float gnorm_s = max(sqrt(gx * gx + gy * gy), 1e-9);
+    if (dom && (f == f) && (abs(f) < 1e30) && gw_s < 1e-3 && abs(f) < 0.05
+            && abs(f) < R * gnorm_s) {
         march_cov = 1.0;
     }
 
