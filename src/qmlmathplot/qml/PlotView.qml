@@ -269,6 +269,16 @@ Item {
         view: root
     }
 
+    PlotOverlay {
+        anchors.fill: parent
+        view: root
+    }
+
+    PlotLegend {
+        anchors.fill: parent
+        view: root
+    }
+
     PlotInput {
         anchors.fill: parent
         view: root

@@ -130,11 +130,13 @@ The model:
 
 | Object | Members |
 |---|---|
-| `Plot` | `camera`, `curves`, `xlim`/`ylim`/`aspect` (forwarded), `add_curve()` / `add_implicit()` / `remove_curve()`, `available_themes`, and the style properties: `background`, `grid`, `grid_color`, `grid_width`, `grid_alpha`, `grid_style`, `axis_color`, `axis_width`, `axes_position`, `color_cycle`, `line_width`, `text_color`, `tick_color`, `tick_length`, `font_size`, `tick_font_size`, `title`, `xlabel`, `ylabel`, `title_color`, `title_font_size`, `title_bold`, `ticks_visible`, `theme` |
+| `Plot` | `camera`, `curves`, `annotations`, `guides`, `xlim`/`ylim`/`aspect` (forwarded), `add_curve()` / `add_implicit()` / `remove_curve()`, `annotate()` / `add_text()` / `add_hline()` / `add_vline()`, `set_xticks()` / `set_yticks()`, `available_themes`, and the style properties: `background`, `grid`, `grid_x`, `grid_y`, `grid_color`, `grid_width`, `grid_alpha`, `grid_style`, `axis_color`, `axis_width`, `axes_position`, `color_cycle`, `line_width`, `text_color`, `tick_color`, `tick_length`, `tick_width`, `tick_pad`, `ticks_top`, `ticks_right`, `minor_ticks`, `spine_top` / `spine_bottom` / `spine_left` / `spine_right`, `font_size`, `tick_font_size`, `title`, `xlabel`, `ylabel`, `title_color`, `title_font_size`, `title_bold`, `legend`, `legend_position`, `ticks_visible`, `theme` |
 | `Camera` | `centre`, `zoom` (world units per logical pixel), `aspect`, `xlim`/`ylim` (derived), `ticks_x`/`ticks_y`, `zoomStep` / `panEnabled` / `zoomEnabled`, `animationDuration`, `input` (a `ViewInput`), slots `set_viewport(w, h)` / `zoom_by(delta, u, v, w, h)` / `zoom_at(factor, u, v, w, h)` / `pan_pixels(dx, dy)` / `animate_zoom(...)` / `animate_pan(dx, dy, ms)` / `stop_animation()` / `reset()` |
 | `ViewInput` | `keyboardEnabled`, `keyPanStep`, `keyPanRepeatInterval`, `panLeftShortcut` / `panRightShortcut` / `panUpShortcut` / `panDownShortcut` / `zoomInShortcut` / `zoomOutShortcut`, `matches(key, modifiers, shortcut)` |
 | `Curve` | `expression` (string or sympy expression), `expr` (the parsed expression, read-only), `implicit`, `color`, `lineWidth`, `visible`, `label`, `error` (read-only), the baked `vertexShader` / `fragmentShader` |
-| `CurveListModel` | the curves as a model (`curve`, `expression`, `color`, `lineWidth`, `visible`, `vertexShader`, `fragmentShader` roles) so QML puts one `ShaderEffect` behind each |
+| `CurveListModel` | the curves as a model (`curve`, `expression`, `color`, `lineWidth`, `visible`, `label`, `vertexShader`, `fragmentShader` roles) so QML puts one `ShaderEffect` behind each |
+| `Annotation` | `text`, `xy` (world), `xytext` (pixel offset), `arrow`, `color`, `fontSize`, `visible` |
+| `Guide` | `kind` (`"h"`/`"v"`), `value`, `color`, `width`, `style`, `visible` |
 
 Every setter is a Qt `Property` with a notify signal, so the same calls work from QML, from a
 Qt Designer slot or from a `QTimer`:
@@ -197,8 +199,10 @@ plt.show()                             # blocks in a script; use block=False in 
 ```
 
 What maps: one figure/one axes (`subplots()` and `subplot(111)`), `plot(expression)`,
-`xlim`/`ylim`, `title`/`xlabel`/`ylabel`, `grid`, `aspect`, `savefig`/`to_image`, themes.
-`plt.gcf()`/`gca()`/`sca()`/`close()`/`show()` follow Matplotlib's current-figure shape.
+`xlim`/`ylim`, `title`/`xlabel`/`ylabel`, `grid(axis=...)`, `aspect`, `savefig`/`to_image`,
+themes, `legend`, `annotate`/`text`, `axhline`/`axvline`, `set_xticks`/`set_yticks` and
+`tick_params`. `plt.gcf()`/`gca()`/`sca()`/`close()`/`show()` follow Matplotlib's
+current-figure shape.
 
 What is deliberately different:
 
@@ -211,8 +215,9 @@ What is deliberately different:
   deferred renderer or blitting.
 - **`savefig` is a region at a pixel size**, not a page at a dpi. `width`/`height` are device
   pixels and `dpi` is a multiplier; `backend="matplotlib"` is the vector route.
-- **No legends, annotations, log axes or manual ticks yet.** `legend()`, `annotate()`,
-  `set_xscale()` and `set_xticks()` raise with the reason; chrome belongs to the host.
+- **Log axes and full annotation styling are not implemented.** `set_xscale()`/`set_yscale()`
+  raise with the reason; annotations support text + a straight arrow + pixel offset, not
+  Matplotlib's bbox/connectionstyle engine.
 - **Themes are per figure**, not `rcParams`; `plt` has no global style state beyond the current
   figure.
 - **`mpl_connect`/`blit` are absent.** Qt signals are the event system.
@@ -376,6 +381,59 @@ theme alone.
   `nice_ticks()`, steps of 1/2/5 x 10^n) and pushed through `ticksChanged`; QML only positions
   and formats them, so a frame never recomputes ticks.
 - `plot.ticks_visible = False` hides the whole furniture (axes, marks and labels).
+
+## Annotations, legend and guides
+
+Annotation elements are **model-driven**, not host QML: the same objects render in the live view
+and in `to_image()` / `savefig()`.
+
+```python
+plot.annotate("pole", xy=(0.0, 0.0), xytext=(24, -18), arrowprops={"color": "#333333"})
+plot.text(2.0, 1.0, "f(2)=1", color="#333333", font_size=12)
+plot.add_hline(0.5, color="#888888", style="--")     # horizontal guide
+plot.add_vline(1.0, color="#888888", style=":")      # vertical guide
+
+plot.add_curve("sin(x)", label="sin")
+plot.add_curve("cos(x)", label="cos")
+plot.legend = True
+plot.legend_position = "upper right"                 # best | upper left | lower right | lower left
+
+plot.set_xticks([-3, 0, 3], ["-3", "0", "3"])        # explicit positions + labels
+plot.set_yticks([-1, 1])
+plot.grid_x = True
+plot.grid_y = False                                  # per-axis grid
+plot.tick_width = 1.5
+plot.tick_pad = 4.0
+plot.ticks_top = True
+plot.ticks_right = True
+plot.minor_ticks = True                              # four minor marks per major interval
+plot.spine_top = False                               # "box" mode only
+```
+
+`xy` is in world coordinates and `xytext` is a **logical-pixel offset** from it, so annotations
+stay attached to the data while the label keeps a stable screen offset. `Annotation` and `Guide`
+are also exposed as objects (`plot.annotations.at(i)`, `plot.guides.at(i)`) for per-item edits.
+
+The Matplotlib facade forwards the same surface:
+
+```python
+ax.annotate("pole", xy=(0, 0), xytext=(24, -18), arrowprops={"color": "#333"})
+ax.text(2, 1, "f(2)=1")
+ax.legend(loc="lower right")
+ax.set_xticks([-3, 0, 3], labels=["-3", "0", "3"])
+ax.tick_params(axis="x", length=6, width=1.5, top=True)
+ax.grid(True, axis="x")
+ax.axhline(0.5, color="#888888")
+ax.axvline(1.0, color="#888888")
+```
+
+`plt.annotate` / `plt.text` / `plt.legend` / `plt.xticks` / `plt.yticks` /
+`plt.tick_params` / `plt.axhline` / `plt.axvline` forward to the current axes. The
+`to_matplotlib()` hand-off maps labels, legend, annotations, guides and explicit ticks as well.
+
+The annotation/guide/legend layers are part of the QML scene. The export path now drains the
+queued Canvas paints before the synchronous readback, so the grid, annotations and guides are
+present in screenshots too (previously a Canvas-painted grid could miss the grab).
 
 ## Export
 
@@ -564,6 +622,8 @@ uv run ruff check src tests examples   # bug-level lint (undefined names, unused
   matplotlib's default style, the limits are forwarded to the camera, and a theme applies
   (and re-applies as a reset) while an unknown name is rejected.
 - `test_themes.py`: the vendored style sheets resolve to this library's properties.
+- `test_overlay.py`: annotations (`annotate`/`text`), horizontal/vertical guides, legend and
+  custom ticks, the `Axes`/`pyplot` forwarding, and the matplotlib hand-off mapping.
 - `test_qsb_cache.py`: the cache location/info/clear API and the age + LRU prune; unrelated
   files in the temp directory are not touched.
 - `test_shader_bake.py`: the stage of a baked `.qsb` must match its purpose, and

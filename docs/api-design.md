@@ -339,15 +339,24 @@ unmodified `.mplstyle` work.
 Themes set the *defaults* for new artists and the plot's own furniture; an explicit
 `add_curve(color=...)` still wins, and nothing is global — a theme belongs to one `Plot`.
 
-## 8. Annotations, labels and custom elements
+## 8. Annotations, labels and custom elements — implemented
 
-* `plot.annotate(text, xy=..., xytext=..., arrow=...)` — `xy` in world units, `xytext` an
-  offset in pixels, so the label does not move when the camera zooms.
-* **No legend is planned, and none is built in.** `Curve.label` exists so a host can build
-  one; the natural place is `PlotView.overlay` (a legend is a screen-space element on an
-  infinite canvas, not something inside the canvas).
-* Everything else is QML: `underlay` / `overlay` are default properties and `mapToScreen()`
-  gives the transform — arbitrary QML inside the plot's coordinate space, no Python model.
+* `plot.annotate(text, xy, xytext=(24, -18), arrowprops=...)`: `xy` is a world coordinate,
+  `xytext` a **logical-pixel** offset, so the label stays attached to data while keeping a
+  stable screen offset. `plot.text(x, y, s)` is the no-arrow form.
+* `plot.add_hline(y, ...)` / `plot.add_vline(x, ...)` are model-driven `Guide` objects
+  (colour, width, dash style), painted above the grid and below the labels.
+* `plot.legend=True` + `legend_position` renders `Curve.label` entries in a QML legend box;
+  `plot.set_xticks(values, labels)` / `set_yticks` override the automatic nice numbers.
+* Furniture knobs: `grid_x`/`grid_y`, `tick_width`, `tick_pad`, `ticks_top`, `ticks_right`,
+  `minor_ticks` (four interpolated marks per major interval) and per-spine visibility in
+  `"box"` mode. `Axes.tick_params()`/`grid(axis=...)` forward to them.
+* Annotations, guides and the legend live in `PlotOverlay.qml` / `PlotLegend.qml`, part of the
+  same scene as the curves. The export drains the queued Canvas paints before
+  `grabFramebuffer()`, so grid, guides and annotations are in the image as well.
+* Not ported: Matplotlib's bbox/arrowstyle/connectionstyle engine, figure-level `text`, and
+  `spines[...]` proxies. A straight arrow + pixel offset covers the useful part of the
+  annotation vocabulary without duplicating Matplotlib's layout engine.
 
 ## 9. Export / screenshots
 
@@ -458,7 +467,8 @@ imperatively rasterised canvas — none of which we have.
 | `aspect` (+ `adjustable`) | **`aspect` yes, `adjustable` no** | `'box'` letterboxing needs an axes box inside a figure; on an infinite canvas the camera just zooms out instead |
 | `NavigationToolbar2QT` | **no** | its features assume a rasterising canvas (rubber-band box zoom, blitting), it would have to be written twice (QWidget + QML) and would fight host UI frameworks (qfluentwidgets, RinUI). Expose primitives instead (§13) |
 | `Figure` / `Axes` / `subplots()` / `GridSpec` | **facade only** | the core has one `Plot` per widget. `Figure`/`Axes` exist as compatibility names over that model (§14); `GridSpec`/multiple axes do not, and `subplots(2, 1)` is refused |
-| `legend()` | **not planned** | chrome belongs to the host; `Curve.label` + `overlay` is enough |
+| `legend()` | **yes, model-driven** | `Curve.label` + `Plot.legend`; a legend inside the scene is captured by exports, unlike host chrome |
+| `annotate()` / `text()` / `axhline` / `axvline` | **basic** | world anchor + pixel offset + straight arrow, guides; the bbox/connectionstyle engine is not ported |
 | `savefig()` | **no, but the same spirit** | a bounded figure can be re-rendered at a new dpi; an infinite canvas needs a *region* (§9). The facade keeps that semantics |
 | `plot(x, y)` with arrays | **as `add_series`** | a data polyline is a different artist with a different quality path (§6); the facade refuses arrays rather than faking them |
 | `FigureCanvas` / `draw()` / `Artist` / `Transform` | **facade only, no mechanism** | `FigureCanvasQt` is a host widget; `draw()` is a no-op because the Qt scene is live. `Artist`/`Transform` do not exist |
@@ -501,11 +511,9 @@ that concept), **reasonable gap** (it fits the model and is simply not built), a
 |---|---|
 | `quickplot()` | the one-liner can be `pyplot.figure(); pyplot.plot(...)` today; a dedicated function is not built |
 | `add_series(x, y)` | data polylines as a QML-geometry artist; designed (§6) |
-| `annotate()` / `text()` | designed (§8) |
-| settable ticks (`plot.ticks`) | designed; automatic nice-number ticks already work |
+| tick formatters / log-scale tick locators | automatic nice numbers and explicit values work; formatters do not |
 | **log axes** | needs a non-linear camera→item mapping in the shader; common enough to matter |
 | markers / `scatter` | a different artist (points, not a stroke) |
-| minor ticks, tick formatters | the tick machinery is already in Python |
 | `fill_between`, spans, bars | QML geometry, like `add_series` |
 | `bbox_inches="tight"` | trim an export to the drawn extent |
 | more style keys (font family, cycler over line style/marker) | the converter drops what it cannot map |

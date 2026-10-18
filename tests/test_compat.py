@@ -146,14 +146,10 @@ def test_pyplot_current_figure_and_plot():
 
 def test_matplotlib_mechanisms_are_refused_explicitly():
     axes = Figure().gca()
-    with pytest.raises(NotImplementedError, match="legend"):
-        axes.legend()
     with pytest.raises(NotImplementedError, match="log"):
         axes.set_xscale("log")
-    with pytest.raises(NotImplementedError, match="annotations"):
-        axes.annotate("a", xy=(0, 0))
-    with pytest.raises(NotImplementedError, match="nice numbers"):
-        axes.set_xticks([0, 1])
+    with pytest.raises(NotImplementedError, match="log"):
+        axes.set_yscale("log")
     with pytest.raises(NotImplementedError, match="axes box"):
         Figure().add_axes((0.1, 0.1, 0.8, 0.8))
 

@@ -15,6 +15,7 @@ import sympy as sp
 
 from .camera import Camera
 from .curve import DEFAULT_COLOR_CYCLE, Curve, CurveListModel
+from .overlay import Annotation, AnnotationListModel, Guide, GuideListModel
 from .themes import names, resolve
 
 __all__ = ["Plot"]
@@ -57,6 +58,26 @@ def _style(kind: object, name: str, notify: Signal, default: object) -> Property
     return Property(kind, getter, setter, notify=notify)
 
 
+def _normalise_ticks(
+    values: object, labels: object = None
+) -> list[list[float | str]]:
+    """``[value, ...]`` or ``[[value, label], ...]`` -> QML-readable pairs."""
+    if values is None:
+        return []
+    label_list = list(labels) if labels is not None else []
+    out: list[list[float | str]] = []
+    for index, item in enumerate(values):  # type: ignore[union-attr]
+        if isinstance(item, (list, tuple)):
+            if len(item) < 2:
+                raise ValueError(f"tick pair must be (value, label), got {item!r}")
+            value, label = item[0], item[1]
+        else:
+            value = item
+            label = label_list[index] if index < len(label_list) else f"{float(value):g}"
+        out.append([float(value), str(label)])
+    return out
+
+
 class Plot(QObject):
     """The canvas state: a camera, the curves, and how they are dressed."""
 
@@ -90,12 +111,31 @@ class Plot(QObject):
     xlabelChanged = Signal()
     ylabelChanged = Signal()
     ticksVisibleChanged = Signal()
+    annotationsChanged = Signal()
+    guidesChanged = Signal()
+    legendChanged = Signal()
+    legendPositionChanged = Signal()
+    xticksChanged = Signal()
+    yticksChanged = Signal()
+    gridXChanged = Signal()
+    gridYChanged = Signal()
+    tickWidthChanged = Signal()
+    tickPadChanged = Signal()
+    ticksTopChanged = Signal()
+    ticksRightChanged = Signal()
+    minorTicksChanged = Signal()
+    spineTopChanged = Signal()
+    spineBottomChanged = Signal()
+    spineLeftChanged = Signal()
+    spineRightChanged = Signal()
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._camera = Camera(self)
         self._theme = ""
         self._curves = CurveListModel(DEFAULT_COLOR_CYCLE, self.line_width, self)
+        self._annotations = AnnotationListModel(self)
+        self._guides = GuideListModel(self)
         self._camera.viewChanged.connect(self.viewChanged)
         self._camera.aspectChanged.connect(self.aspectChanged)
         self.cameraChanged.emit()
@@ -117,6 +157,112 @@ class Plot(QObject):
     # Qt property type (the meta-object rejects "QAbstractListModel*"), and QML only needs the
     # object to *be* a list model.
     curves: CurveListModel = Property(QObject, _get_curves, notify=curvesChanged)
+
+    def _get_annotations(self) -> AnnotationListModel:
+        return self._annotations
+
+    annotations: AnnotationListModel = Property(QObject, _get_annotations, constant=True)
+
+    def _get_guides(self) -> GuideListModel:
+        return self._guides
+
+    guides: GuideListModel = Property(QObject, _get_guides, constant=True)
+
+    @Slot(str, "QVariant", "QVariant", bool, "QVariant", float, result=QObject)
+    @Slot(str, "QVariant", "QVariant", bool, result=QObject)
+    def add_annotation(
+        self,
+        text: str,
+        xy: object,
+        xytext: object = (0.0, 0.0),
+        arrow: bool = False,
+        color: object = None,
+        font_size: float | None = None,
+    ) -> Annotation:
+        """Add a label at world ``xy``, offset by ``xytext`` logical pixels."""
+        item = Annotation(
+            text,
+            xy,
+            xytext,
+            arrow=arrow,
+            color=self.text_color if color is None else color,
+            font_size=self.font_size if font_size is None else font_size,
+            parent=self._annotations,
+        )
+        self._annotations.add(item)
+        self.annotationsChanged.emit()
+        return item
+
+    def add_text(self, x: float, y: float, text: str, **kwargs: object) -> Annotation:
+        """Place a text label at world ``(x, y)`` (no arrow)."""
+        return self.add_annotation(text, (x, y), (0.0, 0.0), False, **kwargs)
+
+    def annotate(
+        self,
+        text: str,
+        xy: object,
+        xytext: object = (24.0, -18.0),
+        arrowprops: dict[str, object] | None = None,
+        **kwargs: object,
+    ) -> Annotation:
+        """Matplotlib-style ``annotate(text, xy=..., xytext=..., arrowprops=...)``."""
+        color = kwargs.pop("color", None)
+        font_size = kwargs.pop("font_size", kwargs.pop("fontsize", None))
+        if color is None and arrowprops is not None:
+            color = arrowprops.get("color")
+        return self.add_annotation(
+            text, xy, xytext, arrowprops is not None, color, font_size
+        )
+
+    @Slot(QObject)
+    def remove_annotation(self, annotation: Annotation) -> None:
+        self._annotations.remove(annotation)
+        self.annotationsChanged.emit()
+
+    def clear_annotations(self) -> None:
+        self._annotations.clear()
+        self.annotationsChanged.emit()
+
+    @Slot(float, "QVariant", float, str, result=QObject)
+    def add_hline(
+        self, y: float, color: object = None, width: float = 1.0, style: str = "--"
+    ) -> Guide:
+        guide = Guide(
+            "h",
+            float(y),
+            color=self.grid_color if color is None else color,
+            width=width,
+            style=style,
+            parent=self._guides,
+        )
+        self._guides.add(guide)
+        self.guidesChanged.emit()
+        return guide
+
+    @Slot(float, "QVariant", float, str, result=QObject)
+    def add_vline(
+        self, x: float, color: object = None, width: float = 1.0, style: str = "--"
+    ) -> Guide:
+        guide = Guide(
+            "v",
+            float(x),
+            color=self.grid_color if color is None else color,
+            width=width,
+            style=style,
+            parent=self._guides,
+        )
+        self._guides.add(guide)
+        self.guidesChanged.emit()
+        return guide
+
+    @Slot(QObject)
+    def remove_guide(self, guide: Guide) -> None:
+        self._guides.remove(guide)
+        self.guidesChanged.emit()
+
+    def clear_guides(self) -> None:
+        self._guides.clear()
+        self.guidesChanged.emit()
 
     def _get_xlim(self) -> QVector2D:
         return self._camera.xlim
@@ -324,6 +470,86 @@ class Plot(QObject):
     )
     title_bold: bool = _style(bool, "title_bold", titleBoldChanged, False)
     ticks_visible: bool = _style(bool, "ticks_visible", ticksVisibleChanged, True)
+
+    # ------------------------------------------------------------ legend/ticks
+    legend: bool = _style(bool, "legend", legendChanged, False)
+
+    _LEGEND_POSITIONS = ("best", "upper right", "upper left", "lower right", "lower left")
+
+    def _get_legend_position(self) -> str:
+        return getattr(self, "_legend_position", "upper right")
+
+    def _set_legend_position(self, value: str) -> None:
+        value = str(value)
+        if value not in self._LEGEND_POSITIONS:
+            raise ValueError(
+                f"legendPosition must be one of {self._LEGEND_POSITIONS}, got {value!r}"
+            )
+        if value == self._get_legend_position():
+            return
+        self._legend_position = value
+        self.legendPositionChanged.emit()
+
+    legend_position: str = Property(
+        str, _get_legend_position, _set_legend_position, notify=legendPositionChanged
+    )
+
+    def _get_xticks(self) -> list[list[float | str]]:
+        return list(getattr(self, "_xticks", []))
+
+    def _set_xticks(self, value: object) -> None:
+        ticks = _normalise_ticks(value)
+        if ticks == getattr(self, "_xticks", []):
+            return
+        self._xticks = ticks
+        self.xticksChanged.emit()
+
+    #: Explicit x tick positions/labels; empty means automatic nice numbers.
+    xticks: list[list[float | str]] = Property(
+        "QVariant", _get_xticks, _set_xticks, notify=xticksChanged
+    )
+
+    def _get_yticks(self) -> list[list[float | str]]:
+        return list(getattr(self, "_yticks", []))
+
+    def _set_yticks(self, value: object) -> None:
+        ticks = _normalise_ticks(value)
+        if ticks == getattr(self, "_yticks", []):
+            return
+        self._yticks = ticks
+        self.yticksChanged.emit()
+
+    yticks: list[list[float | str]] = Property(
+        "QVariant", _get_yticks, _set_yticks, notify=yticksChanged
+    )
+
+    @Slot("QVariant", "QVariant")
+    @Slot("QVariant")
+    def set_xticks(self, values: object, labels: object = None) -> None:
+        self.xticks = _normalise_ticks(values, labels)
+
+    @Slot("QVariant", "QVariant")
+    @Slot("QVariant")
+    def set_yticks(self, values: object, labels: object = None) -> None:
+        self.yticks = _normalise_ticks(values, labels)
+
+    def clear_xticks(self) -> None:
+        self.xticks = []
+
+    def clear_yticks(self) -> None:
+        self.yticks = []
+
+    grid_x: bool = _style(bool, "grid_x", gridXChanged, True)
+    grid_y: bool = _style(bool, "grid_y", gridYChanged, True)
+    tick_width: float = _style(float, "tick_width", tickWidthChanged, 1.0)
+    tick_pad: float = _style(float, "tick_pad", tickPadChanged, 3.0)
+    ticks_top: bool = _style(bool, "ticks_top", ticksTopChanged, False)
+    ticks_right: bool = _style(bool, "ticks_right", ticksRightChanged, False)
+    minor_ticks: bool = _style(bool, "minor_ticks", minorTicksChanged, False)
+    spine_top: bool = _style(bool, "spine_top", spineTopChanged, True)
+    spine_bottom: bool = _style(bool, "spine_bottom", spineBottomChanged, True)
+    spine_left: bool = _style(bool, "spine_left", spineLeftChanged, True)
+    spine_right: bool = _style(bool, "spine_right", spineRightChanged, True)
 
     def _get_color_cycle(self) -> list[str]:
         return list(getattr(self, "_color_cycle", DEFAULT_COLOR_CYCLE))

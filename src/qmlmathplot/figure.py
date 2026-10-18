@@ -213,7 +213,13 @@ class Axes:
 
     # -------------------------------------------------------------- dressing
     def grid(self, visible: bool | None = True, **kwargs: object) -> None:
-        self.model.grid = True if visible is None else bool(visible)
+        axis = str(kwargs.pop("axis", "both")).lower()
+        enabled = True if visible is None else bool(visible)
+        self.model.grid = enabled
+        if axis in ("x", "both"):
+            self.model.grid_x = enabled
+        if axis in ("y", "both"):
+            self.model.grid_y = enabled
         if "color" in kwargs:
             self.model.grid_color = kwargs["color"]  # type: ignore[assignment]
         width = kwargs.get("linewidth", kwargs.get("lw"))
@@ -255,11 +261,19 @@ class Axes:
     def clear(self) -> None:
         self._figure.clf()
 
-    # ------------------------------------------------------ explicitly absent
+    # ------------------------------------------------------- text and annotation
     def legend(self, *args: object, **kwargs: object) -> None:
-        raise _unsupported(
-            "legend()", "chrome belongs to the host: use Curve.label and a PlotView.overlay"
-        )
+        if args and args[0] in (False, None):
+            self.model.legend = False
+            return None
+        loc = kwargs.get("loc", kwargs.get("location"))
+        if loc is not None:
+            text = str(loc).replace("_", " ").lower()
+            if text not in self.model._LEGEND_POSITIONS:
+                raise ValueError(f"unsupported legend location {loc!r}")
+            self.model.legend_position = text
+        self.model.legend = True
+        return None
 
     def set_xscale(self, value: object, **kwargs: object) -> None:
         raise _unsupported("log axes", "the shader mapping is linear today")
@@ -267,17 +281,77 @@ class Axes:
     def set_yscale(self, value: object, **kwargs: object) -> None:
         raise _unsupported("log axes", "the shader mapping is linear today")
 
-    def annotate(self, *args: object, **kwargs: object) -> None:
-        raise _unsupported("annotate()", "annotations are not implemented")
+    def annotate(
+        self,
+        text: object,
+        xy: object,
+        xytext: object = (24, -18),
+        arrowprops: dict[str, object] | None = None,
+        **kwargs: object,
+    ):
+        color = kwargs.pop("color", None)
+        fontsize = kwargs.pop("fontsize", kwargs.pop("size", None))
+        if arrowprops and "color" in arrowprops:
+            color = arrowprops["color"]
+        return self.model.add_annotation(
+            "" if text is None else str(text),
+            xy,
+            xytext,
+            arrowprops is not None,
+            color,
+            None if fontsize is None else float(fontsize),  # type: ignore[arg-type]
+        )
 
-    def text(self, *args: object, **kwargs: object) -> None:
-        raise _unsupported("text()", "annotations are not implemented")
+    def text(self, x: float, y: float, s: object, fontdict: object = None, **kwargs: object):
+        color = kwargs.pop("color", None)
+        size = kwargs.pop("fontsize", kwargs.pop("size", None))
+        return self.model.add_text(x, y, "" if s is None else str(s), color=color,
+                                   font_size=None if size is None else float(size))
 
-    def set_xticks(self, *args: object, **kwargs: object) -> None:
-        raise _unsupported("set_xticks()", "ticks are automatic nice numbers today")
+    def set_xticks(self, ticks: object, labels: object = None, **kwargs: object) -> None:
+        self.model.set_xticks(ticks, labels)
 
-    def set_yticks(self, *args: object, **kwargs: object) -> None:
-        raise _unsupported("set_yticks()", "ticks are automatic nice numbers today")
+    def set_yticks(self, ticks: object, labels: object = None, **kwargs: object) -> None:
+        self.model.set_yticks(ticks, labels)
+
+    def tick_params(self, axis: str = "both", **kwargs: object) -> None:
+        axis = str(axis).lower()
+        if "length" in kwargs:
+            self.model.tick_length = float(kwargs["length"])  # type: ignore[arg-type]
+        if "width" in kwargs:
+            self.model.tick_width = float(kwargs["width"])  # type: ignore[arg-type]
+        if "pad" in kwargs:
+            self.model.tick_pad = float(kwargs["pad"])  # type: ignore[arg-type]
+        if "labelsize" in kwargs:
+            self.model.tick_font_size = float(kwargs["labelsize"])  # type: ignore[arg-type]
+        colors = kwargs.get("colors", kwargs.get("color"))
+        if colors is not None:
+            self.model.tick_color = colors  # type: ignore[assignment]
+        labelcolor = kwargs.get("labelcolor")
+        if labelcolor is not None:
+            self.model.text_color = labelcolor  # type: ignore[assignment]
+        if "top" in kwargs and axis in ("x", "both"):
+            self.model.ticks_top = bool(kwargs["top"])
+        if "right" in kwargs and axis in ("y", "both"):
+            self.model.ticks_right = bool(kwargs["right"])
+        if str(kwargs.get("which", "")).lower() == "minor":
+            self.model.minor_ticks = True
+
+    def axhline(self, y: float = 0.0, **kwargs: object):
+        return self.model.add_hline(
+            y,
+            color=kwargs.get("color", kwargs.get("c")),
+            width=float(kwargs.get("linewidth", kwargs.get("lw", 1.0))),  # type: ignore[arg-type]
+            style=str(kwargs.get("linestyle", kwargs.get("ls", "--"))),
+        )
+
+    def axvline(self, x: float = 0.0, **kwargs: object):
+        return self.model.add_vline(
+            x,
+            color=kwargs.get("color", kwargs.get("c")),
+            width=float(kwargs.get("linewidth", kwargs.get("lw", 1.0))),  # type: ignore[arg-type]
+            style=str(kwargs.get("linestyle", kwargs.get("ls", "--"))),
+        )
 
 
 class Figure:

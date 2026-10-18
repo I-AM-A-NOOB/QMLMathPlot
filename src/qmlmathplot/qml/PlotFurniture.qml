@@ -5,6 +5,7 @@ import QtQuick.Window
 
 Item {
     id: furnitureRoot
+    objectName: "plotFurniture"
 
     property Item view
 
@@ -30,6 +31,23 @@ Item {
         return [];
     }
 
+    // Explicit ticks (Plot.xticks/yticks) win; otherwise the camera's automatic nice numbers.
+    readonly property var effectiveTicksX:
+        plot.xticks.length > 0 ? plot.xticks : plot.camera.ticks_x
+    readonly property var effectiveTicksY:
+        plot.yticks.length > 0 ? plot.yticks : plot.camera.ticks_y
+
+    function _minorTicks(ticks) {
+        const out = [];
+        for (let i = 0; i + 1 < ticks.length; ++i) {
+            const a = Number(ticks[i][0]);
+            const b = Number(ticks[i + 1][0]);
+            for (let j = 1; j < 5; ++j)
+                out.push(a + (b - a) * j / 5);
+        }
+        return out;
+    }
+
     // Grid: one line per tick, straight from the camera's tick values. Repainted when the
     // view moves (positions) or the grid style changes — the tick *values* are cached by the
     // camera and only rebuild the models when they change.
@@ -46,17 +64,21 @@ Item {
             ctx.globalAlpha = furnitureRoot.plot.grid_alpha;
             ctx.setLineDash(furnitureRoot._gridDash(furnitureRoot.plot.grid_style));
             ctx.beginPath();
-            for (const tick of furnitureRoot.plot.camera.ticks_x) {
-                const px = furnitureRoot._snapLine(
-                    furnitureRoot.view.mapToScreen(tick[0], 0).x, ctx.lineWidth);
-                ctx.moveTo(px, 0);
-                ctx.lineTo(px, height);
+            if (furnitureRoot.plot.grid_x) {
+                for (const tick of furnitureRoot.effectiveTicksX) {
+                    const px = furnitureRoot._snapLine(
+                        furnitureRoot.view.mapToScreen(tick[0], 0).x, ctx.lineWidth);
+                    ctx.moveTo(px, 0);
+                    ctx.lineTo(px, height);
+                }
             }
-            for (const tick of furnitureRoot.plot.camera.ticks_y) {
-                const py = furnitureRoot._snapLine(
-                    furnitureRoot.view.mapToScreen(0, tick[0]).y, ctx.lineWidth);
-                ctx.moveTo(0, py);
-                ctx.lineTo(width, py);
+            if (furnitureRoot.plot.grid_y) {
+                for (const tick of furnitureRoot.effectiveTicksY) {
+                    const py = furnitureRoot._snapLine(
+                        furnitureRoot.view.mapToScreen(0, tick[0]).y, ctx.lineWidth);
+                    ctx.moveTo(0, py);
+                    ctx.lineTo(width, py);
+                }
             }
             ctx.stroke();
         }
@@ -75,6 +97,10 @@ Item {
             function onGridWidthChanged() { gridCanvas.requestPaint(); }
             function onGridAlphaChanged() { gridCanvas.requestPaint(); }
             function onGridStyleChanged() { gridCanvas.requestPaint(); }
+            function onGridXChanged() { gridCanvas.requestPaint(); }
+            function onGridYChanged() { gridCanvas.requestPaint(); }
+            function onXticksChanged() { gridCanvas.requestPaint(); }
+            function onYticksChanged() { gridCanvas.requestPaint(); }
         }
     }
 
@@ -123,7 +149,7 @@ Item {
         // on the bottom and left edges (the same delegates below). The lines sit inside the
         // item so the offscreen export captures them without clipping.
         Rectangle {
-            visible: furniture.boxed
+            visible: furniture.boxed && furnitureRoot.plot.spine_top
             x: 0
             y: 0
             width: parent.width
@@ -131,7 +157,7 @@ Item {
             color: furnitureRoot.plot.axis_color
         }
         Rectangle {
-            visible: furniture.boxed
+            visible: furniture.boxed && furnitureRoot.plot.spine_bottom
             x: 0
             y: parent.height - height
             width: parent.width
@@ -139,7 +165,7 @@ Item {
             color: furnitureRoot.plot.axis_color
         }
         Rectangle {
-            visible: furniture.boxed
+            visible: furniture.boxed && furnitureRoot.plot.spine_left
             x: 0
             y: 0
             width: furniture.axisThickness
@@ -147,7 +173,7 @@ Item {
             color: furnitureRoot.plot.axis_color
         }
         Rectangle {
-            visible: furniture.boxed
+            visible: furniture.boxed && furnitureRoot.plot.spine_right
             x: parent.width - width
             y: 0
             width: furniture.axisThickness
@@ -156,13 +182,15 @@ Item {
         }
 
         Repeater {
-            model: furnitureRoot.plot.camera.ticks_x
+            objectName: "tickRepeaterX"
+            model: furnitureRoot.effectiveTicksX
 
             // The mark and the label ride the x axis; both are clamped so they stay on screen
             // when the axis is pinned to an edge (a label may never leave the item).
             delegate: Item {
                 required property var modelData
-                readonly property real markWidth: furnitureRoot._deviceWidth(1)
+                readonly property real markWidth:
+                    furnitureRoot._deviceWidth(furnitureRoot.plot.tick_width)
 
                 x: furnitureRoot._snapLine(
                        furnitureRoot.view.mapToScreen(modelData[0], 0).x, markWidth)
@@ -176,7 +204,15 @@ Item {
                     height: furnitureRoot.plot.tick_length
                     color: furnitureRoot.plot.tick_color
                 }
+                Rectangle {
+                    visible: furnitureRoot.plot.ticks_top
+                    y: 0
+                    width: markWidth
+                    height: furnitureRoot.plot.tick_length
+                    color: furnitureRoot.plot.tick_color
+                }
                 Text {
+                    objectName: "tickLabelX"
                     text: modelData[1]
                     color: furnitureRoot.plot.text_color
                     font.pixelSize: furnitureRoot.plot.tick_font_size
@@ -184,18 +220,21 @@ Item {
                     x: Math.max(-parent.x, Math.min(-Math.round(width / 2),
                                                     furniture.width - width - parent.x))
                     y: Math.max(0, Math.min(furniture.xAxisY
-                                            + furnitureRoot.plot.tick_length + 3,
+                                            + furnitureRoot.plot.tick_length
+                                            + furnitureRoot.plot.tick_pad,
                                             furniture.height - height))
                 }
             }
         }
 
         Repeater {
-            model: furnitureRoot.plot.camera.ticks_y
+            objectName: "tickRepeaterY"
+            model: furnitureRoot.effectiveTicksY
 
             delegate: Item {
                 required property var modelData
-                readonly property real markHeight: furnitureRoot._deviceWidth(1)
+                readonly property real markHeight:
+                    furnitureRoot._deviceWidth(furnitureRoot.plot.tick_width)
 
                 x: 0
                 y: furnitureRoot._snapLine(
@@ -211,16 +250,75 @@ Item {
                     height: markHeight
                     color: furnitureRoot.plot.tick_color
                 }
+                Rectangle {
+                    visible: furnitureRoot.plot.ticks_right
+                    x: furniture.width - width
+                    width: furnitureRoot.plot.tick_length
+                    height: markHeight
+                    color: furnitureRoot.plot.tick_color
+                }
                 Text {
+                    objectName: "tickLabelY"
                     text: modelData[1]
                     color: furnitureRoot.plot.text_color
                     font.pixelSize: furnitureRoot.plot.tick_font_size
-                    x: Math.max(3, Math.min(furniture.yAxisX - width - 3,
-                                            furniture.width - width - 3))
+                    x: Math.max(furnitureRoot.plot.tick_pad,
+                                Math.min(furniture.yAxisX - width
+                                         - furnitureRoot.plot.tick_pad,
+                                         furniture.width - width
+                                         - furnitureRoot.plot.tick_pad))
                     // centred on the tick, but never half off the item
                     y: Math.max(-parent.y, Math.min(-Math.round(height / 2),
                                                     furniture.height - height - parent.y))
                 }
+            }
+        }
+        Canvas {
+            id: minorCanvas
+            anchors.fill: parent
+            visible: furnitureRoot.plot.minor_ticks
+
+            onPaint: {
+                const ctx = getContext("2d");
+                ctx.clearRect(0, 0, width, height);
+                if (!furnitureRoot.plot.minor_ticks)
+                    return;
+                ctx.strokeStyle = furnitureRoot.plot.tick_color;
+                ctx.lineWidth = furnitureRoot._deviceWidth(furnitureRoot.plot.tick_width);
+                const length = furnitureRoot.plot.tick_length * 0.6;
+                ctx.beginPath();
+                for (const value of furnitureRoot._minorTicks(furnitureRoot.effectiveTicksX)) {
+                    const px = furnitureRoot._snapLine(
+                        furnitureRoot.view.mapToScreen(value, 0).x, ctx.lineWidth);
+                    const py = furniture.xAxisY;
+                    ctx.moveTo(px, py);
+                    ctx.lineTo(px, py - length);
+                }
+                for (const value of furnitureRoot._minorTicks(furnitureRoot.effectiveTicksY)) {
+                    const py = furnitureRoot._snapLine(
+                        furnitureRoot.view.mapToScreen(0, value).y, ctx.lineWidth);
+                    const px = furniture.yAxisX;
+                    ctx.moveTo(px, py);
+                    ctx.lineTo(px + length, py);
+                }
+                ctx.stroke();
+            }
+
+            onWidthChanged: requestPaint()
+            onHeightChanged: requestPaint()
+
+            Connections {
+                target: furnitureRoot.plot.camera
+                function onViewChanged() { minorCanvas.requestPaint(); }
+            }
+            Connections {
+                target: furnitureRoot.plot
+                function onXticksChanged() { minorCanvas.requestPaint(); }
+                function onYticksChanged() { minorCanvas.requestPaint(); }
+                function onMinorTicksChanged() { minorCanvas.requestPaint(); }
+                function onTickColorChanged() { minorCanvas.requestPaint(); }
+                function onTickLengthChanged() { minorCanvas.requestPaint(); }
+                function onTickWidthChanged() { minorCanvas.requestPaint(); }
             }
         }
     }

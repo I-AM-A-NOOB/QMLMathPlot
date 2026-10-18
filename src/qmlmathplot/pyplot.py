@@ -19,8 +19,11 @@ from .figure import Axes, Figure
 __all__ = [
     "Axes",
     "Figure",
+    "annotate",
     "aspect",
     "axis",
+    "axhline",
+    "axvline",
     "clf",
     "close",
     "draw",
@@ -36,14 +39,18 @@ __all__ = [
     "show",
     "subplot",
     "subplots",
+    "text",
     "theme",
+    "tick_params",
     "tight_layout",
     "title",
     "to_image",
     "xlabel",
     "xlim",
+    "xticks",
     "ylabel",
     "ylim",
+    "yticks",
 ]
 
 _figures: dict[int, Figure] = {}
@@ -167,6 +174,39 @@ def theme(name: str) -> None:
 
 def legend(*args: object, **kwargs: object) -> None:
     gca().legend(*args, **kwargs)
+
+
+def annotate(
+    text_label: object,
+    xy: object,
+    xytext: object = (24, -18),
+    **kwargs: object,
+):
+    return gca().annotate(text_label, xy, xytext, **kwargs)
+
+
+def text(x: float, y: float, s: object, **kwargs: object):
+    return gca().text(x, y, s, **kwargs)
+
+
+def xticks(ticks: object, labels: object = None, **kwargs: object) -> None:
+    gca().set_xticks(ticks, labels, **kwargs)
+
+
+def yticks(ticks: object, labels: object = None, **kwargs: object) -> None:
+    gca().set_yticks(ticks, labels, **kwargs)
+
+
+def tick_params(axis: str = "both", **kwargs: object) -> None:
+    gca().tick_params(axis, **kwargs)
+
+
+def axhline(y: float = 0.0, **kwargs: object):
+    return gca().axhline(y, **kwargs)
+
+
+def axvline(x: float = 0.0, **kwargs: object):
+    return gca().axvline(x, **kwargs)
 
 
 def subplots(

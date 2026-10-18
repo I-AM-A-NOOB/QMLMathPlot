@@ -114,7 +114,7 @@ def test_model_roles_and_data() -> None:
     assert curve.expr == sp.sin(1 / sp.Symbol("x"))   # the parsed form is cached
     names = model.roleNames()
     assert set(names.values()) == {b"curve", b"expression", b"color", b"lineWidth", b"visible",
-                                   b"vertexShader", b"fragmentShader"}
+                                   b"vertexShader", b"fragmentShader", b"label"}
     index = model.index(0, 0)
     assert model.data(index, model.CurveRole) is curve
     assert model.data(index, model.ExpressionRole) == "sin(1/x)"

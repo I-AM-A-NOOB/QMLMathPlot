@@ -431,6 +431,7 @@ class CurveListModel(QAbstractListModel):
     VisibleRole = CurveRole + 4
     VertexShaderRole = CurveRole + 5
     FragmentShaderRole = CurveRole + 6
+    LabelRole = CurveRole + 7
 
     _ROLES = {
         CurveRole: b"curve",
@@ -440,6 +441,7 @@ class CurveListModel(QAbstractListModel):
         VisibleRole: b"visible",
         VertexShaderRole: b"vertexShader",
         FragmentShaderRole: b"fragmentShader",
+        LabelRole: b"label",
     }
 
     def __init__(
@@ -478,6 +480,8 @@ class CurveListModel(QAbstractListModel):
             return curve.vertexShader
         if role == self.FragmentShaderRole:
             return curve.fragmentShader
+        if role == self.LabelRole:
+            return curve.label
         return None
 
     def _notify(self, curve: Curve, roles: tuple[int, ...]) -> None:
@@ -498,6 +502,7 @@ class CurveListModel(QAbstractListModel):
             lambda c=curve: self._notify(c, (self.ColorRole, self.LineWidthRole))
         )
         curve.visibleChanged.connect(lambda c=curve: self._notify(c, (self.VisibleRole,)))
+        curve.labelChanged.connect(lambda c=curve: self._notify(c, (self.LabelRole,)))
 
     # ---------------------------------------------------------------- public
     def _defaults(self, color: object, line_width: object) -> tuple[QColor, float]:

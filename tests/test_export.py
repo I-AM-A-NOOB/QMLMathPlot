@@ -341,6 +341,39 @@ def test_boxed_matplotlib_furniture_is_exported(app: QApplication) -> None:
     assert sum(dark(image.pixelColor(width - 1, y)) for y in range(height)) > 0.8 * height
 
 
+def test_annotations_guides_and_legend_are_exported(app: QApplication) -> None:
+    plot = Plot()
+    plot.grid = False
+    plot.ticks_visible = False
+    plot.line_width = 2.0
+    plot.legend = True
+    plot.legend_position = "upper right"
+    plot.add_curve("0*x", label="zero", color="#1f77b4")
+    plot.add_text(0.0, 0.0, "HELLO", color="#ff0000", font_size=20)
+    plot.add_hline(0.5, color="#00ff00", width=2.0, style="-")
+    plot.camera.set_viewport(LOGICAL[0], LOGICAL[1])
+    plot.camera.set_view(0.0, 0.0, SCALE, SCALE)
+    image = plot.to_image(width=400, height=300)
+
+    red = 0
+    green = 0
+    legend_pixels = 0
+    for y in range(image.height()):
+        for x in range(image.width()):
+            color = image.pixelColor(x, y)
+            if color.red() - color.blue() > 80 and color.red() - color.green() > 20:
+                red += 1
+            if color.green() - color.red() > 80 and color.green() - color.blue() > 80:
+                green += 1
+            if x > image.width() * 0.6 and y < image.height() * 0.3:
+                if max(255 - color.red(), 255 - color.green(), 255 - color.blue()) > 40:
+                    legend_pixels += 1
+
+    assert red > 20, "the red annotation text was not exported"
+    assert green > 20, "the green guide was not exported"
+    assert legend_pixels > 20, "the legend was not exported"
+
+
 def test_the_live_camera_and_background_survive_the_export(app: QApplication) -> None:
     plot = _plot("sin(x)", scale_x=0.013, scale_y=0.007)
     camera = plot.camera

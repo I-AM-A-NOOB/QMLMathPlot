@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QSize, Qt, QUrl
+from PySide6.QtCore import QCoreApplication, QSize, Qt, QUrl
 from PySide6.QtGui import QColor, QImage
 
 if TYPE_CHECKING:  # pragma: no cover - typing only; the real imports stay lazy
@@ -155,6 +155,10 @@ def render(
 
         camera.set_viewport(logical[0], logical[1])
         camera.set_view(centre[0], centre[1], scale[0], scale[1])
+        # Let QML's Canvas-based furniture (grid, guides) handle its queued paint before the
+        # synchronous readback; the scene-graph items are already ready, Canvas is not.
+        for _ in range(3):
+            QCoreApplication.processEvents()
         image = widget.grabFramebuffer()
     finally:
         # Restore before the event loop runs again, so no live view repaints the export state.

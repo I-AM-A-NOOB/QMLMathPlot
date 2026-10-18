@@ -149,31 +149,92 @@ def figure_for(
         axes.spines["bottom"].set_position("zero")
         axes.spines["top"].set_visible(False)
         axes.spines["right"].set_visible(False)
+    elif plot.axes_position == "box":
+        for side, visible in (
+            ("top", plot.spine_top), ("bottom", plot.spine_bottom),
+            ("left", plot.spine_left), ("right", plot.spine_right),
+        ):
+            axes.spines[side].set_visible(visible)
     for spine in axes.spines.values():
         spine.set_color(plot.axis_color.name())
         spine.set_linewidth(plot.axis_width * PX_TO_PT)
 
+    if plot.xticks:
+        axes.set_xticks([float(value) for value, _label in plot.xticks],
+                        labels=[label for _value, label in plot.xticks])
+    if plot.yticks:
+        axes.set_yticks([float(value) for value, _label in plot.yticks],
+                        labels=[label for _value, label in plot.yticks])
+
     axes.set_axisbelow(True)                      # the Qt view paints its grid below the curves
+    grid_kwargs = {
+        "color": plot.grid_color.name(),
+        "linewidth": plot.grid_width * PX_TO_PT,
+        "alpha": plot.grid_alpha,
+        "linestyle": plot.grid_style,
+    }
     if plot.grid:
-        axes.grid(True, color=plot.grid_color.name(),
-                  linewidth=plot.grid_width * PX_TO_PT, alpha=plot.grid_alpha,
-                  linestyle=plot.grid_style)
-    else:
-        # Passing line properties together with `False` makes matplotlib *enable* the grid.
         axes.grid(False)
-    axes.tick_params(colors=plot.tick_color.name(), labelcolor=plot.text_color.name(),
-                     labelsize=plot.tick_font_size * PX_TO_PT)
+        if plot.grid_x:
+            axes.xaxis.grid(True, **grid_kwargs)
+        if plot.grid_y:
+            axes.yaxis.grid(True, **grid_kwargs)
+    else:
+        axes.grid(False)
+    axes.tick_params(
+        colors=plot.tick_color.name(),
+        labelcolor=plot.text_color.name(),
+        labelsize=plot.tick_font_size * PX_TO_PT,
+        width=plot.tick_width * PX_TO_PT,
+        pad=plot.tick_pad * PX_TO_PT,
+        top=plot.ticks_top,
+        right=plot.ticks_right,
+    )
+    if plot.minor_ticks:
+        axes.minorticks_on()
     axes.xaxis.label.set_fontsize(plot.font_size * PX_TO_PT)
     axes.yaxis.label.set_fontsize(plot.font_size * PX_TO_PT)
+    if plot.xlabel:
+        axes.set_xlabel(plot.xlabel, color=plot.text_color.name())
+    if plot.ylabel:
+        axes.set_ylabel(plot.ylabel, color=plot.text_color.name())
     if plot.title:
         axes.set_title(plot.title, color=plot.title_color.name(),
                        fontsize=plot.title_font_size * PX_TO_PT,
                        fontweight="bold" if plot.title_bold else "normal")
 
+    for index in range(plot.annotations.rowCount()):
+        annotation = plot.annotations.at(index)
+        if not annotation.visible:
+            continue
+        options: dict[str, object] = {
+            "xycoords": "data",
+            "textcoords": "offset points",
+            "xytext": (annotation.xytext.x(), annotation.xytext.y()),
+            "color": annotation.color.name(),
+            "fontsize": annotation.fontSize * PX_TO_PT,
+        }
+        if annotation.arrow:
+            options["arrowprops"] = {"arrowstyle": "->", "color": annotation.color.name()}
+        axes.annotate(annotation.text, (annotation.xy.x(), annotation.xy.y()), **options)
+
+    for index in range(plot.guides.rowCount()):
+        guide = plot.guides.at(index)
+        if not guide.visible:
+            continue
+        if guide.kind == "h":
+            axes.axhline(guide.value, color=guide.color.name(),
+                         linewidth=guide.width * PX_TO_PT, linestyle=guide.style)
+        else:
+            axes.axvline(guide.value, color=guide.color.name(),
+                         linewidth=guide.width * PX_TO_PT, linestyle=guide.style)
+
     for curve in _visible_curves(plot):
         xs, ys = _sample(curve, x_range[0], x_range[1], samples)
         axes.plot(xs, ys, color=curve.color.name(), linewidth=curve.lineWidth * PX_TO_PT,
                   label=curve.label or curve.expression)
+    if plot.legend and any(curve.label for curve in _visible_curves(plot)):
+        axes.legend(loc=plot.legend_position)
     return figure
 
 

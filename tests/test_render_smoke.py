@@ -17,7 +17,7 @@ import numpy as np
 import pytest
 from PySide6.QtCore import QEventLoop, QTimer, QUrl
 from PySide6.QtGui import QGuiApplication, QImage
-from PySide6.QtQuick import QQuickView
+from PySide6.QtQuick import QQuickItem, QQuickView
 from PySide6.QtTest import QTest
 
 from qmlmathplot import Plot, qml_component_path
@@ -542,6 +542,34 @@ def test_steep_segments_are_not_fragmented(app: QGuiApplication) -> None:
             best = max(best, cur)
         worst = min(worst, best / len(ys))
     assert worst > 0.9, f"vertical stripes should be continuous (longest run / lit rows), worst column only {worst:.2f}"
+
+
+def test_custom_ticks_and_legend_reach_qml(app: QGuiApplication) -> None:
+    plot = Plot()
+    plot.axes_position = "box"
+    plot.legend = True
+    plot.add_curve("sin(x)", label="sine")
+    plot.set_xticks([-1, 0, 1], ["A", "B", "C"])
+    plot.set_yticks([-1, 1], ["lo", "hi"])
+
+    view = QQuickView()
+    view.setSource(QUrl.fromLocalFile(qml_component_path()))
+    assert view.status() is QQuickView.Status.Ready, [e.toString() for e in view.errors()]
+    view.rootObject().setProperty("plot", plot)
+    view.show()
+    assert QTest.qWaitForWindowExposed(view)
+    app.processEvents()
+    root = view.rootObject()
+    furniture = root.findChild(QQuickItem, "plotFurniture")
+    x_repeater = root.findChild(QQuickItem, "tickRepeaterX")
+    y_repeater = root.findChild(QQuickItem, "tickRepeaterY")
+    legend_frame = root.findChild(QQuickItem, "legendFrame")
+    assert furniture is not None and x_repeater is not None and y_repeater is not None
+    assert furniture.property("effectiveTicksX") == [[-1.0, "A"], [0.0, "B"], [1.0, "C"]]
+    assert x_repeater.property("count") == 3
+    assert y_repeater.property("count") == 2
+    assert legend_frame is not None and legend_frame.property("visible") is True
+    view.hide()
 
 
 def test_grid_ticks_axes_and_title_are_drawn(app: QGuiApplication) -> None:

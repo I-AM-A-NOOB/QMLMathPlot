@@ -54,6 +54,7 @@ from .camera import HOME_SIZE, HOME_VIEW, Camera, nice_ticks
 from .curve import Curve, CurveListModel, ImplicitCurve
 from .figure import Axes, Figure
 from .input import ViewInput
+from .overlay import Annotation, Guide
 from .plot import Plot
 from .qsb import cache_dir, cache_info, clear_cache, prune_cache
 from .view import QML_MAJOR, QML_MINOR, QML_URI, qml_component_path, register_qml_types
@@ -63,6 +64,7 @@ if TYPE_CHECKING:  # only for type checkers; at runtime the module-level __getat
     from .widget import MathPlotWidget
 
 __all__ = [
+    "Annotation",
     "Axes",
     "cache_dir",
     "cache_info",
@@ -72,6 +74,7 @@ __all__ = [
     "CurveListModel",
     "Figure",
     "FigureCanvasQt",
+    "Guide",
     "HOME_SIZE",
     "HOME_VIEW",
     "ImplicitCurve",

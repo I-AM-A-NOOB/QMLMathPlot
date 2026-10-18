@@ -977,3 +977,12 @@ the full step budget in both directions plus both windows.
     on a rerun (the first run after the change had a one-off partial circle image; not
     reproduced).
 
+54. **`QQuickWidget.grabFramebuffer()` can run before QML `Canvas` furniture has painted.**
+    The offscreen export read back clean scene-graph items (curves, spines, ticks, labels,
+    annotations, legend) but a `Canvas`-painted grid or guide was missing. Measured: a grid
+    image was **pixel-identical to the grid-off image** (diff 0); after draining the queued
+    paint with three `QCoreApplication.processEvents()` calls the diff was **9696 px**, and a
+    green `add_hline` went from 0 to **1200** pixels. A sleep is not needed; event processing
+    is. `Canvas.renderStrategy: Canvas.Immediate` alone did **not** fix it. The export now
+    drains events before `grabFramebuffer()` (see `export.render`).
+
