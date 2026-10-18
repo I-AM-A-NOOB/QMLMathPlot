@@ -1022,3 +1022,12 @@ the full step budget in both directions plus both windows.
     only; the constant is `0` elsewhere). The child still gets a console, just an invisible one,
     so its own console children inherit the hidden console. A cache hit never starts qsb at all.
 
+58. **The stroke-footprint interval is evaluated only for an empty column.** `gate` widens the
+    column by the stroke radius so a pixel just outside the domain still sees the band, but
+    that matters only when `own` is empty; every other pixel used to pay the extra `FI`.
+    `gate` is now computed inside `if (col.kind == IK_EMPTY)`. Measured by alternating two live
+    900×600 views, 15 pans each (`grabToImage`, includes readback): `sin(x)` **17.0 → 16.4
+    ms**, `sin(1/x)` **17.8 → 17.6 ms**, `x**2` **16.8 → 16.8 ms**. The common path now does
+    two interval evaluations (`wide`, `own`) instead of three; the pole/domain path is
+    unchanged.
+

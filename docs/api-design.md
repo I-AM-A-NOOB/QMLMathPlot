@@ -177,6 +177,8 @@ are the explicit equivalents; unrelated files in the directory are never touched
 * A conservative interval over the ±2-column sample window rejects a pixel before the sample
   loop when its `y` is farther than the stroke radius from that window's range. It is not a
   column cache: each row still evaluates the same samples; it only removes background work.
+  The wider stroke-footprint interval is likewise evaluated only for an empty column, so the
+  common path pays two interval evaluations (`wide`, `own`) rather than three.
 * **Data series are a different artist.** `plot(x, y)` with arrays is a QML-geometry polyline
   (a `Shape`), not a shader — finite data has no aliasing problem and does not need the
   per-pixel machinery. `add_series(x, y)` is reserved for it so `add_curve` never has to

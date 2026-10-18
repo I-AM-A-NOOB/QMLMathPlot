@@ -754,6 +754,10 @@ each, `grabToImage`, including readback): `sin(x)` 23.7 → 22.2 ms, `sin(1/x)` 
 `x**2` 22.7 → 20.4 ms. Whole/infinite columns keep the full path, so `tan`/`1/x` near a pole
 are unchanged.
 
+The stroke-footprint interval is evaluated only when the column interval is empty (the domain
+boundary's outer half). On the common path this is two interval evaluations (`wide`, `own`)
+instead of three: another 17.0 → 16.4 ms on `sin(x)` in the same two-view measurement.
+
 ## Shader cache
 
 `qsb` binaries are cached in the platform temp directory:

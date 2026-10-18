@@ -460,12 +460,15 @@ void main() {
     }
 
     IVal own = FI(x - 0.5 * dx, x + 0.5 * dx);
-    bool own_empty = own.kind == IK_EMPTY;
     IVal col = own;
-    IVal gate = FI(x - R * dx, x + R * dx);
-    if (col.kind == IK_EMPTY && gate.kind != IK_EMPTY) {
-        // The stroke's outer half may cross the domain boundary by up to one radius.
-        col = gate;
+    if (col.kind == IK_EMPTY) {
+        // The stroke's outer half may cross the domain boundary by up to one radius. Only a
+        // column with no in-domain value needs this wider footprint; skipping it for every
+        // other pixel removes one interval evaluation from the common path.
+        IVal gate = FI(x - R * dx, x + R * dx);
+        if (gate.kind != IK_EMPTY) {
+            col = gate;
+        }
     }
 
     // ---- fixed-x sub-pixel polyline (GeoGebra's sampled polyline, on the GPU) ----
