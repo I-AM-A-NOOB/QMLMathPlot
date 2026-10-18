@@ -561,11 +561,15 @@ void main() {
             pmin = min(pmin, _seg_dist(vec2(x * sx, y * sy),
                 vec2((x + 0.5 * dx) * sx, y_top * sy),
                 vec2((x + 0.5 * dx) * sx, col.hi * sy)));
+            pmin = min(pmin, _seg_dist(vec2(x * sx, y * sy),
+                vec2(x * sx, y_top * sy), vec2(x * sx, col.hi * sy)));
         }
         if (col.hi > y_bot) {
             pmin = min(pmin, _seg_dist(vec2(x * sx, y * sy),
                 vec2((x - 0.5 * dx) * sx, y_bot * sy),
                 vec2((x - 0.5 * dx) * sx, col.lo * sy)));
+            pmin = min(pmin, _seg_dist(vec2(x * sx, y * sy),
+                vec2(x * sx, y_bot * sy), vec2(x * sx, col.lo * sy)));
         }
     }
 
@@ -573,6 +577,8 @@ void main() {
     if (col.kind == IK_WHOLE && FILL_WHOLE) {
         pmin = min(pmin, _seg_dist(vec2(x * sx, y * sy),
             vec2((x - 0.5 * dx) * sx, y_bot * sy), vec2((x - 0.5 * dx) * sx, y_top * sy)));
+        pmin = min(pmin, _seg_dist(vec2(x * sx, y * sy),
+            vec2(x * sx, y_bot * sy), vec2(x * sx, y_top * sy)));
     }
 
     float band_cov = 0.0;
