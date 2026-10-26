@@ -471,6 +471,11 @@ void main() {
         }
     }
 
+    // A pole inside this column is a jump, even when a monotone map such as exp()
+    // turns the two one-sided limits into a connected range (exp(tan(x)): 0 and +inf).
+    // The interval paths below would bridge that jump with a vertical connector.
+    bool pole_col = HAS_SIGN_POLE && POLE(x - 0.5 * dx) * POLE(x + 0.5 * dx) <= 0.0;
+
     // ---- fixed-x sub-pixel polyline (GeoGebra's sampled polyline, on the GPU) ----
     // 14 samples over ±2 columns (0.286-column spacing) cover the perpendicular foot even at
     // 89°: a ±1-column window lost 42 % of the width at 84°. Joining the samples gives a
@@ -529,12 +534,12 @@ void main() {
 
     // GeoGebra's unbounded-column rule (IntervalPath.drawNormalInfinity): only when the
     // finite bound itself is on screen. The segment uses the column's left edge and middle.
-    if (col.kind == IK_CONNECTED && col.lo <= -IINF
+    if (!pole_col && col.kind == IK_CONNECTED && col.lo <= -IINF
             && col.hi >= y_bot && col.hi <= y_top) {
         pmin = min(pmin, _seg_dist(vec2(x * sx, y * sy),
             vec2((x - 0.5 * dx) * sx, col.hi * sy), vec2(x * sx, y_bot * sy)));
     }
-    if (col.kind == IK_CONNECTED && col.hi >= IINF
+    if (!pole_col && col.kind == IK_CONNECTED && col.hi >= IINF
             && col.lo >= y_bot && col.lo <= y_top) {
         pmin = min(pmin, _seg_dist(vec2(x * sx, y * sy),
             vec2((x - 0.5 * dx) * sx, col.lo * sy), vec2(x * sx, y_top * sy)));
@@ -543,11 +548,11 @@ void main() {
     // covers it (the visible curve lies inside this x column). GeoGebra's normal-infinity
     // branch declines to draw here; the column is effectively whole (drawWhole), so a
     // vertical segment at the left edge is GGB's own rule for that topology.
-    if (col.kind == IK_CONNECTED && col.lo <= -IINF && col.hi > y_top) {
+    if (!pole_col && col.kind == IK_CONNECTED && col.lo <= -IINF && col.hi > y_top) {
         pmin = min(pmin, _seg_dist(vec2(x * sx, y * sy),
             vec2((x - 0.5 * dx) * sx, y_bot * sy), vec2((x - 0.5 * dx) * sx, y_top * sy)));
     }
-    if (col.kind == IK_CONNECTED && col.hi >= IINF && col.lo < y_bot) {
+    if (!pole_col && col.kind == IK_CONNECTED && col.hi >= IINF && col.lo < y_bot) {
         pmin = min(pmin, _seg_dist(vec2(x * sx, y * sy),
             vec2((x - 0.5 * dx) * sx, y_bot * sy), vec2((x - 0.5 * dx) * sx, y_top * sy)));
     }
@@ -582,7 +587,7 @@ void main() {
     }
 
     float band_cov = 0.0;
-    if (col.kind == IK_CONNECTED) {
+    if (!pole_col && col.kind == IK_CONNECTED) {
         // GeoGebra's DrawInterval path for a sub-column oscillation: the current column's
         // joined diagonal plus the vertical join at x.low (drawUp/drawDown compare the high
         // edges). An independent column is a vertical at x.high. This replaces the old

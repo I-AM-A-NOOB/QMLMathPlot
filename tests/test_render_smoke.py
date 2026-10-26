@@ -255,7 +255,9 @@ def test_asymptote_is_not_connected(app: QGuiApplication) -> None:
     at x ≈ -1.55 and ±4.7 for tan(x), while the single column the earlier version checked was
     blank — it passed by luck).
     """
-    for expr, poles in (("1/x", [0.0]), ("tan(x)", [-4.7124, -1.5708, 1.5708, 4.7124])):
+    for expr, poles in (("1/x", [0.0]),
+                        ("tan(x)", [-4.7124, -1.5708, 1.5708, 4.7124]),
+                        ("exp(tan(x))", [-4.7124, -1.5708, 1.5708, 4.7124])):
         image = _render(app, expr)
         height = image.height()
         for pole in poles:

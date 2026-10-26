@@ -1045,3 +1045,13 @@ the full step budget in both directions plus both windows.
     `::test_an_isolated_singular_point_is_still_drawn`; the former samples (±50, ±50) and
     (±90, ±30), which were solid before the fix and are background after it, while (50, −50)
     on the line remains lit.
+
+60. **A pole wrapped by a monotone map still has to be a gap.** `exp(tan(x))` was drawn as a
+    continuous curve: at a pole column `tan` is `whole`, `exp` maps it to the connected interval
+    `[0, +inf]`, so the normal-infinity path drew a vertical connector from 0 to the viewport
+    top, joining the two one-sided limits (`exp(tan)` → 0 from the left, → +inf from the right).
+    Fix: compute `pole_col = HAS_SIGN_POLE && POLE(x - 0.5dx) * POLE(x + 0.5dx) <= 0` and
+    suppress the connected interval paths and the band for that column. The sample polyline
+    already refuses the crossing segment, so the branches remain separate. Regression:
+    `test_render_smoke.py::test_asymptote_is_not_connected` now includes `exp(tan(x))`; its
+    pole neighbourhood has no full-height connector.
