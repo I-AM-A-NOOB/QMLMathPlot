@@ -267,6 +267,22 @@ def test_asymptote_is_not_connected(app: QGuiApplication) -> None:
                 f"{expr} draws a connecting line at x={pole}: {lit} lit pixels"
 
 
+def test_dense_pole_columns_degrade_to_fill(app: QGuiApplication) -> None:
+    """Once a column contains many poles, exp(tan(x)) is an undersampled envelope, not stripes.
+
+    The normal view keeps its separate branches (one pole per column). At a zoom where the
+    column spans many periods, every column must fill the attained range; the previous
+    renderer kept drawing one sample polyline per column.
+    """
+    image, _ = _render_plot(app, "exp(tan(x))",
+                            xlim=(-1.64208575e6, 1.301016125e6),
+                            ylim=(-8.100311875e5, 1.464183875e6))
+    height = image.height()
+    filled = sum(1 for x in range(image.width())
+                 if sum(_lit(image, x, y) for y in range(height)) > 0.5 * height)
+    assert filled > 0.8 * image.width(), f"only {filled} of {image.width()} columns filled"
+
+
 def test_jump_discontinuity_is_not_connected(app: QGuiApplication) -> None:
     """A plain jump discontinuity must not draw a vertical connector.
 

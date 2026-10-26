@@ -1055,3 +1055,16 @@ the full step budget in both directions plus both windows.
     already refuses the crossing segment, so the branches remain separate. Regression:
     `test_render_smoke.py::test_asymptote_is_not_connected` now includes `exp(tan(x))`; its
     pole neighbourhood has no full-height connector.
+
+61. **Dense pole columns must degrade to a fill, but a single pole must stay a gap.**
+    At a zoom where one logical column spans many `tan` periods, `exp(tan(x))` was still a
+    forest of one-sample stripes: the first pole-gap fix suppressed the connected interval path
+    for every pole column, which is right for one pole and wrong for an undersampled column.
+    The band's `sturns` is not a reliable detector here (a column of ~1000 poles can alias).
+    Fix: count sign changes of the expression's pole factor at 32 quasi-random x positions
+    across the sample window (only when `|camera.z| > 1`, so normal views pay nothing), and
+    when at least one crossing exists and the column is undersampled, fill its attained y
+    interval (`dense`). Normal views (`camera.z` ≈ 0.013) keep the branch gap. Regression:
+    `test_render_smoke.py::test_dense_pole_columns_degrade_to_fill` (the reported 1.6e6-wide
+    view: 900/900 columns filled) and `::test_asymptote_is_not_connected` (normal `exp(tan(x))`
+    still has no connector at its poles).

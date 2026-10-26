@@ -493,9 +493,28 @@ void main() {
     bool prev_ok = false;
     float prev_d = 0.0;
     bool prev_d_ok = false;
+    int pole_crossings = 0;
+#if HAS_SIGN_POLE
+    if (abs(camera.z) > 1.0) {
+        float pp = POLE(x - 2.0 * dx);
+        for (int pi = 0; pi < 32; pi++) {
+            float tt = -2.0 + 4.0 * fract((float(pi) + 0.5) * 0.61803398875);
+            float px = x + tt * dx;
+            float pv = POLE(px);
+            if (pp * pv <= 0.0) pole_crossings += 1;
+            pp = pv;
+        }
+    }
+#endif
+    float prev_pole = 1.0;
     for (int i = 0; i < NS; i++) {
         float t = -2.0 + (float(i) + 0.5) * (4.0 / float(NS));
         float xi = x + t * dx;
+        float pv = POLE(xi);
+        if (i > 0 && prev_pole * pv <= 0.0) {
+            pole_crossings += 1;
+        }
+        prev_pole = pv;
         float v = 1e30;
         if (DOMS(xi)) {
             v = F(xi);
@@ -587,7 +606,7 @@ void main() {
     }
 
     float band_cov = 0.0;
-    if (!pole_col && col.kind == IK_CONNECTED) {
+    if (col.kind == IK_CONNECTED) {
         // GeoGebra's DrawInterval path for a sub-column oscillation: the current column's
         // joined diagonal plus the vertical join at x.low (drawUp/drawDown compare the high
         // edges). An independent column is a vertical at x.high. This replaces the old
@@ -623,7 +642,17 @@ void main() {
     if (HAS_DEPENDENT_QUOTIENT && !FILL_WHOLE) {
         band_cov = 0.0;   // dependency overestimation: the polyline draws the real branches
     }
-    float cov = max(band_cov, clamp(R - pmin, 0.0, 1.0));
+    float dense = 0.0;
+    if (HAS_SIGN_POLE && pole_crossings >= 1 && abs(camera.z) > 1.0
+            && col.kind != IK_EMPTY) {
+        // Several poles inside the sampling window: the column is undersampled, so fill its
+        // attained y interval instead of drawing one branch per sample.
+        float dlo = max(col.kind == IK_WHOLE ? y_bot : col.lo, y_bot);
+        float dhi = min(col.kind == IK_WHOLE ? y_top : col.hi, y_top);
+        dense = clamp((y - dlo) * sy + 1.0, 0.0, 1.0)
+              * clamp((dhi - y) * sy + 1.0, 0.0, 1.0);
+    }
+    float cov = max(max(band_cov, dense), clamp(R - pmin, 0.0, 1.0));
     if (!DOM(x)) {
         float a = cov * color.a * qt_Opacity;
         fragColor = vec4(color.rgb * a, a);
