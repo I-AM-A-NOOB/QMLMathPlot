@@ -373,6 +373,23 @@ def test_shifted_log_descent_wall_is_continuous(app: QGuiApplication) -> None:
     assert worst <= 12, f"the descent wall breaks: a {worst}-row gap in a column"
 
 
+def test_tan_branch_width_does_not_collapse_at_large_y(app: QGuiApplication) -> None:
+    """The interval path and the sampled polyline must agree in width before the band fills.
+
+    ``tan(x)`` at y ∈ [-200, 200] used to thin to ~1.7 device px on the near-vertical parts
+    while other rows measured 3.0. The column chord now contributes the same coverage ramp
+    as the sampled polyline; the worst row stays above 65% of the nominal width.
+    """
+    image, plot = _render_plot(app, "tan(x)", xlim=(-6.0, 6.0), ylim=(-200.0, 200.0))
+    nominal = plot.line_width * image.devicePixelRatio()
+    widths = []
+    for pole in (-4.7124, -1.5708, 1.5708, 4.7124):
+        center = int((pole + 6.0) / 12.0 * image.width())
+        for row in range(5, image.height(), 100):
+            widths.append(_coverage_sum(image, row, center))
+    assert min(widths) >= 0.65 * nominal, f"tan branch thinned to {min(widths):.2f} of {nominal:.2f} px"
+
+
 def test_descent_is_one_wall_not_two(app: QGuiApplication) -> None:
     """A shallower descent view must not fork into two parallel walls.
 

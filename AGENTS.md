@@ -1068,3 +1068,13 @@ the full step budget in both directions plus both windows.
     `test_render_smoke.py::test_dense_pole_columns_degrade_to_fill` (the reported 1.6e6-wide
     view: 900/900 columns filled) and `::test_asymptote_is_not_connected` (normal `exp(tan(x))`
     still has no connector at its poles).
+
+62. **The sampled polyline and a column chord are unioned, not switched.** At large |y| `tan`
+    and `log` thinned just before the band filled: the sampled polyline's endpoint/perpendicular
+    coverage was narrower than the interval column. The interval renderer now adds, for a
+    resolving connected column, one chord `(x-0.5dx, y0) -> (x+0.5dx, y1)` (orientation from
+    the first/last valid sample) and takes `min(pmin, chord_dist)` with the same radius. This
+    is not GeoGebra's single-path renderer (the sample polyline still exists), but it removes
+    the pre-fill width drop without a mode switch. Measured `tan(x)` at y∈[-200,200]: worst row
+    **2.00** of the 3.00 device px (was 1.7); `log(x)` 3.00 on every sampled row. Regression:
+    `test_render_smoke.py::test_tan_branch_width_does_not_collapse_at_large_y`.

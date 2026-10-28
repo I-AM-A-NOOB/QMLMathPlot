@@ -551,6 +551,31 @@ void main() {
         }
     }
 
+    // A single column path, as GeoGebra's IntervalPath: every resolvable connected column
+    // contributes one chord from its left-edge value to its right-edge value. The sampled
+    // polyline is only a fallback for columns where the interval cannot be oriented.
+    bool use_path = col.kind == IK_CONNECTED && col.lo > -IINF && col.hi < IINF
+                 && !pole_col && !HAS_DEPENDENT_QUOTIENT && sturns < 1.5;
+    if (use_path) {
+        int fi = -1;
+        int li = -1;
+        for (int i = 0; i < NS; i++) {
+            if (ok[i]) {
+                if (fi < 0) fi = i;
+                li = i;
+            }
+        }
+        bool inc = true;
+        if (fi >= 0 && li > fi && smp[li] < smp[fi]) {
+            inc = false;
+        }
+        float y0 = inc ? col.lo : col.hi;
+        float y1 = inc ? col.hi : col.lo;
+        pmin = min(pmin, _seg_dist(vec2(x * sx, y * sy),
+            vec2((x - 0.5 * dx) * sx, y0 * sy),
+            vec2((x + 0.5 * dx) * sx, y1 * sy)));
+    }
+
     // GeoGebra's unbounded-column rule (IntervalPath.drawNormalInfinity): only when the
     // finite bound itself is on screen. The segment uses the column's left edge and middle.
     if (!pole_col && col.kind == IK_CONNECTED && col.lo <= -IINF
