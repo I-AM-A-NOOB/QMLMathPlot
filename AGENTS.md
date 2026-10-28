@@ -1078,3 +1078,12 @@ the full step budget in both directions plus both windows.
     the pre-fill width drop without a mode switch. Measured `tan(x)` at y∈[-200,200]: worst row
     **2.00** of the 3.00 device px (was 1.7); `log(x)` 3.00 on every sampled row. Regression:
     `test_render_smoke.py::test_tan_branch_width_does_not_collapse_at_large_y`.
+
+63. **Neighbour joins close the hand-off between column chords.** The column chord fixed the
+    width of a steep column itself, but adjacent chords ended at different values at the shared
+    column boundary, leaving a 1-px step (visible as slight roughness on `log`). For a steep
+    connected column, also stroke the short vertical join at each boundary from the neighbour's
+    endpoint to this column's endpoint, with the same radius. Measured `tan(x)` at
+    y∈[-200,200]: every sampled row is now 3.00–3.98 device px (min 3.00; it was 2.00); `log(x)`
+    is 3.00 on every sampled row. The join is only evaluated when the column span exceeds
+    2R, so a normal `sin(x)` pays no extra `FI` calls.

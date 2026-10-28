@@ -562,6 +562,7 @@ void main() {
     // polyline is only a fallback for columns where the interval cannot be oriented.
     bool use_path = col.kind == IK_CONNECTED && col.lo > -IINF && col.hi < IINF
                  && !pole_col && !HAS_DEPENDENT_QUOTIENT && sturns < 1.5;
+    bool inc = true;
     if (use_path) {
         int fi = -1;
         int li = -1;
@@ -571,7 +572,6 @@ void main() {
                 li = i;
             }
         }
-        bool inc = true;
         if (fi >= 0 && li > fi && smp[li] < smp[fi]) {
             inc = false;
         }
@@ -580,6 +580,28 @@ void main() {
         pmin = min(pmin, _seg_dist(vec2(x * sx, y * sy),
             vec2((x - 0.5 * dx) * sx, y0 * sy),
             vec2((x + 0.5 * dx) * sx, y1 * sy)));
+    }
+
+    // Neighbour joins: the chord above ends at this column's edges; the previous/next
+    // columns' chords end at the same boundary but from their own interval. A short
+    // boundary join removes the 1-px gap/step at the hand-off.
+    if (use_path && (col.hi - col.lo) * sy > 2.0 * R) {
+        IVal prevc = FI(x - 1.5 * dx, x - 0.5 * dx);
+        IVal nextc = FI(x + 0.5 * dx, x + 1.5 * dx);
+        if (prevc.kind == IK_CONNECTED && prevc.lo > -IINF && prevc.hi < IINF) {
+            float left = inc ? prevc.hi : prevc.lo;
+            float here = inc ? col.lo : col.hi;
+            pmin = min(pmin, _seg_dist(vec2(x * sx, y * sy),
+                vec2((x - 0.5 * dx) * sx, left * sy),
+                vec2((x - 0.5 * dx) * sx, here * sy)));
+        }
+        if (nextc.kind == IK_CONNECTED && nextc.lo > -IINF && nextc.hi < IINF) {
+            float here = inc ? col.hi : col.lo;
+            float right = inc ? nextc.lo : nextc.hi;
+            pmin = min(pmin, _seg_dist(vec2(x * sx, y * sy),
+                vec2((x + 0.5 * dx) * sx, here * sy),
+                vec2((x + 0.5 * dx) * sx, right * sy)));
+        }
     }
 
     // GeoGebra's unbounded-column rule (IntervalPath.drawNormalInfinity): only when the
