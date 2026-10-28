@@ -358,6 +358,12 @@ float _seg_dist(vec2 p, vec2 a, vec2 b) {
     return length(p - (a + t * ab));
 }
 
+// A vertical interval [lo, hi] at this pixel's y, with a one-pixel feather at its edges.
+float _span_cov(float y, float lo, float hi, float sy) {
+    return clamp((y - lo) * sy + 1.0, 0.0, 1.0)
+         * clamp((hi - y) * sy + 1.0, 0.0, 1.0);
+}
+
 // GLSL pow() is undefined for a negative base; odd roots are real there (x**(1/3)).
 float _real_pow(float v, float p) {
     return v < 0.0 ? -pow(-v, p) : pow(v, p);
@@ -671,11 +677,16 @@ void main() {
     if (HAS_SIGN_POLE && pole_crossings >= 1 && abs(camera.z) > 1.0
             && col.kind != IK_EMPTY) {
         // Several poles inside the sampling window: the column is undersampled, so fill its
-        // attained y interval instead of drawing one branch per sample.
-        float dlo = max(col.kind == IK_WHOLE ? y_bot : col.lo, y_bot);
-        float dhi = min(col.kind == IK_WHOLE ? y_top : col.hi, y_top);
-        dense = clamp((y - dlo) * sy + 1.0, 0.0, 1.0)
-              * clamp((dhi - y) * sy + 1.0, 0.0, 1.0);
+        // *attained* y interval instead of drawing one branch per sample. Inverted means the
+        // gap [lo, hi] is not attained; filling it would paint the asymptote.
+        if (col.kind == IK_WHOLE) {
+            dense = 1.0;
+        } else if (col.kind == IK_INVERTED) {
+            dense = max(_span_cov(y, y_bot, col.lo, sy),
+                        _span_cov(y, col.hi, y_top, sy));
+        } else {
+            dense = _span_cov(y, max(col.lo, y_bot), min(col.hi, y_top), sy);
+        }
     }
     float cov = max(max(band_cov, dense), clamp(R - pmin, 0.0, 1.0));
     if (!DOM(x)) {
