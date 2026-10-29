@@ -1133,3 +1133,11 @@ the full step budget in both directions plus both windows.
     - `PlotCurves.qml` must `import QmlMathPlot 1.0`; the single item is registered there.
     Regressions: `tests/test_rhi.py` (all curves drawn, visibility/colour updates, a curve
     added after exposure).
+
+65. **One dynamic-offset uniform buffer per plot, not one per curve.** The single RHI pass
+    packs every curve's 128-byte block into one `QRhiBuffer` with `rhi.ubufAlignment()`
+    strides and binds it through one `uniformBufferWithDynamicOffset` SRB. PySide's
+    `setShaderResources` takes the offsets as `setShaderResources(srb, 1, (0, offset))`
+    (the C++ array form is not exposed). The per-row uniform bytes are compared with the
+    previous frame and only changed rows are uploaded, so a style/focus repaint does not
+    re-upload the camera block of every curve.

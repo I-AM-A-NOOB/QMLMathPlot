@@ -55,6 +55,7 @@ class _Renderer(QQuickRhiItemRenderer):
         self._srb = None
         self._stride = 0
         self._capacity = 0
+        self._last_uniforms: dict[int, bytes] = {}
         self._curves: list[tuple[QUrl, float, tuple[float, float, float, float]]] = []
         self._camera = QVector4D(0.0, 0.0, 1.0, 1.0)
         self._size = (1.0, 1.0)
@@ -73,6 +74,7 @@ class _Renderer(QQuickRhiItemRenderer):
                                    self._stride * self._capacity)
         if not self._ubuf.create():
             raise RuntimeError("cannot create the curve uniform buffer")
+        self._last_uniforms.clear()
         self._srb = rhi.newShaderResourceBindings()
         self._srb.setBindings([QRhiShaderResourceBinding.uniformBufferWithDynamicOffset(
             0,
@@ -138,45 +140,52 @@ class _Renderer(QQuickRhiItemRenderer):
         return bytes(data)
 
     def render(self, cb) -> None:
-        visible = []
-        for spec in self._curves:
-            visible.append(spec)
-        if not visible:
+        if not self._curves:
             cb.beginPass(self.renderTarget(), QColor(0, 0, 0, 0),
                          QRhiDepthStencilClearValue(1.0, 0))
             cb.endPass()
             return
-        self._uniforms_for(len(visible))
+        self._uniforms_for(len(self._curves))
         draws = []
-        for row, spec in enumerate(visible):
+        dirty: list[tuple[int, bytes]] = []
+        for row, spec in enumerate(self._curves):
             pipe = self._pipeline(spec, self._srb)
             if pipe is None:
                 continue
-            draws.append((pipe, row * self._stride, spec))
+            offset = row * self._stride
+            data = self._uniforms(spec)
+            if self._last_uniforms.get(row) != data:
+                dirty.append((offset, data))
+                self._last_uniforms[row] = data
+            draws.append((pipe, offset))
         if not draws:
             cb.beginPass(self.renderTarget(), QColor(0, 0, 0, 0),
                          QRhiDepthStencilClearValue(1.0, 0))
             cb.endPass()
             return
-        used = self.rhi().nextResourceUpdateBatch()
-        if used is None:
-            return
+
+        used = None
+        if dirty:
+            used = self.rhi().nextResourceUpdateBatch()
+            if used is None:
+                return
+            for offset, data in dirty:
+                used.updateDynamicBuffer(self._ubuf, offset, data)
         try:
-            for _pipe, offset, spec in draws:
-                used.updateDynamicBuffer(self._ubuf, offset, self._uniforms(spec))
             cb.beginPass(self.renderTarget(), QColor(0, 0, 0, 0),
                          QRhiDepthStencilClearValue(1.0, 0), used)
             size = self.colorTexture().pixelSize()
             cb.setViewport(QRhiViewport(0, 0, size.width(), size.height()))
-            for pipe, offset, _spec in draws:
+            for pipe, offset in draws:
                 cb.setGraphicsPipeline(pipe)
                 cb.setShaderResources(self._srb, 1, (0, offset))
                 cb.draw(3)
             cb.endPass()
         finally:
-            # PySide's beginPass does not hand the batch back to QRhi; without this release
-            # the pool exhausts after 64 frames ("Resource update batch pool exhausted").
-            used.release()
+            if used is not None:
+                # PySide's beginPass does not hand the batch back to QRhi; without this
+                # release the pool exhausts after 64 frames.
+                used.release()
 
 
 
