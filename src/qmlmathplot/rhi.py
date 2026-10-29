@@ -8,7 +8,6 @@ and no Python binding to qsb are involved.
 
 from __future__ import annotations
 
-import math
 import struct
 from pathlib import Path
 
@@ -23,14 +22,13 @@ from PySide6.QtGui import (
     QRhiGraphicsPipeline,
     QRhiShaderResourceBinding,
     QRhiShaderStage,
-    QRhiVertexInputAttribute,
-    QRhiVertexInputBinding,
     QRhiVertexInputLayout,
     QRhiViewport,
     QVector4D,
 )
 from PySide6.QtQuick import QQuickRhiItem, QQuickRhiItemRenderer
 
+from .model import _pole_glsl, domain_glsl, func_glsl, has_sign_pole
 from .qsb import bake
 
 __all__ = ["CurveRhiItem"]
@@ -47,20 +45,82 @@ void main() {
 }
 """
 
-_PATH_VERTEX = """#version 440
-layout(location = 0) in vec2 pos;
-layout(location = 1) in vec4 color;
-layout(location = 0) out vec4 vColor;
-void main() {
-    gl_Position = vec4(pos, 0.0, 1.0);
-    vColor = color;
-}
-"""
-
 _PATH_FRAGMENT = """#version 440
 layout(location = 0) in vec4 vColor;
 layout(location = 0) out vec4 fragColor;
 void main() { fragColor = vColor; }
+"""
+
+
+def _path_vertex_source(expression: str) -> str:
+    expr = sp.sympify(expression)
+    func = func_glsl(expr, "u", wrap=True)
+    domain = domain_glsl(expr, "u") or "true"
+    pole = _pole_glsl(expr, "u") if has_sign_pole(expr) else "1.0"
+    has_log = "1" if expression == "log(x)" else "0"
+    return f"""#version 440
+layout(location = 0) out vec4 vColor;
+layout(std140, binding = 0) uniform buf {{
+    mat4 qt_Matrix;
+    float qt_Opacity;
+    vec4 camera;
+    vec2 size;
+    float lineWidth;
+    vec4 color;
+}};
+#define TAU 6.283185307179586
+float _wrap(float t) {{ return t - TAU * floor(t * (1.0 / TAU)); }}
+#define SIN(t) sin(_wrap(t))
+#define COS(t) cos(_wrap(t))
+#define F(u) ({func})
+#define DOM(u) ({domain})
+#define POLE(u) ({pole})
+#define HAS_LOG {has_log}
+void main() {{
+    int n = int(max(1.0, size.x) * 4.0);
+    int idx = gl_InstanceIndex;
+    float xmin = camera.x - 0.5 * size.x * camera.z;
+    float step = camera.z / 4.0;
+    float x0;
+    float x1;
+    if (HAS_LOG != 0 && idx >= n) {{
+        int k = idx - n + 1;
+        float p = step * pow(10.0, -float(k + 1));
+        x0 = p;
+        x1 = p * 10.0;
+    }} else {{
+        x0 = xmin + float(idx) * step;
+        x1 = x0 + step;
+    }}
+    float y0 = 0.0;
+    float y1 = 0.0;
+    bool valid = DOM(x0) && DOM(x1) && POLE(x0) * POLE(x1) > 0.0;
+    if (valid) {{
+        y0 = F(x0);
+        y1 = F(x1);
+        valid = y0 == y0 && y1 == y1 && abs(y0) < 1e30 && abs(y1) < 1e30;
+    }}
+    vec2 p0 = vec2((x0 - camera.x) / camera.z + 0.5 * size.x,
+                   (camera.y - y0) / camera.w + 0.5 * size.y);
+    vec2 p1 = vec2((x1 - camera.x) / camera.z + 0.5 * size.x,
+                   (camera.y - y1) / camera.w + 0.5 * size.y);
+    vec2 d = p1 - p0;
+    float len = length(d);
+    vec2 nrm = len > 1e-6 ? vec2(-d.y, d.x) / len * lineWidth * 0.5 : vec2(0.0);
+    vec2 p;
+    if (gl_VertexIndex == 0) p = p0 + nrm;
+    else if (gl_VertexIndex == 1) p = p0 - nrm;
+    else if (gl_VertexIndex == 2) p = p1 - nrm;
+    else if (gl_VertexIndex == 3) p = p0 + nrm;
+    else if (gl_VertexIndex == 4) p = p1 - nrm;
+    else p = p1 + nrm;
+    if (!valid) {{
+        p = vec2(10.0);
+    }}
+    gl_Position = vec4(p.x / size.x * 2.0 - 1.0,
+                       1.0 - p.y / size.y * 2.0, 0.0, 1.0);
+    vColor = vec4(color.rgb * color.a, color.a);
+}}
 """
 
 
@@ -78,17 +138,16 @@ class _Renderer(QQuickRhiItemRenderer):
         self._stride = 0
         self._capacity = 0
         self._last_uniforms: dict[int, bytes] = {}
-        self._path_pipeline = None
-        self._path_buffer = None
-        self._path_capacity = 0
-        self._path_key = None
-        self._path_cache = (b"", 0)
+        self._path_pipelines: dict[str, QRhiGraphicsPipeline] = {}
+        self._path_fragment = None
         self._curves: list[tuple[QUrl, float, tuple[float, float, float, float], object, str]] = []
         self._camera = QVector4D(0.0, 0.0, 1.0, 1.0)
         self._size = (1.0, 1.0)
 
     def initialize(self, cb) -> None:  # noqa: ARG002 - Qt API
         self._vertex = _qshader(QUrl.fromLocalFile(str(bake(_VERTEX_SOURCE, "vert"))))
+        self._path_fragment = _qshader(
+            QUrl.fromLocalFile(str(bake(_PATH_FRAGMENT, "frag"))))
 
     def _uniforms_for(self, count: int) -> None:
         """One uniform buffer, one binding object, one dynamic offset per curve."""
@@ -150,29 +209,26 @@ class _Renderer(QQuickRhiItemRenderer):
         self._pipelines[key] = pipe
         return pipe
 
-    def _ensure_path_pipeline(self) -> None:
-        if self._path_pipeline is not None:
-            return
-        rhi = self.rhi()
-        layout = QRhiVertexInputLayout()
-        layout.setBindings([QRhiVertexInputBinding(24, QRhiVertexInputBinding.Classification.PerVertex)])
-        layout.setAttributes([
-            QRhiVertexInputAttribute(0, 0, QRhiVertexInputAttribute.Format.Float2, 0),
-            QRhiVertexInputAttribute(0, 1, QRhiVertexInputAttribute.Format.Float4, 8),
-        ])
-        pipe = rhi.newGraphicsPipeline()
+    def _path_pipeline(self, spec, srb):
+        expression = spec[4]
+        key = expression
+        pipe = self._path_pipelines.get(key)
+        if pipe is not None:
+            return pipe
+        try:
+            vertex = bake(_path_vertex_source(expression), "vert")
+            vs = _qshader(QUrl.fromLocalFile(str(vertex)))
+        except (OSError, ValueError):
+            return None
+        if not vs.isValid():
+            return None
+        pipe = self.rhi().newGraphicsPipeline()
         pipe.setShaderStages([
-            QRhiShaderStage(QRhiShaderStage.Vertex, _qshader(
-                QUrl.fromLocalFile(str(bake(_PATH_VERTEX, "vert"))))),
-            QRhiShaderStage(QRhiShaderStage.Fragment, _qshader(
-                QUrl.fromLocalFile(str(bake(_PATH_FRAGMENT, "frag"))))),
+            QRhiShaderStage(QRhiShaderStage.Vertex, vs),
+            QRhiShaderStage(QRhiShaderStage.Fragment, self._path_fragment),
         ])
-        pipe.setVertexInputLayout(layout)
-        pipe.setSampleCount(max(1, self.renderTarget().sampleCount()))
-        empty_srb = rhi.newShaderResourceBindings()
-        if not empty_srb.create():
-            raise RuntimeError("cannot create the path shader resource bindings")
-        pipe.setShaderResourceBindings(empty_srb)
+        pipe.setVertexInputLayout(QRhiVertexInputLayout())
+        pipe.setShaderResourceBindings(srb)
         pipe.setRenderPassDescriptor(self.renderTarget().renderPassDescriptor())
         pipe.setSampleCount(max(1, self.renderTarget().sampleCount()))
         blend = QRhiGraphicsPipeline.TargetBlend()
@@ -185,111 +241,9 @@ class _Renderer(QQuickRhiItemRenderer):
         blend.opAlpha = QRhiGraphicsPipeline.BlendOp.Add
         pipe.setTargetBlends([blend])
         if not pipe.create():
-            raise RuntimeError("cannot create the path pipeline")
-        self._path_pipeline = pipe
-
-    def _path_vertices(self) -> tuple[bytes, int]:
-        width, height = self._size
-        cx, cy, sx, sy = self._camera.x(), self._camera.y(), self._camera.z(), self._camera.w()
-        data = bytearray()
-        count = 0
-
-        def vertex(px: float, py: float, rgba) -> None:
-            nonlocal count
-            nx = px / width * 2.0 - 1.0
-            ny = 1.0 - py / height * 2.0
-            r, g, b, a = rgba
-            data.extend(struct.pack("<6f", nx, ny, r * a, g * a, b * a, a))
-            count += 1
-
-        for spec in self._curves:
-            func = spec[3]
-            if func is None:
-                continue
-            rgba = spec[2]
-            half = spec[1] * 0.5
-            points: list[tuple[float, float]] = []
-            prev_y = None
-            after_break = False
-
-            def extend_to_edge() -> None:
-                if len(points) >= 2:
-                    px, py = points[-1]
-                    _, ppy = points[-2]
-                    if 0.0 <= py <= height and abs(py - ppy) > 1e-6:
-                        points.append((px, height if py >= ppy else 0.0))
-
-            def flush() -> None:
-                nonlocal points, prev_y, after_break
-                if len(points) < 2:
-                    points = []
-                    after_break = True
-                    return
-                if after_break and 0.0 <= points[0][1] <= height:
-                    _, p0y = points[0]
-                    _, p1y = points[1]
-                    if abs(p0y - p1y) > 1e-6:
-                        points.insert(0, (points[0][0], height if p0y >= p1y else 0.0))
-                for (x0, y0), (x1, y1) in zip(points, points[1:]):
-                    dx, dy = x1 - x0, y1 - y0
-                    length = math.hypot(dx, dy)
-                    if length < 1e-6:
-                        continue
-                    nx, ny = -dy / length * half, dx / length * half
-                    quad = ((x0 + nx, y0 + ny), (x0 - nx, y0 - ny),
-                            (x1 - nx, y1 - ny), (x1 + nx, y1 + ny))
-                    for px, py in (quad[0], quad[1], quad[2],
-                                   quad[0], quad[2], quad[3]):
-                        vertex(px, py, rgba)
-                points = []
-                prev_y = None
-                after_break = True
-
-            n = max(2, int(width * 4))
-            x0 = cx - 0.5 * width * sx
-            x1 = cx + 0.5 * width * sx
-            if spec[4] == "log(x)":
-                xs = {x0 + (i / n) * (x1 - x0) for i in range(n + 1)}
-                for k in range(1, 13):
-                    for sgn in (-1.0, 1.0):
-                        x = sgn * 10.0 ** (-k)
-                        if x0 <= x <= x1:
-                            xs.add(x)
-                xs = sorted(xs)
-            else:
-                xs = [x0 + (i / n) * (x1 - x0) for i in range(n + 1)]
-            for x in xs:
-                try:
-                    y = float(func(x))
-                except (ValueError, ZeroDivisionError, OverflowError):
-                    extend_to_edge()
-                    flush()
-                    continue
-                if not math.isfinite(y):
-                    extend_to_edge()
-                    flush()
-                    continue
-                py = (cy - y) / sy + 0.5 * height
-                px = (x - cx) / sx + 0.5 * width
-                if abs(y) > 1e5 or (
-                    prev_y is not None and prev_y * y < 0.0 and abs(y - prev_y) > 10.0
-                ):
-                    extend_to_edge()
-                    flush()
-                else:
-                    points.append((px, py))
-                    prev_y = y
-            flush()
-        return bytes(data), count
-
-    def _ensure_path_buffer(self, size: int) -> None:
-        if self._path_buffer is not None and size <= self._path_capacity:
-            return
-        self._path_capacity = max(1 << 16, size)
-        self._path_buffer = self.rhi().newBuffer(
-            QRhiBuffer.Dynamic, QRhiBuffer.VertexBuffer, self._path_capacity)
-        if not self._path_buffer.create():
-            raise RuntimeError("cannot create the path vertex buffer")
+            return None
+        self._path_pipelines[key] = pipe
+        return pipe
 
     def synchronize(self, item: "CurveRhiItem") -> None:
         self._camera = QVector4D(item.camera)
@@ -313,55 +267,53 @@ class _Renderer(QQuickRhiItemRenderer):
                          QRhiDepthStencilClearValue(1.0, 0))
             cb.endPass()
             return
-        shader_curves = [s for s in self._curves if s[3] is None]
-        path_bytes, path_count = (b"", 0)
-        if any(s[3] is not None for s in self._curves):
-            self._ensure_path_pipeline()
-            path_bytes, path_count = self._path_vertices()
-        self._uniforms_for(len(shader_curves))
-        draws = []
+        self._uniforms_for(len(self._curves))
+        shader_draws = []
+        path_draws = []
         dirty: list[tuple[int, bytes]] = []
-        for row, spec in enumerate(shader_curves):
-            pipe = self._pipeline(spec, self._srb)
-            if pipe is None:
-                continue
+        for row, spec in enumerate(self._curves):
             offset = row * self._stride
             data = self._uniforms(spec)
             if self._last_uniforms.get(row) != data:
                 dirty.append((offset, data))
                 self._last_uniforms[row] = data
-            draws.append((pipe, offset))
-        if not draws and path_count == 0:
+            if spec[3] is None:
+                pipe = self._pipeline(spec, self._srb)
+                if pipe is not None:
+                    shader_draws.append((pipe, offset))
+            else:
+                pipe = self._path_pipeline(spec, self._srb)
+                if pipe is not None:
+                    instances = int(max(1.0, self._size[0]) * 4.0)
+                    if spec[4] == "log(x)":
+                        instances += 12
+                    path_draws.append((pipe, offset, instances))
+        if not shader_draws and not path_draws:
             cb.beginPass(self.renderTarget(), QColor(0, 0, 0, 0),
                          QRhiDepthStencilClearValue(1.0, 0))
             cb.endPass()
             return
-        if path_count:
-            self._ensure_path_buffer(len(path_bytes))
 
         used = None
-        if dirty or path_count:
+        if dirty:
             used = self.rhi().nextResourceUpdateBatch()
             if used is None:
                 return
             for offset, data in dirty:
                 used.updateDynamicBuffer(self._ubuf, offset, data)
-            if path_count:
-                used.updateDynamicBuffer(self._path_buffer, 0, path_bytes)
         try:
             cb.beginPass(self.renderTarget(), QColor(0, 0, 0, 0),
                          QRhiDepthStencilClearValue(1.0, 0), used)
             size = self.colorTexture().pixelSize()
             cb.setViewport(QRhiViewport(0, 0, size.width(), size.height()))
-            for pipe, offset in draws:
+            for pipe, offset in shader_draws:
                 cb.setGraphicsPipeline(pipe)
                 cb.setShaderResources(self._srb, 1, (0, offset))
                 cb.draw(3)
-            if path_count:
-                cb.setGraphicsPipeline(self._path_pipeline)
-                cb.setShaderResources(None)
-                cb.setVertexInput(0, [(self._path_buffer, 0)])
-                cb.draw(path_count, 1, 0, 0)
+            for pipe, offset, instances in path_draws:
+                cb.setGraphicsPipeline(pipe)
+                cb.setShaderResources(self._srb, 1, (0, offset))
+                cb.draw(6, instances, 0, 0)
             cb.endPass()
         finally:
             if used is not None:
@@ -422,12 +374,7 @@ class CurveRhiItem(QQuickRhiItem):
                 url = curve.fragmentShader
                 if url.isLocalFile():
                     col = curve.color
-                    func = None
-                    if curve.expression in _PATH_EXPRESSIONS:
-                        try:
-                            func = sp.lambdify(sp.Symbol("x"), curve.expr, modules="math")
-                        except Exception:  # noqa: BLE001 - fall back to the shader
-                            func = None
+                    func = curve.expression if curve.expression in _PATH_EXPRESSIONS else None
                     self._snapshot.append((
                         QUrl(url),
                         float(curve.lineWidth),
