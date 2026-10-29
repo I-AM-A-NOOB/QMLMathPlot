@@ -145,9 +145,9 @@ class _Renderer(QQuickRhiItemRenderer):
                 continue
             self._update.updateDynamicBuffer(buf, 0, self._uniforms(spec))
             draws.append((pipe, srb))
+        used = self._update
         cb.beginPass(self.renderTarget(), QColor(0, 0, 0, 0),
-                     QRhiDepthStencilClearValue(1.0, 0), self._update)
-        self._update = self.rhi().nextResourceUpdateBatch()
+                     QRhiDepthStencilClearValue(1.0, 0), used)
         if draws:
             size = self.colorTexture().pixelSize()
             cb.setViewport(QRhiViewport(0, 0, size.width(), size.height()))
@@ -156,6 +156,10 @@ class _Renderer(QQuickRhiItemRenderer):
                 cb.setShaderResources(srb)
                 cb.draw(3)
         cb.endPass()
+        # PySide's beginPass does not hand the batch back to QRhi; without this release the
+        # pool exhausts after 64 frames ("Resource update batch pool exhausted").
+        used.release()
+        self._update = self.rhi().nextResourceUpdateBatch()
 
 
 class CurveRhiItem(QQuickRhiItem):

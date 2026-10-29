@@ -1112,6 +1112,11 @@ the full step budget in both directions plus both windows.
       `(rt, colorClearValue, depthStencilClearValue, resourceUpdates=None, flags=...)` —
       the C++ `clearPos`/`clearRect` form is not exposed; `QRhiDepthStencilClearValue(1,0)`
       is required.
+    - PySide does **not** return the batch passed to `beginPass` to QRhi's pool, despite
+      the C++ documentation saying the pass implicitly destroys it: after 64 frames the
+      warning `Resource update batch pool exhausted (max is 64)` appears while zooming.
+      Keep the batch in a local, call `used.release()` after `endPass()`, then request the
+      next one. Regression: `test_zooming_does_not_exhaust_the_update_batch_pool`.
     - `QRhi.newBuffer(type, usage, size)`; a `Dynamic` uniform buffer creates and accepts
       `updateDynamicBuffer`. `Immutable` returned `False` from `create()` on this D3D11
       driver with a 16-byte buffer.

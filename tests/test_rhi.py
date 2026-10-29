@@ -110,3 +110,29 @@ def test_a_curve_added_after_exposure_is_drawn(app: QGuiApplication) -> None:
         assert _count(image, BLUE) > 1000
     finally:
         view.close()
+
+
+def test_zooming_does_not_exhaust_the_update_batch_pool(app: QGuiApplication) -> None:
+    """QRhi has a 64-batch pool; the renderer must release each frame's batch."""
+    from PySide6.QtCore import qInstallMessageHandler
+
+    messages: list[str] = []
+
+    def handler(_mode, _context, message: str) -> None:
+        messages.append(message)
+
+    previous = qInstallMessageHandler(handler)
+    try:
+        plot = Plot()
+        plot.add_curve("sin(x)")
+        view, _root, _item, _image = _render(app, plot)
+        try:
+            for i in range(150):
+                plot.camera.zoom_by(120.0 if i % 2 else -120.0, 0.5, 0.5,
+                                    float(WIDTH), float(HEIGHT))
+                app.processEvents()
+        finally:
+            view.close()
+    finally:
+        qInstallMessageHandler(previous)
+    assert not any("Resource update batch pool exhausted" in m for m in messages), messages
