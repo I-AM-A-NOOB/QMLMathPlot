@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 from PySide6.QtCore import QEventLoop, QTimer, QUrl
 from PySide6.QtGui import QGuiApplication, QImage
@@ -112,27 +117,53 @@ def test_a_curve_added_after_exposure_is_drawn(app: QGuiApplication) -> None:
         view.close()
 
 
-def test_zooming_does_not_exhaust_the_update_batch_pool(app: QGuiApplication) -> None:
-    """QRhi has a 64-batch pool; the renderer must release each frame's batch."""
-    from PySide6.QtCore import qInstallMessageHandler
 
-    messages: list[str] = []
+def test_zooming_does_not_exhaust_the_update_batch_pool() -> None:
+    """A subprocess: a Qt message handler on the scene-graph thread can deadlock pytest."""
+    script = r"""
+import sys
+from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QUrl, qInstallMessageHandler
+from PySide6.QtQuick import QQuickView
+from qmlmathplot import Plot, qml_component_path, register_qml_types
 
-    def handler(_mode, _context, message: str) -> None:
-        messages.append(message)
-
-    previous = qInstallMessageHandler(handler)
-    try:
-        plot = Plot()
-        plot.add_curve("sin(x)")
-        view, _root, _item, _image = _render(app, plot)
-        try:
-            for i in range(150):
-                plot.camera.zoom_by(120.0 if i % 2 else -120.0, 0.5, 0.5,
-                                    float(WIDTH), float(HEIGHT))
-                app.processEvents()
-        finally:
-            view.close()
-    finally:
-        qInstallMessageHandler(previous)
-    assert not any("Resource update batch pool exhausted" in m for m in messages), messages
+bad = []
+qInstallMessageHandler(lambda mode, ctx, msg: bad.append(msg)
+                       if "Resource update batch pool exhausted" in msg else None)
+app = QApplication(sys.argv[:1])
+register_qml_types()
+view = QQuickView()
+view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
+view.resize(900, 600)
+view.setSource(QUrl.fromLocalFile(qml_component_path()))
+root = view.rootObject()
+plot = Plot()
+plot.add_curve("sin(x)")
+root.setProperty("plot", plot)
+plot.camera.set_viewport(900.0, 600.0)
+plot.camera.xlim = (-6.0, 6.0)
+plot.camera.ylim = (-2.0, 2.0)
+view.show()
+for _ in range(200):
+    app.processEvents()
+    if view.isExposed():
+        break
+for i in range(150):
+    plot.camera.zoom_by(120.0 if i % 2 else -120.0, 0.5, 0.5, 900.0, 600.0)
+    app.processEvents()
+print("EXHAUSTED" if bad else "OK")
+view.close()
+"""
+    env = os.environ.copy()
+    src = str(Path(__file__).resolve().parents[1] / "src")
+    env["PYTHONPATH"] = src + os.pathsep + env.get("PYTHONPATH", "")
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[1],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "OK" in result.stdout, result.stdout + result.stderr

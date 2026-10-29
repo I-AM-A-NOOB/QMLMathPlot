@@ -55,12 +55,9 @@ class _Renderer(QQuickRhiItemRenderer):
         self._curves: list[tuple[QUrl, float, QColor]] = []
         self._camera = QVector4D(0.0, 0.0, 1.0, 1.0)
         self._size = (1.0, 1.0)
-        self._update = None
 
     def initialize(self, cb) -> None:  # noqa: ARG002 - Qt API
-        rhi = self.rhi()
         self._vertex = _qshader(QUrl.fromLocalFile(str(bake(_VERTEX_SOURCE, "vert"))))
-        self._update = rhi.nextResourceUpdateBatch()
 
     def _buffer(self, key: str):
         pair = self._buffers.get(key)
@@ -143,23 +140,34 @@ class _Renderer(QQuickRhiItemRenderer):
             pipe = self._pipeline(spec, srb)
             if pipe is None:
                 continue
-            self._update.updateDynamicBuffer(buf, 0, self._uniforms(spec))
-            draws.append((pipe, srb))
-        used = self._update
-        cb.beginPass(self.renderTarget(), QColor(0, 0, 0, 0),
-                     QRhiDepthStencilClearValue(1.0, 0), used)
-        if draws:
+            draws.append((pipe, srb, buf, spec))
+
+        if not draws:
+            cb.beginPass(self.renderTarget(), QColor(0, 0, 0, 0),
+                         QRhiDepthStencilClearValue(1.0, 0))
+            cb.endPass()
+            return
+
+        used = self.rhi().nextResourceUpdateBatch()
+        if used is None:
+            return
+        try:
+            for _pipe, _srb, buf, spec in draws:
+                used.updateDynamicBuffer(buf, 0, self._uniforms(spec))
+            cb.beginPass(self.renderTarget(), QColor(0, 0, 0, 0),
+                         QRhiDepthStencilClearValue(1.0, 0), used)
             size = self.colorTexture().pixelSize()
             cb.setViewport(QRhiViewport(0, 0, size.width(), size.height()))
-            for pipe, srb in draws:
+            for pipe, srb, _buf, _spec in draws:
                 cb.setGraphicsPipeline(pipe)
                 cb.setShaderResources(srb)
                 cb.draw(3)
-        cb.endPass()
-        # PySide's beginPass does not hand the batch back to QRhi; without this release the
-        # pool exhausts after 64 frames ("Resource update batch pool exhausted").
-        used.release()
-        self._update = self.rhi().nextResourceUpdateBatch()
+            cb.endPass()
+        finally:
+            # PySide's beginPass does not hand the batch back to QRhi; without this release
+            # the pool exhausts after 64 frames ("Resource update batch pool exhausted").
+            used.release()
+
 
 
 class CurveRhiItem(QQuickRhiItem):
