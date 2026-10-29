@@ -1,7 +1,7 @@
 """Model layer: expression -> GLSL and the shader source templates.
 
 This layer imports no Qt and can be tested standalone without a GUI; both the camera
-(camera.py) and the View (the QML ShaderEffect) build on it.
+(camera.py) and the View (the QRhi pass) build on it.
 
 The drawing model is **implicit (signed-distance)**: the fragment shader computes, per
 pixel, the first-order screen-space distance "to the curve", sampling it by **marching

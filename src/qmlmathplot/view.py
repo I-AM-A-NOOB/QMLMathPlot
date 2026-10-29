@@ -9,6 +9,7 @@ from PySide6.QtCore import QUrl
 from .camera import Camera
 from .curve import Curve, CurveListModel
 from .plot import Plot
+from .rhi import CurveRhiItem
 
 __all__ = ["QML_MAJOR", "QML_MINOR", "QML_URI", "qml_component_path", "register_qml_types"]
 
@@ -42,6 +43,7 @@ def register_qml_types() -> None:
         ("Camera", Camera),
         ("Curve", Curve),
         ("CurveListModel", CurveListModel),
+        ("CurveRhiItem", CurveRhiItem),
     ):
         qmlRegisterType(qml_type, QML_URI, QML_MAJOR, QML_MINOR, qml_name)  # type: ignore[arg-type]
     qmlRegisterType(

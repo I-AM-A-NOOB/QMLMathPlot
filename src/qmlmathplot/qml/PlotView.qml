@@ -1,4 +1,4 @@
-// View layer composition: background, one shader pass per curve, screen-space furniture and
+// View layer composition: background, one QRhi pass for all curves, screen-space furniture and
 // pointer/keyboard input. The reusable pieces live in PlotCurves.qml, PlotFurniture.qml and
 // PlotInput.qml; this file owns the model injection, the camera mapping and keyboard focus.
 //

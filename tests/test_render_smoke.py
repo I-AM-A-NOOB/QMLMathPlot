@@ -18,7 +18,6 @@ import pytest
 from PySide6.QtCore import QEventLoop, QTimer, QUrl
 from PySide6.QtGui import QGuiApplication, QImage
 from PySide6.QtQuick import QQuickItem, QQuickView
-from PySide6.QtTest import QTest
 
 from qmlmathplot import Plot, qml_component_path
 
@@ -60,7 +59,13 @@ def _render_plot(app: QGuiApplication, expression: str | None = None,
         plot.title = title
 
     view.show()
-    if not QTest.qWaitForWindowExposed(view):
+    # QQuickRhiItem callbacks run on the scene-graph thread and need the GIL; a blocking
+    # QTest.qWaitForWindowExposed holds it and deadlocks against the first render.
+    for _ in range(200):
+        app.processEvents()
+        if view.isExposed():
+            break
+    else:
         pytest.skip("no usable display/GPU scenegraph")
 
     if plot is not None:
@@ -552,7 +557,12 @@ def test_custom_ticks_and_legend_reach_qml(app: QGuiApplication) -> None:
     assert view.status() is QQuickView.Status.Ready, [e.toString() for e in view.errors()]
     view.rootObject().setProperty("plot", plot)
     view.show()
-    assert QTest.qWaitForWindowExposed(view)
+    for _ in range(200):
+        app.processEvents()
+        if view.isExposed():
+            break
+    else:
+        pytest.skip("no usable display/GPU scenegraph")
     app.processEvents()
     root = view.rootObject()
     furniture = root.findChild(QQuickItem, "plotFurniture")

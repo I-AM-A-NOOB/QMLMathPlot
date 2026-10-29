@@ -422,7 +422,7 @@ class ImplicitCurve(Curve):
 
 
 class CurveListModel(QAbstractListModel):
-    """The plot's curves, as a model so QML can put one ShaderEffect behind each of them."""
+    """The plot's curves, as a model the QRhi renderer and QML chrome read."""
 
     CurveRole = int(Qt.ItemDataRole.UserRole) + 1
     ExpressionRole = CurveRole + 1

@@ -87,7 +87,12 @@ Item {
     view.setSource(QUrl.fromLocalFile(str(qml_file)))
     assert view.status() is QQuickView.Status.Ready, [e.toString() for e in view.errors()]
     view.show()
-    assert QTest.qWaitForWindowExposed(view)
+    for _ in range(200):
+        app.processEvents()
+        if view.isExposed():
+            break
+    else:
+        pytest.fail("no usable display/GPU scene graph")
     app.processEvents()
 
     root = view.rootObject()
@@ -116,7 +121,12 @@ def test_drag_over_plot_pans_instead_of_flicking(app: QGuiApplication, tmp_path:
     view.setSource(QUrl.fromLocalFile(str(qml_file)))
     assert view.status() is QQuickView.Status.Ready, [e.toString() for e in view.errors()]
     view.show()
-    assert QTest.qWaitForWindowExposed(view), "no usable display/GPU scene graph"
+    for _ in range(200):
+        app.processEvents()
+        if view.isExposed():
+            break
+    else:
+        pytest.fail("no usable display/GPU scene graph")
     for _ in range(20):
         app.processEvents()
 

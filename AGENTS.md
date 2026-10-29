@@ -1087,3 +1087,42 @@ the full step budget in both directions plus both windows.
     y∈[-200,200]: every sampled row is now 3.00–3.98 device px (min 3.00; it was 2.00); `log(x)`
     is 3.00 on every sampled row. The join is only evaluated when the column span exceeds
     2R, so a normal `sin(x)` pays no extra `FI` calls.
+
+64. **One `QQuickRhiItem` can replace every `ShaderEffect` from pure Python** (PySide6 6.12;
+    measured, no C++ plugin). `QQuickRhiItemRenderer` is subclassable and its
+    `initialize`/`synchronize`/`render` overrides are called on the scene-graph thread; the
+    item is registered as a normal QML type with `qmlRegisterType`. The renderer reads a
+    **snapshot** of the curve list (taken in the item's model-signal handler on the GUI
+    thread), creates one pipeline per fragment shader and one dynamic 128-byte uniform buffer
+    per row, then draws a full-screen triangle per curve in a single `beginPass`/`endPass`.
+    Two curves at 900x600: grab+readback 12.3 ms mean, versus 13.6 ms for the old
+    one-curve ShaderEffect path.
+
+    Traps measured while moving:
+    - the curve's existing `vertexShader` is ShaderEffect's `qt_Vertex`/`qt_MultiTexCoord0`
+      shader. Feed it to a pipeline with no vertex input and **nothing is drawn** (the
+      first blank integration looked like a compositing/layering bug). The renderer uses
+      its own `gl_VertexIndex` full-screen triangle; only the fragment shader comes from
+      `Curve`.
+    - Python callbacks on the scene-graph thread need the GIL. A blocking
+      `QTest.qWaitForWindowExposed(view)` holds it and deadlocks before exposure; the GUI
+      tests pump `app.processEvents()` until `view.isExposed()` instead. This also applies
+      to any host that blocks the GUI thread waiting for a first frame.
+    - `QRhiCommandBuffer.beginPass` in PySide is
+      `(rt, colorClearValue, depthStencilClearValue, resourceUpdates=None, flags=...)` —
+      the C++ `clearPos`/`clearRect` form is not exposed; `QRhiDepthStencilClearValue(1,0)`
+      is required.
+    - `QRhi.newBuffer(type, usage, size)`; a `Dynamic` uniform buffer creates and accepts
+      `updateDynamicBuffer`. `Immutable` returned `False` from `create()` on this D3D11
+      driver with a 16-byte buffer.
+    - blending must be premultiplied (`One`, `OneMinusSrcAlpha`), because the fragment
+      shader writes `vec4(color.rgb * a, a)`; the item has `alphaBlending = True`.
+    - in QML, writing `property vector4d camera: ...` on the delegate **declares a new
+      local property** and silently shadows the Python property; assign without
+      `property` when the type already exposes it.
+    - model changes are snapshotted in `_refresh()` and signalled to the item with
+      `update()`; the render thread never calls `CurveListModel.at()` while the GUI may
+      mutate it.
+    - `PlotCurves.qml` must `import QmlMathPlot 1.0`; the single item is registered there.
+    Regressions: `tests/test_rhi.py` (all curves drawn, visibility/colour updates, a curve
+    added after exposure).

@@ -16,7 +16,6 @@ import sympy as sp
 from PySide6.QtCore import QEventLoop, QTimer, QUrl
 from PySide6.QtGui import QGuiApplication, QImage
 from PySide6.QtQuick import QQuickView
-from PySide6.QtTest import QTest
 
 from qmlmathplot import Plot, model, qml_component_path
 from qmlmathplot.curve import Curve, CurveListModel, ImplicitCurve, parsed
@@ -167,7 +166,13 @@ def _render(plot: Plot, app: QGuiApplication,
     root = view.rootObject()
     root.setProperty("plot", plot)
     view.show()
-    if not QTest.qWaitForWindowExposed(view):
+    # QQuickRhiItem callbacks run on the scene-graph thread and need the GIL; a blocking
+    # QTest.qWaitForWindowExposed holds it and deadlocks against the first render.
+    for _ in range(200):
+        app.processEvents()
+        if view.isExposed():
+            break
+    else:
         pytest.skip("no usable display/GPU scenegraph")
 
     camera = plot.camera

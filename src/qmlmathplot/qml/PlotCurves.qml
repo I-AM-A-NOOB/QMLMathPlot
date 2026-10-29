@@ -1,29 +1,19 @@
-// One full-screen fragment pass per curve. The expression lives in the shader, so a change
-// swaps the .qsb and costs one pass; the camera uniform is the only per-frame input.
+// One QRhi pass for every curve. The curve list is read by the Python renderer; the
+// camera and the viewport are the only per-frame QML inputs.
 import QtQuick
+import QmlMathPlot 1.0
 
 Item {
     id: curvesRoot
 
     property Item view
 
-    Repeater {
-        model: curvesRoot.view.plot.curves
-
-        delegate: ShaderEffect {
-            anchors.fill: parent
-            visible: model.visible
-
-            property vector4d camera: Qt.vector4d(curvesRoot.view.plot.camera.centre.x,
-                                                  curvesRoot.view.plot.camera.centre.y,
-                                                  curvesRoot.view.plot.camera.scale_x,
-                                                  curvesRoot.view.plot.camera.scale_y)
-            property vector2d size: Qt.vector2d(curvesRoot.width, curvesRoot.height)
-            property real lineWidth: model.lineWidth
-            property color color: model.color
-
-            vertexShader: model.vertexShader
-            fragmentShader: model.fragmentShader
-        }
+    CurveRhiItem {
+        anchors.fill: parent
+        curves: curvesRoot.view.plot.curves
+        camera: Qt.vector4d(curvesRoot.view.plot.camera.centre.x,
+                            curvesRoot.view.plot.camera.centre.y,
+                            curvesRoot.view.plot.camera.scale_x,
+                            curvesRoot.view.plot.camera.scale_y)
     }
 }
