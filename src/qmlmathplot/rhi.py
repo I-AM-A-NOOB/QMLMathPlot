@@ -35,6 +35,9 @@ __all__ = ["CurveRhiItem"]
 
 _UNIFORM_SIZE = 128
 _PATH_EXPRESSIONS = {"tan(x)", "log(x)"}
+#: At wider x spans tan has several poles per logical pixel; the path sampler cannot
+#: resolve them, so the fragment shader's pole/dense handling takes over.
+_TAN_PATH_MAX_SCALE = 0.5
 
 _VERTEX_SOURCE = """#version 440
 layout(location = 0) out vec2 vUV;
@@ -58,6 +61,7 @@ def _path_vertex_source(expression: str) -> str:
     domain = domain_glsl(expr, "u") or "true"
     pole = _pole_glsl(expr, "u") if has_sign_pole(expr) else "1.0"
     has_log = "1" if expression == "log(x)" else "0"
+    subsamples = 4
     return f"""#version 440
 layout(location = 0) out vec4 vColor;
 layout(std140, binding = 0) uniform buf {{
@@ -76,11 +80,12 @@ float _wrap(float t) {{ return t - TAU * floor(t * (1.0 / TAU)); }}
 #define DOM(u) ({domain})
 #define POLE(u) ({pole})
 #define HAS_LOG {has_log}
+#define PATH_SUBSAMPLES {subsamples}
 void main() {{
-    int n = int(max(1.0, size.x) * 4.0);
+    int n = int(max(1.0, size.x) * float(PATH_SUBSAMPLES));
     int idx = gl_InstanceIndex;
     float xmin = camera.x - 0.5 * size.x * camera.z;
-    float step = camera.z / 4.0;
+    float step = camera.z / float(PATH_SUBSAMPLES);
     float x0;
     float x1;
     if (HAS_LOG != 0 && idx >= n) {{
@@ -277,7 +282,9 @@ class _Renderer(QQuickRhiItemRenderer):
             if self._last_uniforms.get(row) != data:
                 dirty.append((offset, data))
                 self._last_uniforms[row] = data
-            if spec[3] is None:
+            is_path = spec[3] is not None and not (
+                spec[4] == "tan(x)" and abs(self._camera.z()) > _TAN_PATH_MAX_SCALE)
+            if not is_path:
                 pipe = self._pipeline(spec, self._srb)
                 if pipe is not None:
                     shader_draws.append((pipe, offset))

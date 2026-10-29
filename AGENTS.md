@@ -1168,8 +1168,11 @@ the full step budget in both directions plus both windows.
     CPU sampling and no vertex buffer. A segment whose endpoint is out of domain,
     non-finite or crosses a pole becomes a degenerate (10,10) quad, which keeps tan's
     branches separate. For `log(x)` twelve extra instances sample `step·10^-(k+1)` below
-    the uniform grid; deep views still see `x = 1e-7`. MSAA 4 (item `sampleCount`, pipeline
-    sample count from the render target) smooths the triangle edges. This is the GGB
+    the uniform grid; deep views still see `x = 1e-7`. At `camera.z > 0.5` tan has several
+    poles per logical pixel, so the renderer deliberately falls back to the fragment shader's
+    dense pole handling instead of emitting random path segments; normal tan/log views stay
+    on the GPU path. MSAA 4 (item `sampleCount`, pipeline sample count from the render target)
+    smooths the triangle edges. This is the GGB
     `IntervalPathPlotter` shape from item 66: independent segments that form one continuous
     curve, no per-column chord/join union, so tan has no connector or faint parallel fringe
     and log has no column step.
