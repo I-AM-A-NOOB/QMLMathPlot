@@ -1159,3 +1159,29 @@ the full step budget in both directions plus both windows.
     x = 0). It is deliberately **not** wired into `PlotView` yet: QQuickPaintedItem is a
     CPU raster path, while the production curves stay on the RHI shader until the
     geometry/vertex-buffer port is ready.
+
+67. **`CurveRhiItem` now draws `tan(x)` and `log(x)` as path geometry, not the 1-D
+    fragment shader.** The renderer snapshots a `lambdify` for expressions in
+    `_PATH_EXPRESSIONS`; those curves are skipped by the fragment draws. `_path_vertices()`
+    samples 4 points per logical column, strokes each segment as two triangles and adds an
+    8-segment disc at every vertex (round joins/caps), then one extra vertex pipeline draws
+    all path curves after the shader curves in the same pass. This is the GGB
+    `IntervalPathPlotter` shape from item 66: one continuous run per branch, no per-column
+    chord/join union, so tan has no connector or faint parallel fringe and log has no
+    column step.
+
+    Traps measured while wiring it:
+    - `QRhiVertexInputLayout` must set the binding classification explicitly
+      (`QRhiVertexInputBinding(24, PerVertex)`); the default constructor classified it as
+      instance data and `pipeline.create()` returned false.
+    - a pipeline with no shader resources still needs an **empty** `QRhiShaderResourceBindings`
+      that has been `create()`d; otherwise `create()` fails silently.
+    - `setVertexInput(0, [(buf, 0)])` and `draw(vertexCount, 1, 0, 0)` are the PySide forms.
+    - smoothing a path with a straight-line sample at the domain edge is not enough: `log`
+      in a deep view lives at `x = 1e-7`, so `_path_vertices` adds logarithmic samples
+      `±10^-k` around zero; a domain break also extends the run back to the viewport edge
+      (`after_break`), which is what makes the log descent reach the bottom row.
+    - path geometry is CPU, not yet a GPU graph; the QPainterPath prototype
+      (`pathcurve.py`) remains the reference.
+    Regressions: existing `test_render_smoke.py` tan/log cases now exercise this path
+    (width, no pole connector, deep log descent), plus `tests/test_pathcurve.py`.
