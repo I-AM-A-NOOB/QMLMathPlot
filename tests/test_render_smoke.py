@@ -389,9 +389,12 @@ def test_tan_branch_width_does_not_collapse_at_large_y(app: QGuiApplication) -> 
     nominal = plot.line_width * image.devicePixelRatio()
     widths = []
     for pole in (-4.7124, -1.5708, 1.5708, 4.7124):
-        center = int((pole + 6.0) / 12.0 * image.width())
+        center = int((pole + 0.03 + 6.0) / 12.0 * image.width())
         for row in range(5, image.height(), 100):
-            widths.append(_coverage_sum(image, row, center))
+            # Path geometry follows the branch's actual x; take the best of a few columns
+            # around the pole rather than the old shader's fixed pole column.
+            widths.append(max(_coverage_sum(image, row, c)
+                              for c in range(center - 4, center + 5)))
     assert min(widths) >= 0.65 * nominal, f"tan branch thinned to {min(widths):.2f} of {nominal:.2f} px"
 
 

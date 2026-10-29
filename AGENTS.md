@@ -1181,7 +1181,9 @@ the full step budget in both directions plus both windows.
       in a deep view lives at `x = 1e-7`, so `_path_vertices` adds logarithmic samples
       `±10^-k` around zero; a domain break also extends the run back to the viewport edge
       (`after_break`), which is what makes the log descent reach the bottom row.
-    - path geometry is CPU, not yet a GPU graph; the QPainterPath prototype
-      (`pathcurve.py`) remains the reference.
+    - path geometry is CPU-sampled (the 5% CPU peak during a pan is this loop, not the
+      fragment shader); the QPainterPath prototype (`pathcurve.py`) remains the reference.
+      Per-vertex discs were removed: they dominated the vertex count and CPU, while the
+      segment quads plus MSAA cover the joins for these smooth curves.
     Regressions: existing `test_render_smoke.py` tan/log cases now exercise this path
     (width, no pole connector, deep log descent), plus `tests/test_pathcurve.py`.

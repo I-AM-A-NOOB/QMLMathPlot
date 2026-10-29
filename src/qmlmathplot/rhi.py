@@ -81,6 +81,8 @@ class _Renderer(QQuickRhiItemRenderer):
         self._path_pipeline = None
         self._path_buffer = None
         self._path_capacity = 0
+        self._path_key = None
+        self._path_cache = (b"", 0)
         self._curves: list[tuple[QUrl, float, tuple[float, float, float, float], object, str]] = []
         self._camera = QVector4D(0.0, 0.0, 1.0, 1.0)
         self._size = (1.0, 1.0)
@@ -133,7 +135,7 @@ class _Renderer(QQuickRhiItemRenderer):
         pipe.setVertexInputLayout(QRhiVertexInputLayout())
         pipe.setShaderResourceBindings(srb)
         pipe.setRenderPassDescriptor(self.renderTarget().renderPassDescriptor())
-        pipe.setSampleCount(1)
+        pipe.setSampleCount(max(1, self.renderTarget().sampleCount()))
         blend = QRhiGraphicsPipeline.TargetBlend()
         blend.enable = True
         blend.srcColor = QRhiGraphicsPipeline.BlendFactor.One
@@ -166,12 +168,13 @@ class _Renderer(QQuickRhiItemRenderer):
                 QUrl.fromLocalFile(str(bake(_PATH_FRAGMENT, "frag"))))),
         ])
         pipe.setVertexInputLayout(layout)
+        pipe.setSampleCount(max(1, self.renderTarget().sampleCount()))
         empty_srb = rhi.newShaderResourceBindings()
         if not empty_srb.create():
             raise RuntimeError("cannot create the path shader resource bindings")
         pipe.setShaderResourceBindings(empty_srb)
         pipe.setRenderPassDescriptor(self.renderTarget().renderPassDescriptor())
-        pipe.setSampleCount(1)
+        pipe.setSampleCount(max(1, self.renderTarget().sampleCount()))
         blend = QRhiGraphicsPipeline.TargetBlend()
         blend.enable = True
         blend.srcColor = QRhiGraphicsPipeline.BlendFactor.One
@@ -210,15 +213,11 @@ class _Renderer(QQuickRhiItemRenderer):
             after_break = False
 
             def extend_to_edge() -> None:
-                # A break caused by a domain edge/pole: continue the run to the viewport
-                # edge along the last known direction (GGB's leftToTop/leftToBottom).
                 if len(points) >= 2:
                     px, py = points[-1]
                     _, ppy = points[-2]
-                    if 0.0 <= py <= height:
-                        edge = height if py >= ppy else 0.0
-                        if abs(py - ppy) > 1e-6:
-                            points.append((px, edge))
+                    if 0.0 <= py <= height and abs(py - ppy) > 1e-6:
+                        points.append((px, height if py >= ppy else 0.0))
 
             def flush() -> None:
                 nonlocal points, prev_y, after_break
@@ -227,13 +226,10 @@ class _Renderer(QQuickRhiItemRenderer):
                     after_break = True
                     return
                 if after_break and 0.0 <= points[0][1] <= height:
-                    # The run begins at a domain edge/pole: continue it back to the edge
-                    # (the y = log(x) branch has no sample at x = 0).
                     _, p0y = points[0]
                     _, p1y = points[1]
                     if abs(p0y - p1y) > 1e-6:
-                        edge = height if p0y >= p1y else 0.0
-                        points.insert(0, (points[0][0], edge))
+                        points.insert(0, (points[0][0], height if p0y >= p1y else 0.0))
                 for (x0, y0), (x1, y1) in zip(points, points[1:]):
                     dx, dy = x1 - x0, y1 - y0
                     length = math.hypot(dx, dy)
@@ -245,23 +241,14 @@ class _Renderer(QQuickRhiItemRenderer):
                     for px, py in (quad[0], quad[1], quad[2],
                                    quad[0], quad[2], quad[3]):
                         vertex(px, py, rgba)
-                # Round joins/caps, so adjacent segments cannot leave a V-shaped notch.
-                for px, py in points:
-                    for k in range(8):
-                        a0 = k * math.pi / 4.0
-                        a1 = (k + 1) * math.pi / 4.0
-                        vertex(px, py, rgba)
-                        vertex(px + half * math.cos(a0), py + half * math.sin(a0), rgba)
-                        vertex(px + half * math.cos(a1), py + half * math.sin(a1), rgba)
                 points = []
                 prev_y = None
+                after_break = True
 
             n = max(2, int(width * 4))
             x0 = cx - 0.5 * width * sx
             x1 = cx + 0.5 * width * sx
             if spec[4] == "log(x)":
-                # The descent lives at x = 10^-k in deep views; a uniform grid never
-                # reaches it. Add logarithmic samples around the domain boundary.
                 xs = {x0 + (i / n) * (x1 - x0) for i in range(n + 1)}
                 for k in range(1, 13):
                     for sgn in (-1.0, 1.0):
@@ -277,12 +264,10 @@ class _Renderer(QQuickRhiItemRenderer):
                 except (ValueError, ZeroDivisionError, OverflowError):
                     extend_to_edge()
                     flush()
-                    after_break = True
                     continue
                 if not math.isfinite(y):
                     extend_to_edge()
                     flush()
-                    after_break = True
                     continue
                 py = (cy - y) / sy + 0.5 * height
                 px = (x - cx) / sx + 0.5 * width
@@ -291,7 +276,6 @@ class _Renderer(QQuickRhiItemRenderer):
                 ):
                     extend_to_edge()
                     flush()
-                    after_break = True
                 else:
                     points.append((px, py))
                     prev_y = y
