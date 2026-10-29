@@ -1141,3 +1141,21 @@ the full step budget in both directions plus both windows.
     (the C++ array form is not exposed). The per-row uniform bytes are compared with the
     previous frame and only changed rows are uploaded, so a style/focus repaint does not
     re-upload the camera block of every curve.
+
+66. **The GGB path renderer is a single `GeneralPath`; the prototype is `PathCurveItem`.**
+    GeoGebra's `IntervalPathPlotterImpl` (`D:/Projects/geogebra/source/shared/common/src/main/
+    java/org/geogebra/common/euclidian/plot/interval/`) appends every column to **one**
+    `GeneralPathClipped`: `DrawInterval.drawJoined` continues with `lineTo`, never starting
+    a second path per column. That is why GGB has no per-column seam; our shader draws each
+    pixel's local path and unions two such paths (sample polyline + interval chord), which
+    leaves a 1-px fringe/step on tan and log.
+
+    `src/qmlmathplot/pathcurve.py` is the standalone prototype of the GGB shape: one
+    `QPainterPath`, one `QPen` (round cap/join), sampled at 4 points per logical column.
+    A pole is a sign flip with a large jump or `|y| > 1e5`; a domain exception / non-finite
+    value starts a new subpath. Measured images: tan branches are continuous with no
+    pole connector, log has no per-column step or parallel fringe. Regressions:
+    `tests/test_pathcurve.py` (tan pole column is not bridged; log draws nothing left of
+    x = 0). It is deliberately **not** wired into `PlotView` yet: QQuickPaintedItem is a
+    CPU raster path, while the production curves stay on the RHI shader until the
+    geometry/vertex-buffer port is ready.
