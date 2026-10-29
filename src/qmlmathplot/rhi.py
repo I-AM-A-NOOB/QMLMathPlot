@@ -51,32 +51,37 @@ class _Renderer(QQuickRhiItemRenderer):
         super().__init__()
         self._vertex = None
         self._pipelines: dict[tuple[str, ...], QRhiGraphicsPipeline] = {}
-        self._buffers: dict[str, tuple[QRhiBuffer, object]] = {}
-        self._curves: list[tuple[QUrl, float, QColor]] = []
+        self._ubuf: QRhiBuffer | None = None
+        self._srb = None
+        self._stride = 0
+        self._capacity = 0
+        self._curves: list[tuple[QUrl, float, tuple[float, float, float, float]]] = []
         self._camera = QVector4D(0.0, 0.0, 1.0, 1.0)
         self._size = (1.0, 1.0)
 
     def initialize(self, cb) -> None:  # noqa: ARG002 - Qt API
         self._vertex = _qshader(QUrl.fromLocalFile(str(bake(_VERTEX_SOURCE, "vert"))))
 
-    def _buffer(self, key: str):
-        pair = self._buffers.get(key)
-        if pair is None:
-            rhi = self.rhi()
-            buf = rhi.newBuffer(QRhiBuffer.Dynamic, QRhiBuffer.UniformBuffer, _UNIFORM_SIZE)
-            if not buf.create():
-                raise RuntimeError("cannot create the curve uniform buffer")
-            srb = rhi.newShaderResourceBindings()
-            srb.setBindings([QRhiShaderResourceBinding.uniformBuffer(
-                0,
-                QRhiShaderResourceBinding.VertexStage | QRhiShaderResourceBinding.FragmentStage,
-                buf,
-            )])
-            if not srb.create():
-                raise RuntimeError("cannot create the curve shader resource bindings")
-            pair = (buf, srb)
-            self._buffers[key] = pair
-        return pair
+    def _uniforms_for(self, count: int) -> None:
+        """One uniform buffer, one binding object, one dynamic offset per curve."""
+        if count <= self._capacity and self._srb is not None:
+            return
+        rhi = self.rhi()
+        self._stride = max(_UNIFORM_SIZE, rhi.ubufAlignment())
+        self._capacity = max(8, count)
+        self._ubuf = rhi.newBuffer(QRhiBuffer.Dynamic, QRhiBuffer.UniformBuffer,
+                                   self._stride * self._capacity)
+        if not self._ubuf.create():
+            raise RuntimeError("cannot create the curve uniform buffer")
+        self._srb = rhi.newShaderResourceBindings()
+        self._srb.setBindings([QRhiShaderResourceBinding.uniformBufferWithDynamicOffset(
+            0,
+            QRhiShaderResourceBinding.VertexStage | QRhiShaderResourceBinding.FragmentStage,
+            self._ubuf,
+            _UNIFORM_SIZE,
+        )])
+        if not self._srb.create():
+            raise RuntimeError("cannot create the curve shader resource bindings")
 
     def _pipeline(self, spec, srb) -> QRhiGraphicsPipeline | None:
         fragment = spec[0]
@@ -129,38 +134,43 @@ class _Renderer(QQuickRhiItemRenderer):
         struct.pack_into("<4f", data, 80, c.x(), c.y(), c.z(), c.w())
         struct.pack_into("<2f", data, 96, *self._size)
         struct.pack_into("<f", data, 104, spec[1])
-        col = spec[2]
-        struct.pack_into("<4f", data, 112, col.redF(), col.greenF(), col.blueF(), col.alphaF())
+        struct.pack_into("<4f", data, 112, *spec[2])
         return bytes(data)
 
     def render(self, cb) -> None:
+        visible = []
+        for spec in self._curves:
+            visible.append(spec)
+        if not visible:
+            cb.beginPass(self.renderTarget(), QColor(0, 0, 0, 0),
+                         QRhiDepthStencilClearValue(1.0, 0))
+            cb.endPass()
+            return
+        self._uniforms_for(len(visible))
         draws = []
-        for row, spec in enumerate(self._curves):
-            buf, srb = self._buffer(str(row))
-            pipe = self._pipeline(spec, srb)
+        for row, spec in enumerate(visible):
+            pipe = self._pipeline(spec, self._srb)
             if pipe is None:
                 continue
-            draws.append((pipe, srb, buf, spec))
-
+            draws.append((pipe, row * self._stride, spec))
         if not draws:
             cb.beginPass(self.renderTarget(), QColor(0, 0, 0, 0),
                          QRhiDepthStencilClearValue(1.0, 0))
             cb.endPass()
             return
-
         used = self.rhi().nextResourceUpdateBatch()
         if used is None:
             return
         try:
-            for _pipe, _srb, buf, spec in draws:
-                used.updateDynamicBuffer(buf, 0, self._uniforms(spec))
+            for _pipe, offset, spec in draws:
+                used.updateDynamicBuffer(self._ubuf, offset, self._uniforms(spec))
             cb.beginPass(self.renderTarget(), QColor(0, 0, 0, 0),
                          QRhiDepthStencilClearValue(1.0, 0), used)
             size = self.colorTexture().pixelSize()
             cb.setViewport(QRhiViewport(0, 0, size.width(), size.height()))
-            for pipe, srb, _buf, _spec in draws:
+            for pipe, offset, _spec in draws:
                 cb.setGraphicsPipeline(pipe)
-                cb.setShaderResources(srb)
+                cb.setShaderResources(self._srb, 1, (0, offset))
                 cb.draw(3)
             cb.endPass()
         finally:
@@ -179,7 +189,7 @@ class CurveRhiItem(QQuickRhiItem):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._curves_model = None
-        self._snapshot: list[tuple[QUrl, float, QColor]] = []
+        self._snapshot: list[tuple[QUrl, float, tuple[float, float, float, float]]] = []
         self._camera = QVector4D(0.0, 0.0, 1.0, 1.0)
         self._renderer = None
         self.setAlphaBlending(True)
@@ -220,7 +230,12 @@ class CurveRhiItem(QQuickRhiItem):
                     continue
                 url = curve.fragmentShader
                 if url.isLocalFile():
-                    self._snapshot.append((QUrl(url), float(curve.lineWidth), QColor(curve.color)))
+                    col = curve.color
+                    self._snapshot.append((
+                        QUrl(url),
+                        float(curve.lineWidth),
+                        (col.redF(), col.greenF(), col.blueF(), col.alphaF()),
+                    ))
         self.update()
 
     def _curves_changed(self, *args) -> None:  # noqa: ARG002 - Qt signal payload
