@@ -181,7 +181,7 @@ class _Renderer(QQuickRhiItemRenderer):
 
     def _path_resources(self, spec):
         expression = spec[4]
-        cols = int(max(1.0, self._size[0]))
+        cols = int(max(1.0, self._size[0]) * 4.0)
         size = cols * 12 * 6 * 4
         buf = self._path_buffers.get(expression)
         if buf is None or self._path_buffer_sizes.get(expression) != size:
@@ -286,7 +286,8 @@ class _Renderer(QQuickRhiItemRenderer):
         try:
             cb.beginPass(self.renderTarget(), QColor(0, 0, 0, 0),
                          QRhiDepthStencilClearValue(1.0, 0), used)
-            size = self.colorTexture().pixelSize()
+            target = self.colorTexture() or self.resolveTexture()
+            size = target.pixelSize()
             cb.setViewport(QRhiViewport(0, 0, size.width(), size.height()))
             for pipe, offset in shader_draws:
                 cb.setGraphicsPipeline(pipe)
@@ -320,6 +321,7 @@ class CurveRhiItem(QQuickRhiItem):
         self._camera = QVector4D(0.0, 0.0, 1.0, 1.0)
         self._renderer = None
         self.setAlphaBlending(True)
+        self.setSampleCount(8)
 
     def createRenderer(self):
         self._renderer = _Renderer(self)

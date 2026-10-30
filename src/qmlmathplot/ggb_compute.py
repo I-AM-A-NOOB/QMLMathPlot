@@ -85,9 +85,9 @@ void slot(int col, int quad, vec2 a, vec2 b) {{
     put(col, quad, 5, b + nrm, c);
 }}
 void main() {{
-    int cols = int(max(1.0, size.x));
-    float dx = camera.z;
-    float xmin = camera.x - 0.5 * size.x * dx;
+    int cols = int(max(1.0, size.x) * 4.0);
+    float dx = camera.z / 4.0;
+    float xmin = camera.x - 0.5 * size.x * camera.z;
     float y_top = camera.y + 0.5 * size.y * camera.w;
     float y_bot = camera.y - 0.5 * size.y * camera.w;
     for (int col = 0; col < cols; col++) {{
@@ -99,8 +99,8 @@ void main() {{
         }}
         float x0 = xmin + float(col) * dx;
         float x1 = x0 + dx;
-        float px0 = float(col);
-        float px1 = float(col + 1);
+        float px0 = float(col) * 0.25;
+        float px1 = float(col + 1) * 0.25;
         IVal v = FI(x0, x1);
         if (v.kind == IK_EMPTY) {{
             continue;
