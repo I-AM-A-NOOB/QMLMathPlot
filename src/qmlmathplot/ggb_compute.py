@@ -10,9 +10,9 @@ from __future__ import annotations
 import sympy as sp
 
 from .interval import INTERVAL_LIB, interval_glsl
-from .model import domain_glsl, func_glsl
+from .model import _pole_glsl, domain_glsl, func_glsl, has_sign_pole
 
-__all__ = ["PATH_VERTEX", "PATH_FRAGMENT", "path_compute_source"]
+__all__ = ["PATH_VERTEX", "PATH_FRAGMENT", "path_compute_source", "path_subsamples"]
 
 PATH_VERTEX = """#version 440
 layout(location = 0) in vec2 pos;
@@ -31,11 +31,19 @@ void main() { fragColor = vColor; }
 """
 
 
+def path_subsamples(expression: str) -> int:
+    # log's near-vertical descent showed a two-level step at 4x; 8x halves it.
+    return 8
+
+
 def path_compute_source(expression: str) -> str:
     expr = sp.sympify(expression)
+    subsamples = path_subsamples(expression)
     func = func_glsl(expr, "u", wrap=True)
     domain = domain_glsl(expr, "u") or "true"
     intervals = interval_glsl(expr)
+    pole = _pole_glsl(expr, "u") if has_sign_pole(expr) else "1.0"
+    has_pole = "1" if has_sign_pole(expr) else "0"
     return f"""#version 440
 layout(local_size_x = 1) in;
 layout(std140, binding = 0) uniform buf {{
@@ -55,7 +63,12 @@ float _wrap(float t) {{ return t - TAU * floor(t * (1.0 / TAU)); }}
 #define COS(t) cos(_wrap(t))
 #define F(u) ({func})
 #define DOM(u) ({domain})
+#define POLE(u) ({pole})
+#define HAS_SIGN_POLE {has_pole}
 {INTERVAL_LIB}
+float _real_pow(float v, float p) {{
+    return v < 0.0 ? -pow(-v, p) : pow(v, p);
+}}
 {intervals}
 
 float sy(float y) {{ return (camera.y - y) / camera.w + 0.5 * size.y; }}
@@ -85,8 +98,8 @@ void slot(int col, int quad, vec2 a, vec2 b) {{
     put(col, quad, 5, b + nrm, c);
 }}
 void main() {{
-    int cols = int(max(1.0, size.x) * 4.0);
-    float dx = camera.z / 4.0;
+    int cols = int(max(1.0, size.x) * float({subsamples}));
+    float dx = camera.z / float({subsamples});
     float xmin = camera.x - 0.5 * size.x * camera.z;
     float y_top = camera.y + 0.5 * size.y * camera.w;
     float y_bot = camera.y - 0.5 * size.y * camera.w;
@@ -99,8 +112,11 @@ void main() {{
         }}
         float x0 = xmin + float(col) * dx;
         float x1 = x0 + dx;
-        float px0 = float(col) * 0.25;
-        float px1 = float(col + 1) * 0.25;
+        float px0 = float(col) / float({subsamples});
+        float px1 = float(col + 1) / float({subsamples});
+        if (HAS_SIGN_POLE != 0 && POLE(x0) * POLE(x1) <= 0.0) {{
+            continue;
+        }}
         IVal v = FI(x0, x1);
         if (v.kind == IK_EMPTY) {{
             continue;

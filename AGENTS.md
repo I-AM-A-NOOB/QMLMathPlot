@@ -1171,8 +1171,10 @@ the full step budget in both directions plus both windows.
     Geometry rules: `IK_WHOLE` is one full-column quad; `IK_INVERTED` emits the top ray at
     `x.high` and the bottom ray at `x.low`; `IK_CONNECTED` uses the interval endpoints, with
     the scalar `F` only deciding the up/down orientation; empty columns are degenerate.
-    `abs(camera.z) > 1.0` is the undersampled case (several poles per column) and fills each
-    non-empty column, which is the dense behaviour GGB's interval branch gives.
+    Eight subcolumns per logical pixel (4x did not keep `sin(1/x)`'s transition within its
+    0.05-world overfill budget, and showed log's two-level step). `abs(camera.z) > 1.0` is
+    the undersampled case (several poles per column) and fills each non-empty column, which
+    is the dense behaviour GGB's interval branch gives.
 
     Traps measured while wiring it:
     - qsb has no `comp` in `--qt6`: compute needs

@@ -30,13 +30,13 @@ from PySide6.QtGui import (
 )
 from PySide6.QtQuick import QQuickRhiItem, QQuickRhiItemRenderer
 
-from .ggb_compute import PATH_FRAGMENT, PATH_VERTEX, path_compute_source
+from .ggb_compute import PATH_FRAGMENT, PATH_VERTEX, path_compute_source, path_subsamples
+from .interval import has_dependent_quotient, interval_glsl
 from .qsb import bake
 
 __all__ = ["CurveRhiItem"]
 
 _UNIFORM_SIZE = 128
-_PATH_EXPRESSIONS = {"tan(x)", "log(x)"}
 
 _VERTEX_SOURCE = """#version 440
 layout(location = 0) out vec2 vUV;
@@ -181,7 +181,8 @@ class _Renderer(QQuickRhiItemRenderer):
 
     def _path_resources(self, spec):
         expression = spec[4]
-        cols = int(max(1.0, self._size[0]) * 4.0)
+        subsamples = path_subsamples(expression)
+        cols = int(max(1.0, self._size[0]) * subsamples)
         size = cols * 12 * 6 * 4
         buf = self._path_buffers.get(expression)
         if buf is None or self._path_buffer_sizes.get(expression) != size:
@@ -360,13 +361,20 @@ class CurveRhiItem(QQuickRhiItem):
                 url = curve.fragmentShader
                 if url.isLocalFile():
                     col = curve.color
-                    func = curve.expression if curve.expression in _PATH_EXPRESSIONS else None
+                    func = None
+                    if not curve.implicit and not has_dependent_quotient(curve.expr):
+                        try:
+                            interval_glsl(curve.expr)
+                        except Exception:  # noqa: BLE001 - malformed expression: shader fallback
+                            pass
+                        else:
+                            func = str(curve.expr)
                     self._snapshot.append((
                         QUrl(url),
                         float(curve.lineWidth),
                         (col.redF(), col.greenF(), col.blueF(), col.alphaF()),
                         func,
-                        curve.expression,
+                        str(curve.expr),
                     ))
         self.update()
 
