@@ -1209,3 +1209,15 @@ the full step budget in both directions plus both windows.
     Tests: `tests/test_ggb_reference.py` (tan pole not bridged, reciprocal has both branches,
     log has no path left of its domain). The reference exposed the remaining GPU gap: we still
     need the complete `JoinLines` state, not independent per-column quads.
+
+69. **CPU backend is an explicit fallback, not a second default.** `PlotView.cpuRenderer`
+    swaps the `CurveRhiItem` for `CpuCurves.qml`; each curve becomes a `PathCurveItem`
+    (`QQuickPaintedItem`) that draws one `QPainterPath` from `ggb_reference.py`. The
+    reference uses `mpmath.iv` for conservative one-interval-per-column evaluation and the
+    GGB `IntervalPath` state; unsupported interval expressions fall back to the simple
+    sampled path in `pathcurve.py`. The CPU layer is lazy: `PlotCurves.qml` keeps it inside an
+    inactive `Loader` unless `cpuRenderer` is true.
+    This is the fallback for devices where RHI/compute/shaders are unavailable; it is not
+    selected automatically yet. A host opts in with `view.cpuRenderer = true` (or
+    `widget.rootObject().setProperty("cpuRenderer", True)`). Regression:
+    `tests/test_cpu_backend.py`.

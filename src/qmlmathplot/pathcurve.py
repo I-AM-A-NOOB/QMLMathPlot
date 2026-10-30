@@ -14,6 +14,8 @@ from PySide6.QtGui import QVector4D
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtQuick import QQuickPaintedItem
 
+from .ggb_reference import IntervalPathReference, IntervalSampler
+
 __all__ = ["PathCurveItem"]
 
 #: Samples per logical pixel. 4 keeps a near-vertical tan branch on its own path without
@@ -83,10 +85,40 @@ class PathCurveItem(QQuickPaintedItem):
         self.lineWidthChanged.emit()
         self.update()
 
+    def _reference_path(self, width: float, height: float) -> QPainterPath | None:
+        cx, cy, sx, sy = (self._camera.x(), self._camera.y(),
+                          self._camera.z(), self._camera.w())
+        x_lo = cx - 0.5 * width * sx
+        x_hi = cx + 0.5 * width * sx
+        y_lo = cy - 0.5 * height * sy
+        y_hi = cy + 0.5 * height * sy
+        try:
+            columns = IntervalSampler(self._expression, x_lo, x_hi,
+                                      max(2, int(width))).columns()
+            segments = IntervalPathReference(
+                columns, width, height, x_lo, x_hi, y_lo, y_hi).update()
+        except Exception:  # noqa: BLE001 - unsupported interval function: fallback
+            return None
+        path = QPainterPath()
+        for a, b in segments:
+            path.moveTo(a.x, a.y)
+            path.lineTo(b.x, b.y)
+        return path
+
     def paint(self, painter: QPainter) -> None:
         if self._func is None:
             return
         width = max(1.0, self.width())
+        height = max(1.0, self.height())
+        reference = self._reference_path(width, height)
+        if reference is not None:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            pen = QPen(self._color, self._line_width)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            painter.drawPath(reference)
+            return
         height = max(1.0, self.height())
         cx, cy, sx, sy = (self._camera.x(), self._camera.y(),
                           self._camera.z(), self._camera.w())

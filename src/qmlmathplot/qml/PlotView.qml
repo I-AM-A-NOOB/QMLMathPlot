@@ -50,6 +50,7 @@ Item {
     // objects (the plot is an injected property, not an id).
     property QtObject camera: root.plot.camera
     property QtObject curves: root.plot.curves
+    property bool cpuRenderer: false
 
     // World <-> screen. The camera maps the centre to the middle of the item, so screen x grows
     // right and screen y grows down (vUV is top-down in the shader too).
@@ -262,6 +263,7 @@ Item {
     PlotCurves {
         anchors.fill: parent
         view: root
+        cpuRenderer: root.cpuRenderer
     }
 
     PlotFurniture {
