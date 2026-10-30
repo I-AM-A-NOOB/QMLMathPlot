@@ -32,8 +32,8 @@ void main() { fragColor = vColor; }
 
 
 def path_subsamples(expression: str) -> int:
-    # log's near-vertical descent showed a two-level step at 4x; 8x halves it.
-    return 8
+    # GGB FunctionSampler: one interval per screen column.
+    return 1
 
 
 def path_compute_source(expression: str) -> str:
