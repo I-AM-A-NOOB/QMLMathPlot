@@ -220,10 +220,10 @@ def qsb_binary() -> Path:
 def bake(source: str, stage: str, cache_dir: Path | str | None = None) -> Path:
     """Bake one GLSL source into .qsb and return the file path (cached by source hash).
 
-    stage: "vert" or "frag"
+    stage: "vert", "frag" or "comp"
     """
-    if stage not in ("vert", "frag"):
-        raise ValueError(f"stage must be 'vert' or 'frag', got {stage!r}")
+    if stage not in ("vert", "frag", "comp"):
+        raise ValueError(f"stage must be 'vert', 'frag' or 'comp', got {stage!r}")
 
     # v2: the source file must use a .vert/.frag suffix — qsb detects the stage from the
     #     suffix, so a .glsl file is treated as a vertex shader. The version goes into the
@@ -257,8 +257,13 @@ def bake(source: str, stage: str, cache_dir: Path | str | None = None) -> Path:
             source_file.write(source)
         # --qt6 == --glsl "100 es,120,150" --hlsl 50 --msl 12, the standard target set for Qt
         # Quick materials
+        options = (
+            ["--glsl", "310 es", "--hlsl", "50", "--msl", "12"]
+            if stage == "comp"
+            else ["--qt6"]
+        )
         proc = subprocess.run(  # noqa: S603
-            [str(qsb_binary()), "--qt6", "-o", str(tmp_out), str(src_path)],
+            [str(qsb_binary()), *options, "-o", str(tmp_out), str(src_path)],
             capture_output=True,
             text=True,
             check=False,

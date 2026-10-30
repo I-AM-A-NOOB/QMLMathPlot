@@ -1160,35 +1160,33 @@ the full step budget in both directions plus both windows.
     CPU raster path, while the production curves stay on the RHI shader until the
     geometry/vertex-buffer port is ready.
 
-67. **`CurveRhiItem` draws `tan(x)` and `log(x)` as GPU path geometry, not the 1-D
-    fragment shader.** The snapshot stores the expression for `_PATH_EXPRESSIONS`; those
-    curves are skipped by the fragment draws. `_path_vertex_source()` generates a
-    per-expression vertex shader with the same `F`/`DOM`/`POLE` macros, and the renderer
-    draws **6 vertices per segment instance** (`draw(6, instances, 0, 0)`) — there is no
-    CPU sampling and no vertex buffer. A segment whose endpoint is out of domain,
-    non-finite or crosses a pole becomes a degenerate (10,10) quad, which keeps tan's
-    branches separate. For `log(x)` twelve extra instances sample `step·10^-(k+1)` below
-    the uniform grid; deep views still see `x = 1e-7`. At `camera.z > 0.5` tan has several
-    poles per logical pixel, so the renderer deliberately falls back to the fragment shader's
-    dense pole handling instead of emitting random path segments; normal tan/log views stay
-    on the GPU path. MSAA 4 (item `sampleCount`, pipeline sample count from the render target)
-    smooths the triangle edges. This is the GGB
-    `IntervalPathPlotter` shape from item 66: independent segments that form one continuous
-    curve, no per-column chord/join union, so tan has no connector or faint parallel fringe
-    and log has no column step.
+67. **`CurveRhiItem` draws `tan(x)` and `log(x)` with a compute-shader interval path.**
+    `ggb_compute.py` generates one compute shader per expression: a single invocation loops
+    the screen columns in order, evaluates `FI(x0, x1)` (the existing interval GLSL), and
+    emits up to two quads per column into a `StorageBuffer | VertexBuffer`. A tiny
+    vertex/fragment pipeline then draws the buffer. This is the sequential shape of GGB's
+    `IntervalPath` rather than independent per-column vertex instances; no CPU sampling is
+    involved.
+
+    Geometry rules: `IK_WHOLE` is one full-column quad; `IK_INVERTED` emits the top ray at
+    `x.high` and the bottom ray at `x.low`; `IK_CONNECTED` uses the interval endpoints, with
+    the scalar `F` only deciding the up/down orientation; empty columns are degenerate.
+    `abs(camera.z) > 1.0` is the undersampled case (several poles per column) and fills each
+    non-empty column, which is the dense behaviour GGB's interval branch gives.
 
     Traps measured while wiring it:
-    - qsb wants `gl_InstanceIndex` (not `gl_InstanceID`) in the vertex shader.
-    - `func_glsl` emits `SIN`/`COS`; the vertex source must also define `_wrap` and those
-      macros, or qsb fails with "COS: no matching overloaded function found".
-    - a pipeline with no vertex input still needs an empty, `create()`d
-      `QRhiShaderResourceBindings`; otherwise `pipeline.create()` returns false silently.
-    - the extra log instances must start **below** the uniform step. Starting at the
-      step drew a second overlapping log curve in the normal view; the visible fix is
-      `step·10^-(k+1)`.
-    - earlier CPU path attempts needed per-vertex discs and a path cache; the vertex-shader
-      form removes both. Per-vertex discs were the main vertex/CPU cost and only papered
-      over segment joins.
+    - qsb has no `comp` in `--qt6`: compute needs
+      `--glsl "310 es" --hlsl 50 --msl 12` separately; `qsb.bake(..., "comp")` now does this.
+    - `QRhiBuffer.Dynamic` + `StorageBuffer` returned false on D3D11 here; `Static` with
+      `StorageBuffer | VertexBuffer` works.
+    - the compute pipeline needs its own SRB (uniform dynamic offset + storage buffer);
+      `beginComputePass(batch)` commits the uniform update before the dispatch.
+    - the path vertex pipeline still needs an empty, `create()`d SRB even though it has no
+      shader resources.
+    - the compute shader is generated per expression (`FI` is expression-specific), so qsb
+      is cached by source hash; there is one dispatch per path curve.
+    - the old CPU path sampler, per-vertex discs and point-sampled vertex instances are
+      gone. QPainterPath (`pathcurve.py`) remains only as a CPU reference prototype.
 
-    Regressions: existing `test_render_smoke.py` tan/log cases now exercise this GPU path
+    Regressions: existing `test_render_smoke.py` tan/log cases now exercise the compute path
     (width, no pole connector, deep log descent), plus `tests/test_pathcurve.py`.

@@ -42,4 +42,4 @@ def test_baked_shader_covers_every_backend():
 
 def test_bake_rejects_unknown_stage():
     with pytest.raises(ValueError):
-        bake("void main() {}", "comp")
+        bake("void main() {}", "geom")

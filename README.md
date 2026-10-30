@@ -528,7 +528,7 @@ three import QtWidgets lazily, so a pure-QML host never loads it.
 | Input | `src/qmlmathplot/input.py` | `ViewInput`: keyboard switch, pan step, rebindable shortcuts, key matching |
 | Animation | `src/qmlmathplot/animation.py` | `CameraAnimator`: the one eased interpolator behind wheel/keyboard moves |
 | Curves | `src/qmlmathplot/curve.py` | `Curve` (expression → baked `.qsb`, style, error; later edits bake on the thread pool) and `CurveListModel` |
-| Render | `src/qmlmathplot/rhi.py` | `CurveRhiItem`: one `QQuickRhiItem` / one QRhi pass draws every visible curve |
+| Render | `src/qmlmathplot/rhi.py` + `ggb_compute.py` | `CurveRhiItem`: one `QQuickRhiItem` draws fragment curves in one pass; tan/log use a compute-generated interval path buffer |
 | Plot | `src/qmlmathplot/plot.py` | `Plot`: the camera, the curves and the styling the view binds to |
 | Facade | `src/qmlmathplot/figure.py` | `Figure` / `Axes`: Matplotlib-shaped names over one `Plot` (no Qt beyond the model) |
 | Facade host | `src/qmlmathplot/canvas.py` | `FigureCanvasQt`: a `MathPlotWidget` attached to a `Figure` (QtWidgets, lazy) |
