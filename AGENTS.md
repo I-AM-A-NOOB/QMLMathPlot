@@ -4,6 +4,24 @@ Working notes for agents and contributors. Each item is **symptom → cause → 
 the measurement that settled it. Keep code comments short (design rationale only); long
 histories and numbers belong here.
 
+## Current renderer status (read this first)
+
+- RHI: `CurveRhiItem` draws the interval-supported 1-D curves with a sequential compute
+  shader (one invocation per curve, `FI` per screen column) into a vertex buffer. `tan(x)`
+  and `log(x)` have regressions in `test_render_smoke.py`; the compute path is the default
+  for all non-implicit curves except sign-pole cases that still fall back to the fragment
+  shader.
+- Sign-pole functions other than tan/log (for example `exp(tan(x))`) still use the
+  fragment-shader fallback; dependent quotients (`x/sqrt(x**2)`) always do.
+- CPU fallback: `view.cpuRenderer = true` replaces the RHI item with one `QPainterPath` per
+  curve (`CpuCurves.qml` + `pathcurve.py` + `ggb_reference.py`). It is explicit, not auto.
+- Unresolved GPU issue: the compute path does not yet reproduce the CPU reference on
+  `sin(1/x)` (comb in the unresolved middle) and `1/(x-1)+1` (lower branch at large |y|).
+  The blocker is interval topology plus the missing `JoinLines` state, not GPU capability.
+- Do not use `ggb_reference.py` (mpmath.iv) as a pixel-exact oracle for GPU `FI`
+  (float32/GLSL): the two classify poles/domains differently. Compare visual invariants,
+  not pixels.
+
 ## Shader generation
 
 1. **Macro arguments must be parenthesized.** The expression is inlined into
@@ -1156,9 +1174,8 @@ the full step budget in both directions plus both windows.
     value starts a new subpath. Measured images: tan branches are continuous with no
     pole connector, log has no per-column step or parallel fringe. Regressions:
     `tests/test_pathcurve.py` (tan pole column is not bridged; log draws nothing left of
-    x = 0). It is deliberately **not** wired into `PlotView` yet: QQuickPaintedItem is a
-    CPU raster path, while the production curves stay on the RHI shader until the
-    geometry/vertex-buffer port is ready.
+    x = 0). It is wired into the explicit CPU fallback (`cpuRenderer`) and remains the
+    reference shape for the GPU path; it is never used when RHI is active.
 
 67. **`CurveRhiItem` draws `tan(x)` and `log(x)` with a compute-shader interval path.**
     `ggb_compute.py` generates one compute shader per expression: a single invocation loops
@@ -1172,9 +1189,9 @@ the full step budget in both directions plus both windows.
     `x.high` and the bottom ray at `x.low`; `IK_CONNECTED` uses the interval endpoints, with
     the scalar `F` only deciding the up/down orientation; empty columns are degenerate.
     One interval per screen column, matching GGB's `FunctionSampler` (`bounds.getWidth()`).
-    The earlier 8-subcolumn variant reduced stair-steps but was not GGB's path semantics. `abs(camera.z) > 1.0` is
-    the undersampled case (several poles per column) and fills each non-empty column, which
-    is the dense behaviour GGB's interval branch gives.
+    The earlier 8-subcolumn variant reduced stair-steps but was not GGB's path semantics;
+    it was removed. `abs(camera.z) > 1.0` fills only `IK_WHOLE` columns; filling every
+    non-empty column made ordinary functions flood when zoomed out.
 
     Traps measured while wiring it:
     - qsb has no `comp` in `--qt6`: compute needs
@@ -1188,7 +1205,7 @@ the full step budget in both directions plus both windows.
     - the compute shader is generated per expression (`FI` is expression-specific), so qsb
       is cached by source hash; there is one dispatch per path curve.
     - the old CPU path sampler, per-vertex discs and point-sampled vertex instances are
-      gone. QPainterPath (`pathcurve.py`) remains only as a CPU reference prototype.
+      gone. QPainterPath (`pathcurve.py`) is now also the explicit CPU fallback.
 
     Regressions: existing `test_render_smoke.py` tan/log cases now exercise the compute path
     (width, no pole connector, deep log descent), plus `tests/test_pathcurve.py`.
@@ -1221,3 +1238,36 @@ the full step budget in both directions plus both windows.
     selected automatically yet. A host opts in with `view.cpuRenderer = true` (or
     `widget.rootObject().setProperty("cpuRenderer", True)`). Regression:
     `tests/test_cpu_backend.py`.
+
+
+70. **GPU interval path: what was tried, what is genuinely blocked.** The current compute
+    path is a sequential `FI` loop that emits fixed quads; it is not a complete GGB path.
+    Recent attempts and their measured failure modes:
+
+    - `drawIndirect` + storage vertex buffer + a `uint cmd[4]` command buffer **works** on
+      this D3D11/PySide setup (`QRhiBuffer.Static, StorageBuffer | IndirectBuffer`).
+      Dynamic per-vertex emission is therefore not the blocker.
+    - fixed 4- and 8-quad columns, dynamic `line()` emission, `next_v = FI(x1, x1+dx)`,
+      `last_point/last_hi/last_lo/last_kind`, and the GGB `toTop/toBottom` branches were
+      wired and tested. Tan at `y ∈ [-200, 200]` still lost the top rows at some pole
+      columns (`0 / 3` device px) or produced a 900/900 full column; both were reverted.
+    - `IK_INVERTED` with a `[-inf, inf]` gap must not emit both top and bottom rays: that is
+      a full connector. GGB's `JoinLines` needs the neighbour topology and `lastYSet`; a
+      local gap test is not enough.
+    - a global `abs(camera.z) > 1` fill is wrong (ordinary functions flood); only
+      `IK_WHOLE` is a dense fill.
+    - 8 subcolumns pass some width tests but are not GGB semantics; one interval per screen
+      column is the GGB shape and is what the current compute path uses.
+
+    Root blocker for the remaining visual bugs: `ggb_reference.py` uses `mpmath.iv`, while
+    the GPU uses the float32 GLSL `INTERVAL_LIB`. They classify `tan`/`log`/rational poles
+    differently (`whole` vs `connected`/`inverted`), so `JoinLines` sees a different
+    topology before any GLSL geometry runs. A pixel-exact CPU/GPU comparison is therefore
+    meaningless. The next required piece is a Python interval evaluator with the **same
+    EMPTY/CONNECTED/INVERTED/WHOLE rules** as `INTERVAL_LIB`; only then can the
+    `DrawInvertedInterval`/`JoinLines` state be ported and judged against visual invariants
+    (no pole connector, branches reach the viewport edges, unresolved oscillation is a
+    filled band).
+
+    Do not retry: fixed per-column quad counts, generic boundary joins without neighbour
+    topology, global dense-fill thresholds, or `ggb_reference` as a pixel oracle.
