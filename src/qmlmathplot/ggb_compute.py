@@ -103,6 +103,8 @@ void main() {{
     float xmin = camera.x - 0.5 * size.x * camera.z;
     float y_top = camera.y + 0.5 * size.y * camera.w;
     float y_bot = camera.y - 0.5 * size.y * camera.w;
+    bool has_last = false;
+    float last_y = 0.0;
     for (int col = 0; col < cols; col++) {{
         // Start each column as two degenerate quads; the topology fills one or both.
         for (int q = 0; q < 2; q++) {{
@@ -117,29 +119,38 @@ void main() {{
         bool pole_col = HAS_SIGN_POLE != 0 && POLE(x0) * POLE(x1) <= 0.0;
         IVal v = FI(x0, x1);
         if (v.kind == IK_EMPTY) {{
+            has_last = false;
             continue;
         }}
         // A pole wrapped by a monotone map (exp(tan)) produces a connected interval that
         // would bridge the two branches; only that topology is skipped. Inverted/whole
         // intervals still carry the one-sided rays.
-        if (pole_col && v.kind == IK_CONNECTED) {{
+        if (pole_col && v.kind == IK_CONNECTED
+                && !(v.lo <= -IINF && v.hi >= IINF)) {{
+            has_last = false;
             continue;
         }}
         if (abs(camera.z) > 1.0 && v.kind == IK_WHOLE) {{
             // Only a genuinely whole column is GGB's dense fill. Filling every
             // non-connected/inverted column made ordinary functions flood when zoomed out.
             slot(col, 0, vec2(px0, 0.0), vec2(px0, size.y));
+            has_last = false;
             continue;
         }}
         if (v.kind == IK_WHOLE) {{
             slot(col, 0, vec2(px0, 0.0), vec2(px0, size.y));
+            has_last = false;
         }} else if (v.kind == IK_INVERTED) {{
-            if (v.hi < y_top) {{
+            // GGB DrawInvertedInterval: the *gap* is [lo, hi]; the attained top ray exists
+            // when the gap's low edge is below the viewport top, and the bottom ray when
+            // the gap's high edge is above the bottom.
+            if (v.lo < y_top) {{
                 slot(col, 0, vec2(px1, 0.0), vec2(px1, sy(v.hi)));
             }}
-            if (v.lo > y_bot) {{
+            if (v.hi > y_bot) {{
                 slot(col, 1, vec2(px0, size.y), vec2(px0, sy(v.lo)));
             }}
+            has_last = false;
         }} else {{
             vec2 a;
             vec2 b;
@@ -196,10 +207,19 @@ void main() {{
                 }}
                 if (span > 2.5 * lineWidth && (edge < 0.5 * span || turns >= 2)) {{
                     slot(col, 0, vec2(px0, sy(v.hi)), vec2(px0, sy(v.lo)));
+                    has_last = false;
                     continue;
                 }}
                 a = vec2(px0, sy(y0));
                 b = vec2(px1, sy(y1));
+                // GGB drawJoined: continue from the previous column's right edge to this
+                // column's left edge. Without this the independent quads leave a one-pixel
+                // notch at every column hand-off.
+                if (has_last) {{
+                    slot(col, 1, vec2(px0, sy(last_y)), vec2(px0, sy(y0)));
+                }}
+                last_y = y1;
+                has_last = true;
             }}
             slot(col, 0, a, b);
         }}

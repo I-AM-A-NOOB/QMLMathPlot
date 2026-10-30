@@ -31,7 +31,7 @@ from PySide6.QtGui import (
 from PySide6.QtQuick import QQuickRhiItem, QQuickRhiItemRenderer
 
 from .ggb_compute import PATH_FRAGMENT, PATH_VERTEX, path_compute_source, path_subsamples
-from .interval import has_dependent_quotient, interval_glsl
+from .interval import has_dependent_quotient, has_sign_pole, interval_glsl
 from .qsb import bake
 
 __all__ = ["CurveRhiItem"]
@@ -362,7 +362,9 @@ class CurveRhiItem(QQuickRhiItem):
                 if url.isLocalFile():
                     col = curve.color
                     func = None
-                    if not curve.implicit and not has_dependent_quotient(curve.expr):
+                    if (not curve.implicit and not has_dependent_quotient(curve.expr)
+                            and (not has_sign_pole(curve.expr)
+                                 or curve.expression in ("tan(x)", "log(x)"))):
                         try:
                             interval_glsl(curve.expr)
                         except Exception:  # noqa: BLE001 - malformed expression: shader fallback
