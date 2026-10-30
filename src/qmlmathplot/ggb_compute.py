@@ -173,7 +173,28 @@ void main() {{
                 // segment has a large endpoint chord, so it stays a stroke.
                 float span = (v.hi - v.lo) * (1.0 / camera.w);
                 float edge = ft ? abs(f1 - f0) / camera.w : span;
-                if (span > 2.5 * lineWidth && edge < 0.5 * span) {{
+                int turns = 0;
+                if (span > 2.5 * lineWidth) {{
+                    float prev = f0;
+                    float prevd = 0.0;
+                    for (int j = 1; j < 5; j++) {{
+                        float xm = x0 + dx * float(j) * 0.25;
+                        if (!DOM(xm)) {{
+                            continue;
+                        }}
+                        float fm = F(xm);
+                        if (!(fm == fm) || abs(fm) >= 1e30) {{
+                            continue;
+                        }}
+                        float d = fm - prev;
+                        if (abs(d) > 1e-4 && prevd * d < 0.0) {{
+                            turns += 1;
+                        }}
+                        prevd = d;
+                        prev = fm;
+                    }}
+                }}
+                if (span > 2.5 * lineWidth && (edge < 0.5 * span || turns >= 2)) {{
                     slot(col, 0, vec2(px0, sy(v.hi)), vec2(px0, sy(v.lo)));
                     continue;
                 }}
