@@ -1192,3 +1192,20 @@ the full step budget in both directions plus both windows.
 
     Regressions: existing `test_render_smoke.py` tan/log cases now exercise the compute path
     (width, no pole connector, deep log descent), plus `tests/test_pathcurve.py`.
+
+68. **`ggb_reference.py` is the CPU oracle for the interval path, not a renderer.** It ports
+    the shape of `FunctionSampler`, `IntervalPath`, `DrawInterval`, `DrawInvertedInterval` and
+    `JoinLines` from
+    `D:/Projects/geogebra/source/shared/common/src/main/java/org/geogebra/common/euclidian/plot/interval/`.
+    The sampler uses `mpmath.iv` for conservative intervals and one interval per screen column;
+    the path keeps `last_point`/`last_y` and emits clipped segments. It is used to compare the
+    GPU state machine, never imported by `PlotView` or `CurveRhiItem`.
+
+    `mpmath.iv` has no inverse trig/hyperbolic helpers, so the reference currently covers the
+    operators the production interval library supports through `sin`, `cos`, `tan`, `sqrt`,
+    `exp`, `log`, `Abs`, arithmetic and powers. A missing operator must be added to
+    `_iv_module()` before the reference can judge that curve.
+
+    Tests: `tests/test_ggb_reference.py` (tan pole not bridged, reciprocal has both branches,
+    log has no path left of its domain). The reference exposed the remaining GPU gap: we still
+    need the complete `JoinLines` state, not independent per-column quads.
