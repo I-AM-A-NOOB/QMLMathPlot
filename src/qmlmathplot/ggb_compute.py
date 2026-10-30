@@ -114,16 +114,20 @@ void main() {{
         float x1 = x0 + dx;
         float px0 = float(col) / float({subsamples});
         float px1 = float(col + 1) / float({subsamples});
-        if (HAS_SIGN_POLE != 0 && POLE(x0) * POLE(x1) <= 0.0) {{
-            continue;
-        }}
+        bool pole_col = HAS_SIGN_POLE != 0 && POLE(x0) * POLE(x1) <= 0.0;
         IVal v = FI(x0, x1);
         if (v.kind == IK_EMPTY) {{
             continue;
         }}
-        if (abs(camera.z) > 1.0) {{
-            // Undersampled: several poles per column. Like GGB's dense interval branch,
-            // fill the attained column instead of trying to keep the sparse branch edges.
+        // A pole wrapped by a monotone map (exp(tan)) produces a connected interval that
+        // would bridge the two branches; only that topology is skipped. Inverted/whole
+        // intervals still carry the one-sided rays.
+        if (pole_col && v.kind == IK_CONNECTED) {{
+            continue;
+        }}
+        if (abs(camera.z) > 1.0 && v.kind == IK_WHOLE) {{
+            // Only a genuinely whole column is GGB's dense fill. Filling every
+            // non-connected/inverted column made ordinary functions flood when zoomed out.
             slot(col, 0, vec2(px0, 0.0), vec2(px0, size.y));
             continue;
         }}
@@ -151,13 +155,27 @@ void main() {{
             }} else {{
                 float y0 = v.lo;
                 float y1 = v.hi;
+                bool ft = false;
+                float f0 = 0.0;
+                float f1 = 0.0;
                 if (DOM(x0) && DOM(x1)) {{
-                    float f0 = F(x0);
-                    float f1 = F(x1);
-                    if (f0 == f0 && f1 == f1 && abs(f0) < 1e30 && abs(f1) < 1e30) {{
+                    f0 = F(x0);
+                    f1 = F(x1);
+                    ft = f0 == f0 && f1 == f1 && abs(f0) < 1e30 && abs(f1) < 1e30;
+                    if (ft) {{
                         y0 = f0;
                         y1 = f1;
                     }}
+                }}
+                // A column whose interval is much wider than its endpoint chord is
+                // unresolved oscillation (sin(1/x) near zero): fill the attained interval
+                // instead of drawing a comb of per-subcolumn chords. A steep monotone
+                // segment has a large endpoint chord, so it stays a stroke.
+                float span = (v.hi - v.lo) * (1.0 / camera.w);
+                float edge = ft ? abs(f1 - f0) / camera.w : span;
+                if (span > 2.5 * lineWidth && edge < 0.5 * span) {{
+                    slot(col, 0, vec2(px0, sy(v.hi)), vec2(px0, sy(v.lo)));
+                    continue;
                 }}
                 a = vec2(px0, sy(y0));
                 b = vec2(px1, sy(y1));
