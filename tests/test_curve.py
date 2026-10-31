@@ -14,23 +14,32 @@ from qmlmathplot import Curve, CurveListModel, Plot
 
 
 def test_curve_bakes_its_shaders() -> None:
-    curve = Curve("sin(x)")
+    curve = Curve("floor(x)")                                 # the sampled fallback
     assert curve.error == ""
     assert curve.fragmentShader.toString().endswith(".qsb")
     assert curve.vertexShader.toString().endswith(".qsb")
-    assert "sin(" not in curve.fragmentShader.toString()      # a URL, not source
+    assert "floor(" not in curve.fragmentShader.toString()    # a URL, not source
+
+
+def test_a_compute_curve_skips_the_sampled_bake() -> None:
+    """The compute renderer owns `expr`; baking the unused fallback was ~130 ms/curve."""
+    curve = Curve("sin(x)")
+    assert curve.error == ""
+    assert curve.expr == sp.sin(sp.Symbol("x"))
+    assert not curve.fragmentShader.toString()
+    assert not curve.vertexShader.toString()
 
 
 def test_a_bad_expression_keeps_the_last_working_shaders() -> None:
-    curve = Curve("sin(x)")
+    curve = Curve("floor(x)")
     vertex, fragment = curve.vertexShader, curve.fragmentShader
-    curve.expression = "sin("                                 # cannot be parsed
-    assert curve.expression == "sin("                         # the box shows what was typed
+    curve.expression = "floor("                               # cannot be parsed
+    assert curve.expression == "floor("                       # the box shows what was typed
     assert curve.error, "a failed expression must report a reason"
     assert (curve.vertexShader, curve.fragmentShader) == (vertex, fragment), \
         "the previous shaders must survive a failed bake"
 
-    curve.expression = "cos(x)"
+    curve.expression = "floor(2*x)"
     assert curve.error == ""
     assert curve.fragmentShader != fragment
 
@@ -78,33 +87,33 @@ def test_expression_accepts_a_string_and_a_sympy_expression(monkeypatch) -> None
     monkeypatch.setattr(sp, "sympify", counting)
     x = sp.Symbol("x")
 
-    curve = Curve(sp.sin(x))                          # an expression: no parse at all
+    curve = Curve(sp.floor(x))                        # an expression: no parse at all
     assert calls == [], "an Expr input must not be stringified and re-parsed"
-    assert curve.expression == "sin(x)" and curve.expr == sp.sin(x)
+    assert curve.expression == "floor(x)" and curve.expr == sp.floor(x)
 
-    curve.expression = "cos(x)"                       # a string: exactly one parse
-    assert calls == ["cos(x)"]
+    curve.expression = "floor(2*x)"                   # a string: exactly one parse
+    assert calls == ["floor(2*x)"]
     after_string = curve.fragmentShader
 
-    curve.expression = sp.cos(x)                      # the same expression, as an object
-    assert calls == ["cos(x)"], "the canonical string already matches"
+    curve.expression = sp.floor(2 * x)                # the same expression, as an object
+    assert calls == ["floor(2*x)"], "the canonical string already matches"
     assert curve.fragmentShader == after_string, "and nothing re-bakes"
-    curve.expression = "cos(x)"                       # and a repeated string is free too
-    assert calls == ["cos(x)"]
+    curve.expression = "floor(2*x)"                   # and a repeated string is free too
+    assert calls == ["floor(2*x)"]
 
-    curve.expression = sp.sin(2 * x)                  # a real change: one string conversion
-    assert calls == ["cos(x)"], "still no parse"
-    assert curve.expression == "sin(2*x)" and curve.fragmentShader != after_string, \
+    curve.expression = sp.floor(3 * x)                # a real change: one string conversion
+    assert calls == ["floor(2*x)"], "still no parse"
+    assert curve.expression == "floor(3*x)" and curve.fragmentShader != after_string, \
         "a real change still re-bakes"
 
-    curve.expression = "sin("                         # unparsable: one attempt, shaders kept
-    assert calls == ["cos(x)", "sin("]
-    assert curve.error and curve.expression == "sin(" and curve.expr == sp.sin(2 * x)
+    curve.expression = "floor("                       # unparsable: one attempt, shaders kept
+    assert calls == ["floor(2*x)", "floor("]
+    assert curve.error and curve.expression == "floor(" and curve.expr == sp.floor(3 * x)
     assert curve.fragmentShader == curve.fragmentShader
 
     plot = Plot()                                     # the entry point too: `add_curve(expr)`
     added = plot.add_curve(sp.tan(x))                 # must not stringify on the way in
-    assert calls == ["cos(x)", "sin("], "add_curve(Expr) parsed"
+    assert calls == ["floor(2*x)", "floor("], "add_curve(Expr) parsed"
     assert added.expression == "tan(x)" and added.expr == sp.tan(x)
 
 

@@ -664,3 +664,61 @@ def test_axis_pins_to_the_edge_when_the_origin_is_off_screen(app: QGuiApplicatio
     # the y axis is unchanged (x = 0 is still visible) and the labels are on screen
     centre_x = width // 2
     assert _dark(image, centre_x, height // 3), "the y axis at x=0 disappeared"
+
+
+def test_wrapped_pole_spikes_reach_the_view_top(app: QGuiApplication) -> None:
+    """`exp(tan(x))` at a zoom where the spike crosses the top inside the pole column.
+
+    Dropping the pole column (the first version of the wrapped-pole rule) truncated every
+    spike whose crossing fell inside it: measured tops varied from 50 to 250 although the
+    left branch is unbounded. The resolved column now draws that branch from the neighbour's
+    high edge to the top. One spike per pole; allow the two edge columns to be clipped.
+    """
+    xlim, ylim = (-171.625, 170.0877), (-13.7064, 250.3443)
+    image, _ = _render_plot(app, "exp(tan(x))", xlim=xlim, ylim=ylim)
+    width, height = image.width(), image.height()
+    tops = []
+    for x in range(width):
+        ys = [y for y in range(height) if _lit(image, x, y)]
+        tops.append(min(ys) if ys else height)
+    spikes = []
+    for x in range(2, width - 2):
+        if tops[x] < height and tops[x] <= tops[x - 1] and tops[x] <= tops[x + 1]:
+            if not spikes or x - spikes[-1] > 4:
+                spikes.append(x)
+    poles = int((xlim[1] - xlim[0]) / math.pi) + 1
+    at_top = sum(1 for x in spikes if tops[x] <= 0.02 * height)
+    assert at_top >= poles - 3, f"only {at_top} of {poles} pole spikes reach the top"
+
+
+def test_wrapped_pole_transition_fills_the_attained_half_plane(app: QGuiApplication) -> None:
+    """`exp(tan(x))` between the resolved spikes and the fully dense view.
+
+    At a column width above half the pole spacing two neighbouring columns can hold poles,
+    and per-column spike rendering leaves a moiré of top heights (measured: 225 columns at
+    the top, 747 with a mid-height top). A non-negative, pole-only-domain wrapped pole fills
+    the attained half-plane uniformly instead: every column reaches the top, nothing below
+    y = 0, no partial spikes.
+    """
+    xlim, ylim = (-1036.3860, 855.3209), (-666.0227, 795.7508)
+    image, _ = _render_plot(app, "exp(tan(x))", xlim=xlim, ylim=ylim)
+    width, height = image.width(), image.height()
+    tops = []
+    for x in range(width):
+        ys = [y for y in range(height) if _lit(image, x, y)]
+        tops.append(min(ys) if ys else height)
+    assert all(t <= 0.02 * height for t in tops), \
+        f"partial spikes remain: {sum(1 for t in tops if t < 0.6 * height)} columns"
+    # exp(tan) > 0: the lower half of this view is empty on every column.
+    assert not any(_lit(image, x, height - 2) for x in range(0, width, 4)), \
+        "the fill paints below the function's range"
+
+
+def test_slow_boundary_ray_is_live_in_the_sampled_fallback(app: QGuiApplication) -> None:
+    """The boundary ray is not dead: `floor(log(x))` is unsupported by the interval backend,
+    so it uses the sampled fallback, and its descent to -inf at x=0 can only be reached by the
+    analytic ray (the sampler never reaches x=1e-7). Measured: 1020 lit pixels with the ray,
+    0 without; the centre column (x=0) is the wall.
+    """
+    image, _ = _render_plot(app, "floor(log(x))", xlim=(-1.0, 1.0), ylim=(-16.0, -12.0))
+    assert _column_lit_at(image, image.width() // 2) > 0, "the boundary ray is missing"

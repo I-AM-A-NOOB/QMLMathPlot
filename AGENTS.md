@@ -6,18 +6,27 @@ histories and numbers belong here.
 
 ## Current renderer status (read this first)
 
-- RHI: `CurveRhiItem` draws the interval-supported 1-D curves with a sequential compute
-  shader (one invocation per curve, `FI` per screen column) into a vertex buffer. `tan(x)`
-  and `log(x)` have regressions in `test_render_smoke.py`; the compute path is the default
-  for all non-implicit curves except sign-pole cases that still fall back to the fragment
-  shader.
-- Sign-pole functions other than tan/log (for example `exp(tan(x))`) still use the
-  fragment-shader fallback; dependent quotients (`x/sqrt(x**2)`) always do.
+- RHI: `CurveRhiItem` draws every interval-supported 1-D curve with the GGB path state
+  machine in a sequential compute shader (one invocation per curve, one `FI` per screen
+  column plus a one-column prefetch). `path_compute_supported()` decides: an expression is
+  on the compute path when `interval_glsl()` supports it and it is not a dependent
+  quotient. The old `("tan(x)", "log(x)")` string whitelist is gone; `1/x`, `sin(1/x)` and
+  `tan(2*x)` now use the same path as `tan`/`log`.
+- Fragment shader fallback: expressions the interval library does not cover (`floor`,
+  `sign`, `Min/Max`, `Piecewise`, …) and dependent quotients (`x/sqrt(x**2)`, whose interval
+  explodes without a sign pole). Implicit curves always use their own fragment shader.
 - CPU fallback: `view.cpuRenderer = true` replaces the RHI item with one `QPainterPath` per
   curve (`CpuCurves.qml` + `pathcurve.py` + `ggb_reference.py`). It is explicit, not auto.
-- Unresolved GPU issue: the compute path does not yet reproduce the CPU reference on
-  `sin(1/x)` (comb in the unresolved middle) and `1/(x-1)+1` (lower branch at large |y|).
-  The blocker is interval topology plus the missing `JoinLines` state, not GPU capability.
+  `ggb_reference` now feeds the shared state machine (`ggb_path.py`); its `mpmath.iv`
+  sampler cannot express a gap, so a pole column is reported as empty (a path break).
+- Known deviation: a wrapped pole (`exp(tan(x))`) becomes a connected `[0, +inf]` column.
+  While the column is narrower than half the pole spacing it draws the branch that
+  approaches +∞ (the side with the larger neighbour high edge) and leaves the other branch to
+  the next column. At or above half the spacing (two adjacent columns can hold poles) a
+  non-negative, pole-only-domain expression fills the attained half-plane uniformly
+  (`UNIFORM_FILL`): the per-column spikes would otherwise form a moiré of top heights. GGB's
+  interval renderer would draw a connector instead. The threshold is derived from the
+  expression (`_pole_spacing()` in `model.py`), not from `camera.z`.
 - Do not use `ggb_reference.py` (mpmath.iv) as a pixel-exact oracle for GPU `FI`
   (float32/GLSL): the two classify poles/domains differently. Compare visual invariants,
   not pixels.
@@ -1271,3 +1280,206 @@ the full step budget in both directions plus both windows.
 
     Do not retry: fixed per-column quad counts, generic boundary joins without neighbour
     topology, global dense-fill thresholds, or `ggb_reference` as a pixel oracle.
+
+71. **The missing GGB mechanism was the path state machine, not another interval engine.**
+    Item 70 stopped at "a Python interval evaluator with the same EMPTY/CONNECTED/INVERTED/
+    WHOLE rules is required". That premise is wrong for this port: the state machine consumes
+    *topology*, so it can be specified once in Python and tested with synthetic columns — no
+    fourth interval implementation, no float32 reproduction, no pixel oracle. What was
+    actually missing:
+
+    * `DrawInvertedInterval.draw` clears its `lastYSet` when the next column is not inverted.
+      The port kept the previous `lastY`, so the column after a pole joined the pole ray's
+      edge to the other branch: measured **900/900 lit pixels at x = 0** for `1/x` (a full
+      connector). Clearing it makes the next column independent.
+    * `JoinLines` ends the gap rays at the **neighbours'** near edges. At a `tan` pole those
+      edges are off screen, so the clipped segment is invisible — that, not a pole-specific
+      guard, is why `tan` has no wall. Measured default view: the pole columns have 0 lit
+      rows; at `y ∈ [-200, 200]` the branches reach 622 rows near a pole.
+    * `IntervalPath.drawNormalInfinity` draws `leftToTop`/`leftToBottom` only when the finite
+      bound is on screen, and resets `lastY` when it is not.
+
+    Implemented as `ggb_path.py` (topology in, segments out: `IntervalPath`,
+    `DrawInterval`, `DrawInvertedInterval`, `JoinLines`) with `tests/test_ggb_path.py`
+    covering independent/joined, up/down, gap, pole gap, whole, one-sided infinity and
+    consecutive inverted columns. `ggb_compute.py` mirrors the decisions in the compute
+    shader: one `FI` per column, a one-column prefetch for the right neighbour, the previous
+    column as the left one, and **no scalar `F` sampling** — the path is the interval's own
+    endpoints, and the old `turns`/`span` oscillation heuristic is gone.
+    `ggb_reference.py` now feeds the shared machine; its `mpmath.iv` sampler cannot express a
+    gap, so a pole column is reported as empty (documented path break, not whole).
+
+    Remaining deliberate deviation: a wrapped pole (`exp(tan(x))`) is a connected
+    `[0, +inf]` column. `_pole_spacing()` is half the period of the pole factor (`pi` for
+    tan, `pi/2` for tan(2x), 0 for a non-periodic factor); it is the distance between two
+    poles. The rule is a Nyquist test on that spacing:
+
+    * **column width < spacing/2** — resolved: at most one pole per column and no two
+      adjacent pole columns. Draw the branch that approaches +∞ (the side with the larger
+      neighbour high edge) and leave the other branch (near the range floor) to the next
+      column's independent vertical. The earlier version broke the resolved column instead;
+      that dropped the spike top whenever the branch crossed the view top inside the pole
+      column (measured on x ∈ [-172, 170], y ∈ [-13.7, 250]: all 109 pole spikes reach the
+      top now; before only those whose crossing fell in a neighbour column did).
+    * **column width ≥ spacing/2** — undersampled: adjacent columns can both hold poles, so
+      there is no outer edge to anchor a branch ray. Per-column spike rendering then leaves
+      a moiré of top heights (measured on the user's x ∈ [-1036, 855], y ∈ [-666, 796]:
+      225 columns at the top, 747 with a mid-height top). If the expression is non-negative
+      (`_non_negative()`) and only poles restrict its domain (`_domain_is_pole_only()`),
+      `UNIFORM_FILL` paints the attained half-plane uniformly: 1320/1320 columns reach the
+      top and nothing is painted below y = 0. This is a conservative over-approximation,
+      deliberately chosen over a spurious comb.
+
+    The threshold replaced the old `|camera.z| > 1` constant;
+    `test_dense_pole_columns_degrade_to_fill`, `test_wrapped_pole_transition_fills_the_attained_half_plane`
+    and `test_asymptote_is_not_connected` pin the three regimes.
+
+    `path_compute_supported()` replaces the string whitelist: compute for every
+    interval-supported expression except dependent quotients. Checked matrix:
+    `tan(x)`/`tan(2*x)`/`log(x)`/`log(1+x)`/`1/x`/`sin(1/x)`/`x**2` compute;
+    `x/sqrt(x**2)` stays fragment.
+
+    **Compile cost — the pitfall that made the first port unusable** (measured on
+    QQuickWidget/offscreen, D3D11; each `QQuickWidget` has its own `QRhi`, so this is per
+    widget, not per process). The first version called `slot()` — six vertex stores — from
+    every state-machine branch: `QRhiComputePipeline.create` took **2.7 s** for `sin(x)` and
+    **6.8 s** for `tan(x)`, and an 800×600 export went from 0.25 s (fragment) to 2.8 s.
+    Isolating it: a stub `main` compiled in 1 ms; `cols = 1` (same body, one iteration) in
+    144 ms; trimming `INTERVAL_LIB` to the expression's closure (11 KB → 1.1 KB for
+    `sin(x)`) changed nothing; `[[dont_unroll]]` (accepted by qsb after enabling
+    `GL_EXT_control_flow_attributes`) changed nothing. The fix is structural: the state
+    machine records up to two segments in `g_seg_a/g_seg_b` and **one** `slot` call site per
+    column emits them. `create` fell to **0.30 s / 1.21 s**; export to 0.40 s (sin) and
+    1.30 s (tan, versus 2.0 s for the fragment path). The library trim is kept for source
+    size and cache, but the inlined body was the cost.
+
+
+
+72. **`JoinLines`' two comparisons are not interchangeable — the tan break was ours, not
+    GGB's.** After item 71 the user's wide-view `tan(x)` (x ∈ [−71, 76], y ∈ [−43, 70])
+    showed breaks in the branches. Reproduced: 223 device columns with an internal gap
+    (fragment fallback: 175). Two porting mistakes, both now pinned by
+    `tests/test_ggb_path.py`:
+
+    * **The top-edge equality is a tolerance.** GGB tests
+      `DoubleUtil.isEqual(0, |currentGapHigh − leftYHigh|, MAX_PRECISION)` with
+      `MAX_PRECISION = 1e-12`. The two values come from overlapping interval evaluations
+      and differ in the last bits (GGB's own output: 2.3e-12), so our exact `== 0.0` never
+      took `toTopCurrentXLow` and drew a two-column diagonal instead of the vertical at
+      `x.low`. The shader uses a float-safe relative epsilon (`1e-5`); the Python spec uses
+      `1e-9`.
+    * **`toBottom` compares screen-mapped differences.** `getLeft/RightScreenDifference`
+      passes the world difference through `toScreenCoordYd`, which is **decreasing**, so
+      the comparison is reversed relative to a raw world comparison. And
+      `toBottomLeft` ends at **`currentXHigh`**, not `currentXLow` (the earlier port copied
+      the CPU reference's endpoint). With the raw comparison and the wrong endpoint, the
+      asymptote was drawn on the mirrored side.
+
+    The GGB oracle used for this: a temporary JUnit probe running the real `IntervalPlotter`
+    for the same bounds, with `EuclidianViewBounds` overridden to the production
+    `toScreenCoord*` mapping (the repo's `EuclidianViewBoundsMock` uses identity, which
+    hides the branch reversal). Its tan output is
+    `MOVE_TO(x.low, gap.hi) → LINE_TO(x.low, ymax)` and
+    `MOVE_TO(right.x.high, gap.lo) → LINE_TO(x.high, ymin)`, which is exactly what the
+    corrected state machine emits. The probe was removed afterwards; do not keep a modified
+    copy in the GGB tree.
+
+    Measured after: tan gaps **223 → 163** columns (the fragment fallback has 175), and a
+    ground-truth sweep over 49,185 true curve rows in the view found **0 missing**: every
+    point of `tan` is drawn. The remaining white bands are the pole columns' *excluded*
+    intervals — GGB's own path has the same `MOVE_TO` gap between `gap.hi` and `gap.lo`, so
+    that is the interval method, not a defect. `sin(1/x)` at the reported zoom
+    (x ∈ [−0.0255, 0.035], y ∈ [−1.005, −0.959]) was checked the same way: **341/341**
+    columns whose dense samples enter the view are lit, 165 more are conservatively lit, 0
+    missed. The white space between stripes is where the curve is resolved and lies
+    outside the thin y slice; the solid block is where one column spans more than a period.
+
+73. **A collection-time matplotlib import crashed the next QQuickWidget export (native).**
+    The full GUI suite died at `tests/test_export.py::test_the_image_has_exactly_the_requested_device_size`
+    after 26 tests: exit code 5, no Python traceback, output ending mid-test. Windows Event
+    Log: `python.exe`, faulting module **Qt6Core.dll 6.12.0**, exception `0xc0000005` at
+    offset `0xa6d8a`. Reproduced deterministically when `tests/test_handoff.py` was collected
+    — its module-level `from matplotlib.colors import to_rgba` and `pytest.importorskip`
+    import matplotlib before any test runs — and not when that file was ignored. Export +
+    handoff alone passed, and each of compat/cpu/curve + export + handoff passed, so it is a
+    collection-order/timing race, not a specific test. Forcing `UNIFORM_FILL = 0` or removing
+    the new shader branch did not change it, so it was not the renderer change.
+
+    Fix/workaround: keep matplotlib lazy in the tests. `tests/test_handoff.py` now skips via
+    `importlib.util.find_spec("matplotlib")` (no import) and imports `to_rgba` inside the test
+    that needs it, so matplotlib is first imported by the hand-off tests themselves, after the
+    Qt tests. Full suite then passes (204 tests). Separately, the animation timing test
+    `test_input.py::test_keyboard_and_pan_can_be_switched_off` is occasionally flaky under
+    load (one full run failed; isolated 3/3 passed) — it is a wait/timing assertion, unrelated
+    to the renderer.
+
+74. **Shader sources are files under `src/qmlmathplot/shaders/`, assembled by
+    `shaderbuild.render`.** The old 41.9 KB `FRAGMENT_TEMPLATE` carried two renderers behind
+    `#if USE_INTERVAL`. During the split it became `oned_interval.frag` +
+    `oned_legacy.frag`; after the eligibility fix (item 75) the interval fragment was
+    **deleted** and the one remaining 1-D fragment is `oned_sampled.frag` (the march).
+    `shader_sources` now **always** returns the sampled fallback; the interval path is
+    compute-only. Generated sizes: sampled **28.4 KB** (the old interval fragment was 51.7),
+    compute 13–17 KB, implicit 14 KB. `model.py` 1583 → ~430 lines, `ggb_compute.py`
+    404 → 55, `interval.py` 621 → 295.
+
+    Shared prologues live in `shaders/common/` (`uniforms`, `arg_reduction`, `seg_dist`,
+    `span_cov`, `real_pow`) and are expanded by `render` through
+    `@INCLUDE:common/<name>.glsl@` (recursive, cycle-checked) before placeholder
+    substitution. The 1-D and implicit sources differ from their pre-dedupe versions only in
+    comments (the 1-D templates were byte-identical before the interval fragment was
+    removed).
+
+    Compute curves bake **no** fragment: `Curve._sources` checks
+    `interval.compute_supported(expr)` (the same predicate `rhi` uses) and returns empty
+    sources, so `Curve` skips `shader_sources` and qsb entirely; `rhi._refresh` snapshots
+    compute curves with an empty URL and the compute path uses `expr`. Measured curve
+    creation: `sin(x)` ~4.5 ms, `sin(1/x)` ~0.6 ms; the sampled fallback still bakes
+    (`floor(x)` ~100 ms). `Curve.vertexShader`/`fragmentShader` are empty for compute
+    curves — do not use them as a "has shaders" flag.
+
+    `render(name, **values)` replaces `@NAME@`, then raises if any placeholder remains (a
+    missing substitution used to surface only as a cryptic qsb parse error). The templates
+    are cached by `shader_source` (`importlib.resources`, read once); `uv build` includes the
+    shader tree (verified in the wheel). Tests: `tests/test_shader_build.py` (resources load,
+    unresolved placeholders raise, no `USE_INTERVAL`/`IVal FI` in the fragment, size
+    budgets), `test_model.py::test_the_fragment_is_only_the_sampled_fallback`. Do not
+    reintroduce `#if USE_INTERVAL`; add a file (or a placeholder) instead.
+
+75. **GGB's interval renderer has an explicit eligibility list; floor/sign and dependent
+    quotients are not in it.** `IntervalOperation` supports ABS/ACOS/ASIN/ATAN/COS/COSH/COT/
+    CSC/DIVIDE/EXP/LOG/MINUS/MULTIPLY/NROOT/PLUS/POWER/LOGB/SEC/SIN/SINH/SQRT/TAN/TANH —
+    no floor, sign, Min/Max or If/Piecewise. `IntervalFunctionSupport.isSupported()` rejects
+    anything outside that list, and GGB then draws the function with its classic sampled
+    `CurvePlotter`, not `IntervalPath`. **`x/sqrt(x**2)` is rejected too**: GGB's algebra
+    simplifies it to `sgn` (the probe on the real `IntervalFunctionSupport` returned
+    `supported=false` for `x/sqrt(x**2)`, `floor(x)`, `sign(x)` and `x/abs(x)`). So there is
+    no GGB interval mechanism to port for those classes; the faithful implementation is the
+    sampled fallback, which our `oned_sampled.frag` is. Consequence: the interval fragment
+    (`oned_interval.frag`, 17.5 KB generated) had no production user and was removed;
+    `rhi.path_compute_supported()` keeps the same split (interval support + not a dependent
+    quotient), and the sampled fragment is the only 1-D fragment. If a future expression
+    class is added, check GGB's operation list first: extending our interval library beyond
+    it is a deliberate divergence, not a port.
+
+76. **The boundary ray is live — only in the sampled fallback.** `unbounded_edges(expr)`
+    finds a polynomial domain boundary (from `_domain_conditions`), rejects one that is also
+    a pole (so `1/x`/`tan` get no ray), and evaluates the one-sided `sp.limit` of the whole
+    expression. `_edge_glsl` turns it into `EDGEHIT`/`EDGEDU`; `oned_sampled.frag`'s
+    `_ray_dist` extends the polyline vertically along the boundary x to ±1e12. It exists
+    because a slowly diverging boundary (`log(x)` as x→0+) is never reached by a fixed-width
+    sample window or the march's 12-step budget: in a deep viewport the curve would vanish.
+    It is **not** dead: `floor(log(x))` is rejected by the interval backend (floor) and goes
+    to the sampled fallback, where the deep descent exists only through the ray. Measured on
+    x∈[-1,1], y∈[-16,-12]: **1020 lit pixels with the ray, 0 without**; regression
+    `test_render_smoke.py::test_slow_boundary_ray_is_live_in_the_sampled_fallback`. Cases
+    that do **not** use it: `log(x)`/`sqrt(x)`/`sin(1/x)` (compute/no edge), `sign(log(x))`
+    (the limit is finite), `1/x`/`tan` (boundary is a pole). Deleting the ray also removes
+    the last `sp.solve`/`sp.limit`/`sp.simplify` use (and `unbounded_edges`); do that only if
+    `floor(log(x))`-style deep views are declared out of scope.
+
+    The sampled template also stopped defining the unused `POLE`/`HAS_SIGN_POLE`/
+    `HAS_DEPENDENT_QUOTIENT` macros: the march's join invariant replaced the fixed-x pole
+    guard, and the interval-vs-sampled routing lives in `interval.compute_supported`, so no
+    shader-side policy macro remains. `test_model.py::test_shader_sources_inject_domain`
+    pins `#define POLE` *absent* from the sampled source.

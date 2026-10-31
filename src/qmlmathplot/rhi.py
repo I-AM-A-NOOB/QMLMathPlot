@@ -31,7 +31,7 @@ from PySide6.QtGui import (
 from PySide6.QtQuick import QQuickRhiItem, QQuickRhiItemRenderer
 
 from .ggb_compute import PATH_FRAGMENT, PATH_VERTEX, path_compute_source, path_subsamples
-from .interval import has_dependent_quotient, has_sign_pole, interval_glsl
+from .interval import compute_supported as path_compute_supported
 from .qsb import bake
 
 __all__ = ["CurveRhiItem"]
@@ -72,7 +72,7 @@ class _Renderer(QQuickRhiItemRenderer):
         self._path_buffers: dict[str, QRhiBuffer] = {}
         self._path_buffer_sizes: dict[str, int] = {}
         self._path_fragment = None
-        self._curves: list[tuple[QUrl, float, tuple[float, float, float, float], object, str]] = []
+        self._curves: list[tuple[QUrl, float, tuple[float, float, float, float], object, object]] = []
         self._camera = QVector4D(0.0, 0.0, 1.0, 1.0)
         self._size = (1.0, 1.0)
 
@@ -309,6 +309,8 @@ class _Renderer(QQuickRhiItemRenderer):
 
 
 
+
+
 class CurveRhiItem(QQuickRhiItem):
     """The whole plot drawn by one QRhi pass."""
 
@@ -318,7 +320,7 @@ class CurveRhiItem(QQuickRhiItem):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._curves_model = None
-        self._snapshot: list[tuple[QUrl, float, tuple[float, float, float, float], object, str]] = []
+        self._snapshot: list[tuple[QUrl, float, tuple[float, float, float, float], object, object]] = []
         self._camera = QVector4D(0.0, 0.0, 1.0, 1.0)
         self._renderer = None
         self.setAlphaBlending(True)
@@ -358,26 +360,19 @@ class CurveRhiItem(QQuickRhiItem):
                 curve = model.at(row)
                 if curve is None or not curve.visible:
                     continue
-                url = curve.fragmentShader
-                if url.isLocalFile():
-                    col = curve.color
-                    func = None
-                    if (not curve.implicit and not has_dependent_quotient(curve.expr)
-                            and (not has_sign_pole(curve.expr)
-                                 or curve.expression in ("tan(x)", "log(x)"))):
-                        try:
-                            interval_glsl(curve.expr)
-                        except Exception:  # noqa: BLE001 - malformed expression: shader fallback
-                            pass
-                        else:
-                            func = str(curve.expr)
-                    self._snapshot.append((
-                        QUrl(url),
-                        float(curve.lineWidth),
-                        (col.redF(), col.greenF(), col.blueF(), col.alphaF()),
-                        func,
-                        str(curve.expr),
-                    ))
+                expr = curve.expr
+                compute = not curve.implicit and path_compute_supported(expr)
+                url = QUrl() if compute else curve.fragmentShader
+                if not compute and not url.isLocalFile():
+                    continue
+                col = curve.color
+                self._snapshot.append((
+                    QUrl(url),
+                    float(curve.lineWidth),
+                    (col.redF(), col.greenF(), col.blueF(), col.alphaF()),
+                    str(expr) if compute else None,
+                    expr,
+                ))
         self.update()
 
     def _curves_changed(self, *args) -> None:  # noqa: ARG002 - Qt signal payload

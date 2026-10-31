@@ -36,31 +36,31 @@ def test_expression_bakes_off_the_gui_thread(app: QApplication, monkeypatch) -> 
         return real_bake(source, stage, *args, **kwargs)
 
     monkeypatch.setattr(curve_module, "bake", slow_bake)
-    curve = Curve("sin(x)")                 # construction is always synchronous
+    curve = Curve("floor(x)")                 # construction is always synchronous
     old_fragment = curve.fragmentShader
-    curve.expression = "cos(x)"
-    assert curve.expression == "cos(x)"
+    curve.expression = "floor(2*x)"
+    assert curve.expression == "floor(2*x)"
     assert curve.fragmentShader == old_fragment, "the setter blocked on the bake"
 
     _wait(curve.shadersChanged)
     assert curve.fragmentShader != old_fragment
-    assert curve.expr == sp.cos(X)
+    assert curve.expr == sp.floor(2 * X)
     assert curve.error == ""
 
 
 def test_a_stale_bake_does_not_replace_the_newer_expression(app: QApplication, monkeypatch) -> None:
     monkeypatch.setattr(Curve, "bake_async", True)
-    curve = Curve("sin(x)")
-    curve.expression = "cos(x)"
-    curve.expression = "tan(x)"             # supersedes the cos bake before it lands
+    curve = Curve("floor(x)")
+    curve.expression = "floor(2*x)"
+    curve.expression = "floor(3*x)"             # supersedes the floor(2*x) bake before it lands
     _wait(curve.shadersChanged)
-    assert curve.expr == sp.tan(X)
-    assert curve.expression == "tan(x)"
+    assert curve.expr == sp.floor(3 * X)
+    assert curve.expression == "floor(3*x)"
 
 
 def test_a_failed_async_bake_keeps_the_drawn_curve(app: QApplication, monkeypatch) -> None:
     monkeypatch.setattr(Curve, "bake_async", True)
-    curve = Curve("sin(x)")
+    curve = Curve("floor(x)")
     old_fragment = curve.fragmentShader
     old_expr = curve.expr
 
@@ -68,7 +68,7 @@ def test_a_failed_async_bake_keeps_the_drawn_curve(app: QApplication, monkeypatc
         raise RuntimeError("qsb exploded")
 
     monkeypatch.setattr(curve_module, "bake", broken_bake)
-    curve.expression = "cos(x)"
+    curve.expression = "floor(2*x)"
     _wait(curve.errorChanged)
     assert "qsb exploded" in curve.error
     assert curve.fragmentShader == old_fragment

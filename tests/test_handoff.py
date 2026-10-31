@@ -7,6 +7,7 @@ runs in a fresh interpreter to prove that ``import qmlmathplot`` does not import
 
 from __future__ import annotations
 
+import importlib.util
 import subprocess
 import sys
 
@@ -14,12 +15,17 @@ import numpy as np
 import pytest
 
 import qmlmathplot
-from matplotlib.colors import to_rgba
 
 from qmlmathplot import Plot
 
 #: The hand-off is a *sampled* renderer; the tests check the mapping, not the pixels.
-pytest.importorskip("matplotlib", reason="the hand-off needs the matplotlib extra")
+#: `find_spec` checks the extra without importing matplotlib at collection time: importing
+#: it before the Qt tests run makes a native QQuickWidget teardown crash reproducible in the
+#: same process (Qt6Core access violation at the first export test).
+pytestmark = pytest.mark.skipif(
+    importlib.util.find_spec("matplotlib") is None,
+    reason="the hand-off needs the matplotlib extra",
+)
 
 
 def _plot(*, aspect: str | float = "auto", position: str = "zero") -> Plot:
@@ -51,6 +57,8 @@ def test_missing_matplotlib_names_the_extra(monkeypatch) -> None:
 
 
 def test_figure_reflects_limits_style_and_aspect() -> None:
+    from matplotlib.colors import to_rgba
+
     plot = _plot(aspect=0.5)
     plot.background = "#101010"
     plot.grid = True

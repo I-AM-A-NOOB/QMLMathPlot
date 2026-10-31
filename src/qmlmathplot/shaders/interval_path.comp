@@ -1,0 +1,332 @@
+#version 440
+layout(local_size_x = 1) in;
+@INCLUDE:common/uniforms.glsl@
+layout(std430, binding = 1) buffer V {
+    float verts[];
+};
+@INCLUDE:common/arg_reduction.glsl@
+#define POLE(u) (@POLE@)
+#define HAS_SIGN_POLE @HAS_POLE@
+#define POLE_SPACING @POLE_SPACING@
+#define UNIFORM_FILL @UNIFORM_FILL@
+@INTERVAL_LIB@
+@INTERVALS@
+
+float sy(float y) { return (camera.y - y) / camera.w + 0.5 * size.y; }
+float syc(float y) { return sy(clamp(y, -1e12, 1e12)); }
+float sx(int col) { return float(col); }
+float smx(int col) { return float(col) + 0.5; }
+vec2 ndc(vec2 p) {
+    return vec2(p.x / size.x * 2.0 - 1.0, 1.0 - p.y / size.y * 2.0);
+}
+void put(int col, int quad, int corner, vec2 p, vec4 c) {
+    int base = ((col * 2 + quad) * 6 + corner) * 6;
+    vec2 n = ndc(p);
+    verts[base + 0] = n.x;
+    verts[base + 1] = n.y;
+    verts[base + 2] = c.r * c.a;
+    verts[base + 3] = c.g * c.a;
+    verts[base + 4] = c.b * c.a;
+    verts[base + 5] = c.a;
+}
+void slot(int col, int q, vec2 a, vec2 b) {
+    vec2 d = b - a;
+    float len = length(d);
+    vec2 nrm = len > 1e-6 ? vec2(-d.y, d.x) / len * lineWidth * 0.5 : vec2(0.0);
+    vec4 c = color;
+    put(col, q, 0, a + nrm, c);
+    put(col, q, 1, a - nrm, c);
+    put(col, q, 2, b - nrm, c);
+    put(col, q, 3, a + nrm, c);
+    put(col, q, 4, b - nrm, c);
+    put(col, q, 5, b + nrm, c);
+}
+
+// ---- path state (one invocation walks every column, so globals are per-path) ----------
+vec2 g_point;
+bool g_has_point = false;
+IVal g_last;
+bool g_has_last = false;
+IVal g_left;
+IVal g_next;
+
+float pay_lo(IVal v) { return v.kind == IK_WHOLE ? -IINF : v.lo; }
+float pay_hi(IVal v) { return v.kind == IK_WHOLE ? IINF : v.hi; }
+// GGB's DoubleUtil.isEqual(0, diff, MAX_PRECISION) with a float-safe relative epsilon.
+bool nearly_zero(float value) {
+    return abs(value) <= 1e-5 * max(1.0, abs(value));
+}
+// JoinLines.getLeft/RightScreenDifference: toScreenCoordYd is decreasing, so the ordering
+// of a world-space comparison is reversed.
+float screen_difference(float value, IVal neighbour) {
+    if (neighbour.kind == IK_EMPTY) return -1.0;
+    if (neighbour.kind == IK_WHOLE) return -1e30;
+    return syc(value);
+}
+bool infinite_boundary(IVal v) {
+    return v.kind != IK_EMPTY
+        && (v.kind == IK_WHOLE || v.lo <= -IINF || v.hi >= IINF);
+}
+// How many poles of the inner function the column contains. The interval library deliberately
+// maps a gap through a monotone map to a connected enclosure (GGB's `exp(inverted)` does the
+// same), so the topology alone cannot tell one pole from a whole period; the pole factor can.
+int pole_crossings(float xa, float xb) {
+    int count = 0;
+    float previous = POLE(xa);
+    for (int i = 1; i <= 8; i++) {
+        float x = xa + (xb - xa) * float(i) * 0.125;
+        float current = POLE(x);
+        if (previous * current <= 0.0) {
+            count += 1;
+        }
+        previous = current;
+    }
+    return count;
+}float ytop() { return camera.y + 0.5 * size.y * camera.w; }
+float ybot() { return camera.y - 0.5 * size.y * camera.w; }
+
+// The state machine only records up to two segments per column; one emission site then
+// writes them. Inlining `slot` at every branch made the D3D11 shader compiler take seconds
+// per pipeline (measured 2.7 s for sin(x) vs 0.14 s with one iteration), because `slot`
+// expands to six vertex stores and was copied into every branch.
+vec2 g_seg_a[2];
+vec2 g_seg_b[2];
+int g_seg_n = 0;
+void add_segment(vec2 a, vec2 b) {
+    if (g_seg_n < 2) {
+        g_seg_a[g_seg_n] = a;
+        g_seg_b[g_seg_n] = b;
+        g_seg_n = g_seg_n + 1;
+    }
+    g_point = b;
+    g_has_point = true;
+}
+void line_to(vec2 p) {
+    if (g_has_point && distance(g_point, p) > 1e-6) {
+        add_segment(g_point, p);
+    }
+    g_point = p;
+    g_has_point = true;
+}
+
+void whole_column(int col) {
+    add_segment(vec2(sx(col), 0.0), vec2(sx(col), size.y));
+    g_has_last = false;
+}
+
+void normal_infinity(int col, IVal y) {
+    if (y.lo <= -IINF && y.hi >= IINF) {
+        g_has_last = false;
+        return;
+    }
+    if (y.hi >= IINF) {
+        if (ybot() <= y.lo && y.lo <= ytop()) {
+            add_segment(vec2(sx(col), syc(y.lo)), vec2(smx(col), 0.0));
+            g_last = i_conn(ytop(), ytop());
+            g_has_last = true;
+        } else {
+            g_has_last = false;
+        }
+        return;
+    }
+    if (ybot() <= y.hi && y.hi <= ytop()) {
+        add_segment(vec2(sx(col), syc(y.hi)), vec2(smx(col), size.y));
+        g_last = i_conn(ybot(), ybot());
+        g_has_last = true;
+    } else {
+        g_has_last = false;
+    }
+}
+
+void joined_column(int col, IVal y) {
+    // GGB compares the screen high edges; screen high is the world low edge.
+    bool up = y.lo < g_last.lo;
+    vec2 first = up ? vec2(sx(col), syc(y.hi)) : vec2(sx(col), syc(y.lo));
+    vec2 second = up ? vec2(sx(col + 1), syc(y.lo)) : vec2(sx(col + 1), syc(y.hi));
+    line_to(first);
+    line_to(second);
+    g_last = y;
+    g_has_last = true;
+}
+
+void to_top(int col, IVal gap) {
+    bool has_left = g_left.kind != IK_EMPTY;
+    bool has_right = g_next.kind != IK_EMPTY;
+    float current = pay_hi(gap);
+    float ld = has_left ? abs(current - pay_hi(g_left)) : IINF;
+    float rd = has_right ? abs(current - pay_hi(g_next)) : IINF;
+    float left_x = sx(col);
+    float right_x = has_right ? sx(col + 2) : sx(col + 1);
+    if (ld == 0.0 && has_left) {
+        add_segment(vec2(sx(col), syc(pay_hi(g_left))), vec2(sx(col), 0.0));
+    } else if (rd == 0.0 && has_right) {
+        add_segment(vec2(sx(col + 1), syc(pay_hi(g_next))), vec2(sx(col + 1), 0.0));
+    } else if (ld < rd) {
+        add_segment(vec2(right_x, 0.0), vec2(left_x, syc(current)));
+    } else {
+        add_segment(vec2(right_x, 0.0), vec2(right_x, syc(current)));
+    }
+}
+
+void to_bottom(int col, IVal gap) {
+    bool has_left = g_left.kind != IK_EMPTY;
+    bool has_right = g_next.kind != IK_EMPTY;
+    float current = pay_lo(gap);
+    float ld = has_left ? screen_difference(abs(current - pay_lo(g_left)), g_left) : -1.0;
+    float rd = has_right ? screen_difference(abs(current - pay_lo(g_next)), g_next) : -1.0;
+    float left_x = sx(col);
+    float right_x = has_right ? sx(col + 2) : sx(col + 1);
+    if (ld == 0.0) {
+        add_segment(vec2(sx(col), syc(pay_lo(g_left))), vec2(sx(col), size.y));
+    } else if (rd == 0.0) {
+        add_segment(vec2(sx(col + 1), syc(pay_lo(g_next))), vec2(sx(col + 1), size.y));
+    } else if (ld < rd) {
+        // JoinLines.toBottomLeft: to *currentXHigh*, not currentXLow.
+        add_segment(vec2(right_x, syc(current)), vec2(sx(col + 1), size.y));
+    } else {
+        add_segment(vec2(sx(col), syc(current)), vec2(sx(col + 1), size.y));
+    }
+}
+
+void inverted_segments(int col, IVal gap) {
+    // DrawInvertedInterval.drawSegments: the gap is excluded, so two rays.
+    if (gap.hi > ybot()) {
+        add_segment(vec2(sx(col), size.y), vec2(sx(col + 1), syc(gap.lo)));
+    }
+    if (gap.lo < ytop()) {
+        add_segment(vec2(sx(col + 1), 0.0), vec2(sx(col + 1), syc(gap.hi)));
+    }
+}
+
+void inverted_joined(int col, IVal gap) {
+    // JoinLines.inverted: the rays end at the neighbours' near edges, not the viewport
+    // edges. When those neighbours are next to a pole their edges are off screen, which is
+    // exactly why the clipped path does not cross the view.
+    if (gap.hi < IINF) {
+        if (!infinite_boundary(g_left)) {
+            to_top(col, gap);
+        }
+    }
+    if (gap.lo > -IINF) {
+        if (infinite_boundary(g_next)) {
+            float y1 = g_left.kind != IK_EMPTY ? pay_lo(g_left) : gap.lo;
+            add_segment(vec2(sx(col), syc(y1)), vec2(sx(col), size.y));
+        } else {
+            to_bottom(col, gap);
+        }
+    }
+}
+
+void inverted_column(int col, IVal gap) {
+    if (g_next.kind == IK_INVERTED) {
+        inverted_segments(col, gap);
+    } else {
+        inverted_joined(col, gap);
+        // DrawInvertedInterval.draw() clears lastYSet when the next column is not inverted;
+        // without this the stale lastY joins the two branches across the pole.
+        g_has_last = false;
+    }
+}
+
+void independent_column(int col, IVal y) {
+    if (y.kind == IK_WHOLE) {
+        whole_column(col);
+        return;
+    }
+    if (y.kind == IK_INVERTED) {
+        inverted_column(col, y);
+        return;
+    }
+    // DrawInterval.drawIndependent -> line(x, y): a vertical at the right edge.
+    add_segment(vec2(sx(col + 1), syc(y.hi)), vec2(sx(col + 1), syc(y.lo)));
+    g_last = y;
+    g_has_last = true;
+}
+
+void main() {
+    int cols = int(max(1.0, size.x) * float(@SUBSAMPLES@));
+    float dx = camera.z / float(@SUBSAMPLES@);
+    float xmin = camera.x - 0.5 * size.x * camera.z;
+    g_left = i_empty();
+    g_next = FI(xmin, xmin + dx);
+    g_last = i_empty();
+    g_has_last = false;
+    g_has_point = false;
+    g_point = vec2(0.0);
+    for (int col = 0; col < cols; col++) {
+        IVal cur = g_next;
+        float x0 = xmin + float(col) * dx;
+        float x1 = x0 + dx;
+        if (col + 1 < cols) {
+            float nx = xmin + float(col + 1) * dx;
+            g_next = FI(nx, nx + dx);
+        } else {
+            g_next = i_empty();
+        }
+        // Start each column as two degenerate quads; the topology fills one or both.
+        for (int qq = 0; qq < 2; qq++) {
+            for (int k = 0; k < 6; k++) {
+                put(col, qq, k, vec2(10.0), vec4(0.0));
+            }
+        }
+        if (cur.kind == IK_EMPTY) {
+            g_has_last = false;
+            g_has_point = false;
+            g_left = cur;
+            continue;
+        }
+        // A wrapped monotone map (exp(tan)) turns a pole into a connected [0, +inf] column;
+        // GGB's `exp(inverted)` returns the same connected enclosure, so the gap cannot be
+        // recovered from `FI`. A column narrower than half the pole spacing is resolved:
+        // draw the branch that approaches +inf — the side whose neighbour high edge is
+        // larger — and leave the other branch (near the range floor) to the next column's
+        // independent vertical. Dropping the column instead truncated the spike where it
+        // crossed the view top.
+        //
+        // Once the column width reaches half the pole spacing, two adjacent columns can no
+        // longer be guaranteed to hold at most one pole (Nyquist). The spike phase against
+        // the columns is then arbitrary — the partial spikes form a moiré of top heights —
+        // so a non-negative, pole-only-domain expression fills the attained half-plane
+        // uniformly instead (UNIFORM_FILL).
+        bool short_column = POLE_SPACING <= 0.0 || abs(camera.z) < 0.5 * POLE_SPACING;
+        bool pole_col = short_column && HAS_SIGN_POLE != 0 && POLE(x0) * POLE(x1) <= 0.0;
+        bool wrapped = pole_col && cur.kind == IK_CONNECTED
+            && (cur.lo <= -IINF || cur.hi >= IINF);
+        g_seg_n = 0;
+        if (UNIFORM_FILL != 0 && !short_column) {
+            float lo = max(0.0, ybot());
+            if (lo < ytop()) {
+                add_segment(vec2(sx(col), syc(lo)), vec2(sx(col), 0.0));
+            }
+            g_has_last = false;
+            g_has_point = false;
+        } else if (wrapped) {
+            bool has_left = g_left.kind != IK_EMPTY;
+            bool has_right = g_next.kind != IK_EMPTY;
+            bool left_top = has_left && (!has_right || pay_hi(g_left) >= pay_hi(g_next));
+            float edge = left_top ? pay_hi(g_left) : pay_hi(g_next);
+            if ((left_top ? has_left : has_right) && edge < IINF) {
+                float x = left_top ? sx(col) : sx(col + 1);
+                add_segment(vec2(x, syc(edge)), vec2(x, 0.0));
+            }
+            g_has_last = false;
+            g_has_point = false;
+        } else if (!g_has_last) {
+            independent_column(col, cur);
+        } else if (cur.kind == IK_WHOLE) {
+            whole_column(col);
+        } else if (cur.kind == IK_INVERTED) {
+            inverted_column(col, cur);
+        } else if (cur.lo <= -IINF || cur.hi >= IINF) {
+            normal_infinity(col, cur);
+        } else {
+            joined_column(col, cur);
+        }
+        for (int k = 0; k < 2; k++) {
+            if (k < g_seg_n) {
+                slot(col, k, g_seg_a[k], g_seg_b[k]);
+            }
+        }
+        g_left = cur;
+    }
+}

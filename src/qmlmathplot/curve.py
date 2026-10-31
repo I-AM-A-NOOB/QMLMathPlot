@@ -3,8 +3,8 @@
 A curve knows nothing about the view: the camera decides where we look, the curve decides what is
 drawn. One curve = one fragment shader pass, so ``visible`` is the lever that costs nothing.
 
-Two artists share the class: ``Curve`` draws ``y = f(x)`` (see ``model.FRAGMENT_TEMPLATE``) and
-``ImplicitCurve`` draws the level set ``F(x, y) = 0`` (``model.IMPLICIT_FRAGMENT_TEMPLATE``).
+Two artists share the class: ``Curve`` draws ``y = f(x)`` (see ``shaders/oned_sampled.frag``) and
+``ImplicitCurve`` draws the level set ``F(x, y) = 0`` (``shaders/implicit.frag``).
 They differ only in the shader *sources* — the uniform block, the model roles and the QML side
 are the same — so ``curve_for()`` can pick one from the expression's free symbols.
 """
@@ -27,6 +27,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QColor
 
+from .interval import compute_supported
 from .model import implicit_shader_sources, shader_sources
 from .qsb import bake
 
@@ -310,6 +311,8 @@ class Curve(QObject):
     def _get_fragment_shader(self) -> QUrl:
         return self._fragment
 
+    #: Empty when the compute renderer draws this expression: the RHI generates its path
+    #: from `expr`. Only the sampled fallback and implicit curves bake these shaders.
     vertexShader: QUrl = Property(QUrl, _get_vertex_shader, notify=shadersChanged)
     fragmentShader: QUrl = Property(QUrl, _get_fragment_shader, notify=shadersChanged)
 
@@ -340,8 +343,13 @@ class Curve(QObject):
                 "first"
             )
         implicit = self._force_implicit if force_implicit is None else force_implicit
-        return implicit_shader_sources(expr) if (implicit or "y" in names) \
-            else shader_sources(expr)
+        if implicit or "y" in names:
+            return implicit_shader_sources(expr)
+        if compute_supported(expr):
+            # The compute renderer generates its shader from `expr`; baking the sampled
+            # fallback here would be dead work (qsb + the edge analysis, ~130 ms/curve).
+            return "", ""
+        return shader_sources(expr)
 
     def _start_bake(
         self,
@@ -363,6 +371,11 @@ class Curve(QObject):
         except Exception as exc:  # noqa: BLE001 - reported through error, previous shaders stay
             self._error = f"{type(exc).__name__}: {exc}"
             self.errorChanged.emit()
+            return
+        if not vertex_source and not fragment_source:
+            self._pending_expr = expr
+            self._pending_implicit = force_implicit
+            self._on_bake_done(generation, (None, None))
             return
         self._pending_expr = expr
         self._pending_implicit = force_implicit
@@ -397,13 +410,16 @@ class Curve(QObject):
             return
         if expr is None:
             return
-        vertex, fragment = result           # type: ignore[misc]
+        if result == (None, None):
+            vertex = fragment = None
+        else:
+            vertex, fragment = result           # type: ignore[misc]
         self._expr = expr
         if implicit is not None:
             self._force_implicit = bool(implicit)
         self._error = ""
-        self._vertex = QUrl.fromLocalFile(str(vertex))
-        self._fragment = QUrl.fromLocalFile(str(fragment))
+        self._vertex = QUrl() if vertex is None else QUrl.fromLocalFile(str(vertex))
+        self._fragment = QUrl() if fragment is None else QUrl.fromLocalFile(str(fragment))
         self.exprChanged.emit()
         self.errorChanged.emit()
         self.shadersChanged.emit()

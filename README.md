@@ -1,9 +1,11 @@
 # QMLMathPlot
 
-An embeddable function-plotting component for Qt Quick apps. The curve is drawn
-**per pixel by a fragment shader** (implicit signed-distance model): the per-frame
-cost is ∝ the pixel count and independent of the function's frequency, so
-oscillating functions (e.g. `sin(1/x)`) cannot drag the frame rate down through
+An embeddable function-plotting component for Qt Quick apps. Curves are evaluated from
+their expression on the GPU: interval-supported 1-D curves are rebuilt as a column path by
+a compute shader (GeoGebra's interval rules), while implicit curves and expressions the
+interval library cannot cover use a per-pixel fragment shader (implicit signed-distance
+model). The per-frame cost is ∝ the pixel count and independent of the function's frequency,
+so oscillating functions (e.g. `sin(1/x)`) cannot drag the frame rate down through
 polyline aliasing, and no CPU-side sampling is needed.
 
 The state is a **camera on an infinite canvas**: a `Plot` holds a `Camera` (where you look)
@@ -523,13 +525,15 @@ three import QtWidgets lazily, so a pure-QML host never loads it.
 
 | Layer | File | Responsibility |
 |---|---|---|
-| Model | `src/qmlmathplot/model.py` | expression → GLSL, shader source template (no Qt dependency, unit-testable) |
+| Model | `src/qmlmathplot/model.py` | expression → GLSL (no Qt dependency, unit-testable) |
+| Shaders | `src/qmlmathplot/shaders/` + `shaderbuild.py` | GLSL resources, `@NAME@` substitution, shared `@INCLUDE` blocks, validation (no template strings in Python) |
 | Camera | `src/qmlmathplot/camera.py` | `Camera`: centre / zoom / aspect, the derived ranges, pan/zoom/reset, the nice-number tick algorithm |
 | Input | `src/qmlmathplot/input.py` | `ViewInput`: keyboard switch, pan step, rebindable shortcuts, key matching |
 | Animation | `src/qmlmathplot/animation.py` | `CameraAnimator`: the one eased interpolator behind wheel/keyboard moves |
 | Curves | `src/qmlmathplot/curve.py` | `Curve` (expression → baked `.qsb`, style, error; later edits bake on the thread pool) and `CurveListModel` |
-| Render | `src/qmlmathplot/rhi.py` + `ggb_compute.py` | `CurveRhiItem`: one `QQuickRhiItem` draws fragment curves in one pass; interval-supported 1-D curves use a compute-generated path buffer |
-| Reference | `src/qmlmathplot/ggb_reference.py` | CPU oracle for GGB's `IntervalPath`/`DrawInterval`/`JoinLines` state machine (also used by the CPU fallback) |
+| Render | `src/qmlmathplot/rhi.py` + `ggb_compute.py` | `CurveRhiItem`: one `QQuickRhiItem` draws every curve in one pass; interval-supported 1-D curves run the GGB path state machine in a compute shader |
+| Path spec | `src/qmlmathplot/ggb_path.py` | The GGB path state machine (topology in, segments out), shared by the CPU sampler and the tests; no interval arithmetic |
+| Reference | `src/qmlmathplot/ggb_reference.py` | CPU sampler (`mpmath.iv`) feeding the shared state machine; also used by the CPU fallback |
 | CPU fallback | `src/qmlmathplot/qml/CpuCurves.qml` + `pathcurve.py` | `view.cpuRenderer = true`: one QPainterPath per curve when RHI is unavailable |
 | Plot | `src/qmlmathplot/plot.py` | `Plot`: the camera, the curves and the styling the view binds to |
 | Facade | `src/qmlmathplot/figure.py` | `Figure` / `Axes`: Matplotlib-shaped names over one `Plot` (no Qt beyond the model) |
@@ -544,60 +548,53 @@ three import QtWidgets lazily, so a pure-QML host never loads it.
 | Entry | `src/qmlmathplot/app.py` | command line / standalone window (the `qmlmathplot` script, `examples/minimal.py`) |
 | Examples | `examples/` | `minimal.py` (minimal), `explorer_qtwidgets.py` (input box + widget coexistence), `explorer_qtquick.py` (Qt Quick) |
 
-## Algorithm (fixed-x sampled polyline + the interval column)
+## Algorithm (GeoGebra's interval path on the GPU)
 
-The supported path is GeoGebra's column idea implemented on the GPU: sample the function on a
-sub-pixel x grid, stroke the polyline, and fill the exact interval enclosure where a column
-cannot be represented by a line.
+The 1-D renderer is GeoGebra's column path, ported to the GPU. `ggb_compute.py` generates
+one compute shader per expression; one invocation walks the screen columns in order and
+emits the path into a vertex buffer. `ggb_path.py` is the host-testable specification of the
+same state machine (topology in, screen-space segments out).
 
-1. **Sub-pixel polyline stroke.** Each pixel evaluates `F` at **14 samples over ±2 columns**
-   (0.25 logical-px spacing). Adjacent valid samples form a polyline, and coverage is
-   `R - distance to the nearest segment` — Desmos' stroke rule. The sample spacing is
-   sub-pixel, so the vertices themselves are sub-pixel and the segments are diagonal: the
-   edge is smooth at any zoom, not a per-column staircase. ±2 columns (rather than the old
-   ±1) cover the perpendicular foot, which a steep line displaces along x by up to the
-   stroke radius; measured `k·x` 3.00/3.00/3.00/2.94 device px at screen slopes
-   2/10/40/200 against a nominal 3.0.
-2. **Pole/jump segment guard.** A segment is skipped when the expression's pole factor
-   changes sign between its endpoints (`POLE(prev_x) * POLE(xi) <= 0`) — the branches of
-   `tan`/`1/x` never join across a pole — and, for a dependent quotient such as
-   `x/sqrt(x**2)`, when the endpoint jump exceeds the join radius. The flat branches are
-   still drawn; measured `x/sqrt(x**2)` draws its ±1 branches without the old 454-px
-   connector at x = 0.
-3. **Interval topology — GeoGebra's column rules on the GPU.** The expression is evaluated
-   in interval arithmetic over the pixel's column (generated from sympy in `interval.py`,
-   compiled to the GLSL `IVal FI(xlo, xhi)`): a conservative y-enclosure with topology
-   **connected / two rays around a gap / whole / empty**. The shader reproduces the reference
-   plotter's rules:
-   - **connected, sub-column oscillation** (`smoothstep(1.5, 3.0, sturns)`): GeoGebra's
-     `DrawInterval.drawJoined` path — the vertical join at `x.low` and the diagonal across
-     the column, choosing `drawUp`/`drawDown` from the high edge; an independent column is a
-     vertical at `x.high`. These are **strokes**, not a filled rectangle.
-   - **divergence** (`log`'s boundary): `IntervalPath.drawNormalInfinity` →
-     `leftToBottom`/`leftToTop`, only when the finite bound is on screen: one segment from
-     `(x.low, finite bound)` to `(x.middle, viewport edge)`. If the interval covers the
-     viewport but the finite bound is above/below it (the deep `log` view), the column is
-     effectively `whole` and gets `drawWhole` (a vertical at `x.low`) — an extension needed
-     because the Java branch draws nothing there although the visible curve lies inside the
-     column.
-   - **inverted** (`tan`/`1/x` poles): `DrawInvertedInterval` — the top segment at `x.high`
-     from the viewport top to the gap's high, the bottom at `x.low` from the gap's low to the
-     viewport bottom; no filled ray.
-   - **whole**: `DrawInterval.drawWhole` — one vertical segment at `x.low`.
-   Deliberate deviations, because this is a fragment shader and not the Java tuple list: the
-   14-sample polyline supersamples GGB's one interval per column for resolved stretches; a
-   dependent quotient's whole column is still suppressed (the fixed-x polyline draws the real
-   branches, avoiding the `x/sqrt(x**2)` connector); and a joined inverted column uses those
-   sample branches instead of replaying `JoinLines.inverted`'s neighbour decisions.
-4. **Domain.** `DOM`/`DOMS` (from sympy) guard every `F` evaluation, so `log(negative)` is
-   never evaluated; a pixel just outside the domain still gets the band, which is centred
-   on the boundary.
+1. **One interval per column.** `FI(x0, x1)` (generated from sympy in `interval.py`, compiled
+   to GLSL) returns a conservative y-enclosure with topology
+   **empty / connected / inverted (two rays around a gap) / whole**.
+2. **Path state (`IntervalPath`).** A drawable column joins the previous one (`lastY`); an
+   empty column breaks the path; a whole column is drawn and breaks it; an inverted column
+   is completed by `JoinLines` from its neighbours; a one-sided infinity uses
+   `drawNormalInfinity`.
+3. **Geometry (`DrawInterval`, `DrawInvertedInterval`, `JoinLines`).**
+   - **joined**: `lineTo(x.low, …)` from the previous edge, then the diagonal across the
+     column, with `drawUp`/`drawDown` chosen from the screen high edges;
+   - **independent** (no previous column): a vertical at `x.high`;
+   - **inverted**: the top ray at `x.high` and the bottom at `x.low`, completed from the
+     left/right topology. At a pole those neighbours' near edges are off screen, so the
+     clipped ray never crosses the view — that is why `tan`/`1/x` have no wall;
+   - **whole**: one vertical at `x.low`;
+   - **one-sided infinity** (`log`'s boundary): `leftToTop`/`leftToBottom`, only when the
+     finite bound is on screen.
+4. **Neighbour state is free.** `FI` runs once per column plus a one-column prefetch; the
+   previous column is the left neighbour. No scalar `F` sampling is done — the path is the
+   interval's own endpoints.
+5. **Fallback (GGB's classic plotter).** The interval path is compute-only, and compute
+   curves bake no fragment shader (`Curve.fragmentShader` is empty for them; the RHI builds
+   the compute path from the expression). Expressions
+   GGB's `IntervalFunctionSupport` rejects — `floor`, `sign`, `Min/Max`, `Piecewise`, and
+   dependent quotients such as `x/sqrt(x**2)` (GGB's algebra simplifies it to `sgn`) — use
+   the sampled fragment: arc-length marching, the join invariant, the envelope band and the
+   boundary ray. Implicit curves always use their own level-set shader.
 
-An ordinary pixel costs **14 `F` evaluations** plus two interval evaluations; there is no
-march, no tangent-foot projection and no column probe on the supported path. Expressions
-with an operation the interval backend does not implement (`floor`, `sign`, …) compile the
-legacy sampled band + ray + march path (`#define USE_INTERVAL 0`); it is the only user of
-the arc-length march now.
+Deliberate deviations: a wrapped pole (`exp(tan(x))`) becomes a connected `[0, +inf]`
+column. The rule is a Nyquist test against half the pole spacing (the distance between two
+poles, derived from the expression's period): below it the column is resolved, so the branch
+that approaches +∞ (the side with the larger neighbour high edge) is drawn and the other
+branch is left to the next column; at or above it the column width cannot guarantee one pole
+per column, and a non-negative, pole-only-domain expression fills the attained half-plane
+uniformly instead of leaving a moiré of spike tops. GGB's conservative connector would
+violate the "no line across a pole" invariant. The CPU sampler (`ggb_reference.py`,
+`mpmath.iv`) cannot express a gap, so its pole columns are path breaks; it feeds the same
+state machine. The deep-`log` view is handled by `drawNormalInfinity`'s on-screen test plus
+the whole-column rule, as before.
+
 
 ## Tests
 
@@ -855,3 +852,10 @@ The workflow runs on Windows: that is the platform this library is verified on (
 and the GUI tests need a GPU scene graph no runner has. The artifact is `py3-none-any`, so the
 platform does not change what is published. The GUI tests stay a developer-machine thing:
 `uv run pytest` (everything) versus `uv run pytest -m "not gui"` (what CI runs).
+
+## License
+
+**GPL-3.0-only** — see [`LICENSE`](LICENSE). The interval path and the shader generators are
+translated from GeoGebra's EUPL-1.2 code; the attribution and the EUPL text are in
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and
+[`LICENSES/EUPL-1.2.txt`](LICENSES/EUPL-1.2.txt).

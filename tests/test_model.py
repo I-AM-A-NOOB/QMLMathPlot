@@ -45,13 +45,14 @@ def test_fractional_powers_use_the_real_branch():
     assert model.domain_glsl(X ** sp.Rational(-1, 3)) == "(x != 0)"
 
 
-def test_the_interval_backend_is_chosen_only_when_supported():
-    _, interval = model.shader_sources(sp.sin(1 / X))
-    assert "#define USE_INTERVAL 1" in interval
-    assert "IVal FI(" in interval
-    _, legacy = model.shader_sources(sp.floor(X))
-    assert "#define USE_INTERVAL 0" in legacy
-    assert "IVal FI(" not in legacy
+def test_the_fragment_is_only_the_sampled_fallback():
+    """The interval renderer is compute-only; GGB's eligibility rejects floor/sign and
+    dependent quotients, so the fragment is the classic sampled plotter counterpart."""
+    for expression in (sp.sin(1 / X), sp.floor(X), X / sp.sqrt(X**2)):
+        _, fragment = model.shader_sources(expression)
+        assert "IVal FI(" not in fragment
+        assert "#define MARCH 12" in fragment
+        assert "@" not in fragment
 
 
 def test_dfunc_glsl():
@@ -101,11 +102,11 @@ def test_domain_analysis():
 def test_shader_sources_inject_domain():
     _, frag = model.shader_sources(1 / X)
     assert "#define DOM(u) ((u != 0))" in frag
-    # The fixed-x polyline joins adjacent samples; a segment whose endpoints lie on
-    # opposite sides of a pole factor must not be stroked. The macro is evaluated at the
-    # sample coordinates, not the pixel's own column.
-    assert "#define POLE(u) ((u))" in frag
-    assert "POLE(prev_x) * POLE(xi) <= 0.0" in frag
+    # The sampled fragment is the march: its join invariant (a segment only joins samples
+    # within the radius) replaced the fixed-x polyline's POLE guard, so the sampled source
+    # no longer defines POLE at all.
+    assert "#define MARCH 12" in frag
+    assert "#define POLE" not in frag
     _, smooth = model.shader_sources(X**2)
     assert "#define DOM(u) true" in smooth               # not analysable => identically true
 
@@ -430,3 +431,71 @@ def test_signals_fire_on_real_changes_only():
     assert seen == {"view": 3, "ticks": 3, "aspect": 1}
     camera.aspect = 1.0                              # idempotent
     assert seen == {"view": 3, "ticks": 3, "aspect": 1}
+
+
+def test_the_renderer_policy_is_capability_based_not_a_string_list():
+    """The compute path is chosen by interval support + topology class, not by spelling.
+
+    `1/x` and `sin(1/x)` are the cases the old `("tan(x)", "log(x)")` whitelist sent to the
+    fragment fallback even though their interval topology is well defined.
+    """
+    from qmlmathplot.rhi import path_compute_supported
+
+    for expression in ("tan(x)", "tan(2*x)", "log(x)", "log(1+x)", "1/x", "sin(1/x)",
+                       "x**2", "sin(x)", "x**(1/3)"):
+        assert path_compute_supported(sp.sympify(expression)), expression
+    # A dependent quotient has no sign pole to justify a gap; the fragment path draws its
+    # jump. Operations outside the interval library stay there too.
+    for expression in ("x/sqrt(x**2)", "floor(x)", "sign(x)"):
+        assert not path_compute_supported(sp.sympify(expression)), expression
+
+
+def test_the_interval_library_is_trimmed_to_the_functions_the_expression_uses():
+    """Every compute shader used to embed the whole library; the trim keeps only the
+    dependency closure, which matters for the D3D11 compile at pipeline creation."""
+    from qmlmathplot.interval import INTERVAL_LIB, interval_glsl, interval_lib_for
+
+    sine = interval_lib_for(interval_glsl(sp.sin(X)))
+    square = interval_lib_for(interval_glsl(sp.Symbol("x") ** 2))
+    assert "i_sin(" in sine and "i_tan(" not in sine
+    assert "i_pow_int(" in square and "i_sin(" not in square
+    assert len(sine) < len(INTERVAL_LIB) // 3
+
+
+def test_pole_spacing_is_half_the_pole_factor_period():
+    """The wrapped-pole fill threshold is derived from the expression, not from a zoom."""
+    from qmlmathplot.model import _pole_spacing
+
+    assert _pole_spacing(sp.tan(X)) == pytest.approx(float(sp.pi))
+    assert _pole_spacing(sp.tan(2 * X)) == pytest.approx(float(sp.pi) / 2)
+    assert _pole_spacing(1 / X) == 0.0          # a single zero: never "dense"
+    assert _pole_spacing(sp.exp(sp.tan(X))) == pytest.approx(float(sp.pi))
+    assert _pole_spacing(sp.sin(X)) == 0.0      # no pole factor
+
+
+def test_non_negative_detection():
+    """The uniform fill needs a conservative range floor; it must not guess."""
+    from qmlmathplot.model import _non_negative
+
+    assert _non_negative(sp.exp(sp.tan(X)))
+    assert _non_negative(sp.sqrt(sp.tan(X)))
+    assert _non_negative(sp.Abs(sp.tan(X)))
+    assert _non_negative(sp.exp(sp.tan(X)) + 1)
+    assert not _non_negative(sp.tan(X))
+    assert not _non_negative(-sp.exp(sp.tan(X)))
+
+
+def test_compute_source_accepts_a_parsed_expression(monkeypatch):
+    """`Curve` already parsed the expression; the RHI must not sympify the string again."""
+    from qmlmathplot.ggb_compute import path_compute_source
+
+    calls: list[object] = []
+    real = sp.sympify
+
+    def counting(value, *args, **kwargs):
+        calls.append(value)
+        return real(value, *args, **kwargs)
+
+    monkeypatch.setattr(sp, "sympify", counting)
+    path_compute_source(sp.sin(sp.Symbol("x")))
+    assert calls == [], "a parsed Expr must reach the generator without parsing"
