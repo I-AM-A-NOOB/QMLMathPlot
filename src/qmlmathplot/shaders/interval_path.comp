@@ -5,10 +5,13 @@ layout(std430, binding = 1) buffer V {
     float verts[];
 };
 @INCLUDE:common/arg_reduction.glsl@
+@INCLUDE:common/real_pow.glsl@
 #define POLE(u) (@POLE@)
 #define HAS_SIGN_POLE @HAS_POLE@
 #define POLE_SPACING @POLE_SPACING@
 #define UNIFORM_FILL @UNIFORM_FILL@
+#define F(u) (@FUNC@)
+#define DOM(u) (@DOM@)
 @INTERVAL_LIB@
 @INTERVALS@
 
@@ -19,8 +22,8 @@ float smx(int col) { return float(col) + 0.5; }
 vec2 ndc(vec2 p) {
     return vec2(p.x / size.x * 2.0 - 1.0, 1.0 - p.y / size.y * 2.0);
 }
-void put(int col, int quad, int corner, vec2 p, vec4 c) {
-    int base = ((col * 2 + quad) * 6 + corner) * 6;
+void put(int col, int quad, int corner, vec2 p, vec4 c, vec2 local) {
+    int base = ((col * 3 + quad) * 6 + corner) * 8;
     vec2 n = ndc(p);
     verts[base + 0] = n.x;
     verts[base + 1] = n.y;
@@ -28,18 +31,32 @@ void put(int col, int quad, int corner, vec2 p, vec4 c) {
     verts[base + 3] = c.g * c.a;
     verts[base + 4] = c.b * c.a;
     verts[base + 5] = c.a;
+    verts[base + 6] = local.x;
+    verts[base + 7] = local.y;
 }
 void slot(int col, int q, vec2 a, vec2 b) {
     vec2 d = b - a;
     float len = length(d);
     vec2 nrm = len > 1e-6 ? vec2(-d.y, d.x) / len * lineWidth * 0.5 : vec2(0.0);
     vec4 c = color;
-    put(col, q, 0, a + nrm, c);
-    put(col, q, 1, a - nrm, c);
-    put(col, q, 2, b - nrm, c);
-    put(col, q, 3, a + nrm, c);
-    put(col, q, 4, b - nrm, c);
-    put(col, q, 5, b + nrm, c);
+    put(col, q, 0, a + nrm, c, vec2(0.0));
+    put(col, q, 1, a - nrm, c, vec2(0.0));
+    put(col, q, 2, b - nrm, c, vec2(0.0));
+    put(col, q, 3, a + nrm, c, vec2(0.0));
+    put(col, q, 4, b - nrm, c, vec2(0.0));
+    put(col, q, 5, b + nrm, c, vec2(0.0));
+}
+// A round join: a screen-aligned quad clipped to a disc by path.frag. Segment quads alone
+// leave a square where two 1-px chords meet at a sharp bend.
+void join(int col, vec2 p) {
+    float h = lineWidth * 0.5;
+    vec4 c = color;
+    put(col, 2, 0, p + vec2(-h, -h), c, vec2(-1.0, -1.0));
+    put(col, 2, 1, p + vec2( h, -h), c, vec2( 1.0, -1.0));
+    put(col, 2, 2, p + vec2( h,  h), c, vec2( 1.0,  1.0));
+    put(col, 2, 3, p + vec2(-h, -h), c, vec2(-1.0, -1.0));
+    put(col, 2, 4, p + vec2( h,  h), c, vec2( 1.0,  1.0));
+    put(col, 2, 5, p + vec2(-h,  h), c, vec2(-1.0,  1.0));
 }
 
 // ---- path state (one invocation walks every column, so globals are per-path) ----------
@@ -138,11 +155,34 @@ void normal_infinity(int col, IVal y) {
     }
 }
 
-void joined_column(int col, IVal y) {
-    // GGB compares the screen high edges; screen high is the world low edge.
-    bool up = y.lo < g_last.lo;
-    vec2 first = up ? vec2(sx(col), syc(y.hi)) : vec2(sx(col), syc(y.lo));
-    vec2 second = up ? vec2(sx(col + 1), syc(y.lo)) : vec2(sx(col + 1), syc(y.hi));
+void joined_column(int col, float x0, float x1, IVal y) {
+    // The interval chord is conservative, but a dependent expression (x*tan(x), …) can
+    // overestimate it by far more than the true column: adjacent conservative chords then
+    // paint a band. When a midpoint sample lies inside the chord, the column is monotone,
+    // so the scalar endpoints are the true curve; otherwise (a peak/oscillation) keep the
+    // interval chord that brackets it.
+    bool scalar = false;
+    float f0 = 0.0, f1 = 0.0;
+    float xm = 0.5 * (x0 + x1);
+    if (DOM(x0) && DOM(x1) && DOM(xm)) {
+        f0 = F(x0); f1 = F(x1);
+        float fm = F(xm);
+        if (f0 == f0 && f1 == f1 && fm == fm
+                && abs(f0) < 1e30 && abs(f1) < 1e30 && abs(fm) < 1e30) {
+            scalar = fm >= min(f0, f1) && fm <= max(f0, f1);
+        }
+    }
+    vec2 first;
+    vec2 second;
+    if (scalar) {
+        first = vec2(sx(col), syc(f0));
+        second = vec2(sx(col + 1), syc(f1));
+    } else {
+        // GGB compares the screen high edges; screen high is the world low edge.
+        bool up = y.lo < g_last.lo;
+        first = up ? vec2(sx(col), syc(y.hi)) : vec2(sx(col), syc(y.lo));
+        second = up ? vec2(sx(col + 1), syc(y.lo)) : vec2(sx(col + 1), syc(y.hi));
+    }
     line_to(first);
     line_to(second);
     g_last = y;
@@ -264,9 +304,9 @@ void main() {
             g_next = i_empty();
         }
         // Start each column as two degenerate quads; the topology fills one or both.
-        for (int qq = 0; qq < 2; qq++) {
+        for (int qq = 0; qq < 3; qq++) {
             for (int k = 0; k < 6; k++) {
-                put(col, qq, k, vec2(10.0), vec4(0.0));
+                put(col, qq, k, vec2(10.0), vec4(0.0), vec2(0.0));
             }
         }
         if (cur.kind == IK_EMPTY) {
@@ -320,12 +360,15 @@ void main() {
         } else if (cur.lo <= -IINF || cur.hi >= IINF) {
             normal_infinity(col, cur);
         } else {
-            joined_column(col, cur);
+            joined_column(col, x0, x1, cur);
         }
         for (int k = 0; k < 2; k++) {
             if (k < g_seg_n) {
                 slot(col, k, g_seg_a[k], g_seg_b[k]);
             }
+        }
+        if (g_seg_n > 0) {
+            join(col, g_seg_a[g_seg_n - 1]);
         }
         g_left = cur;
     }

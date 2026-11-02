@@ -21,7 +21,14 @@ import sympy as sp
 
 from .shaderbuild import render, shader_source
 from .interval import has_sign_pole, interval_glsl, interval_lib_for
-from .model import _domain_is_pole_only, _non_negative, _pole_glsl, _pole_spacing
+from .model import (
+    _domain_is_pole_only,
+    _non_negative,
+    _pole_glsl,
+    _pole_spacing,
+    domain_glsl,
+    func_glsl,
+)
 
 __all__ = ["PATH_VERTEX", "PATH_FRAGMENT", "path_compute_source", "path_subsamples"]
 
@@ -52,4 +59,6 @@ def path_compute_source(expression: str | sp.Basic) -> str:
         ) else "0",
         INTERVAL_LIB=interval_lib_for(intervals),
         INTERVALS=intervals,
+        FUNC=func_glsl(expr, "u", wrap=True),
+        DOM=domain_glsl(expr, "u") or "true",
     )

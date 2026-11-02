@@ -147,10 +147,11 @@ class _Renderer(QQuickRhiItemRenderer):
             return
         rhi = self.rhi()
         layout = QRhiVertexInputLayout()
-        layout.setBindings([QRhiVertexInputBinding(24, QRhiVertexInputBinding.Classification.PerVertex)])
+        layout.setBindings([QRhiVertexInputBinding(32, QRhiVertexInputBinding.Classification.PerVertex)])
         layout.setAttributes([
             QRhiVertexInputAttribute(0, 0, QRhiVertexInputAttribute.Format.Float2, 0),
             QRhiVertexInputAttribute(0, 1, QRhiVertexInputAttribute.Format.Float4, 8),
+            QRhiVertexInputAttribute(0, 2, QRhiVertexInputAttribute.Format.Float2, 24),
         ])
         pipe = rhi.newGraphicsPipeline()
         pipe.setShaderStages([
@@ -183,7 +184,7 @@ class _Renderer(QQuickRhiItemRenderer):
         expression = spec[4]
         subsamples = path_subsamples(expression)
         cols = int(max(1.0, self._size[0]) * subsamples)
-        size = cols * 12 * 6 * 4
+        size = cols * 18 * 8 * 4
         buf = self._path_buffers.get(expression)
         if buf is None or self._path_buffer_sizes.get(expression) != size:
             buf = self.rhi().newBuffer(
@@ -299,7 +300,7 @@ class _Renderer(QQuickRhiItemRenderer):
                 cb.setShaderResources(None)
                 for buf, _compute, _csrb, _offset, cols in path_draws:
                     cb.setVertexInput(0, [(buf, 0)])
-                    cb.draw(cols * 12, 1, 0, 0)
+                    cb.draw(cols * 18, 1, 0, 0)
             cb.endPass()
         finally:
             if used is not None:
