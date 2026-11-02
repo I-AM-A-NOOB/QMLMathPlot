@@ -499,3 +499,15 @@ def test_compute_source_accepts_a_parsed_expression(monkeypatch):
     monkeypatch.setattr(sp, "sympify", counting)
     path_compute_source(sp.sin(sp.Symbol("x")))
     assert calls == [], "a parsed Expr must reach the generator without parsing"
+
+
+def test_a_quotient_with_a_sign_pole_stays_on_the_interval_path():
+    """`x/sqrt(x**2)` is a bounded dependent quotient (sampled); a mixed expression with a
+    genuine pole must not be vetoed by the same structural rule."""
+    x = sp.Symbol("x")
+    mixed = -x**2 / 2 + x * sp.tan(x) - sp.log(1 / sp.cos(x) ** 2) / 2
+    from qmlmathplot.interval import compute_supported, has_dependent_quotient
+
+    assert compute_supported(mixed)
+    assert not has_dependent_quotient(mixed)
+    assert not compute_supported(x / sp.sqrt(x**2))

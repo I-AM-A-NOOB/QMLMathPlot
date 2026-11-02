@@ -296,6 +296,13 @@ def has_dependent_quotient(expr: sp.Expr) -> bool:
     ``x/sqrt(x**2)`` is ±1, but ``x * 1/[0,h]`` is unbounded. ``sin(1/x)`` has x only inside
     the denominator and is not flagged. Used to veto an unbounded *band* from such a column;
     the march still draws the true jump.
+
+    A **sign pole** exempts the expression: there the quotient is genuinely unbounded at the
+    denominator's zero, so the interval topology (inverted/whole + ``JoinLines``) is the right
+    renderer. Without this exemption a mixed expression such as
+    ``-x**2/2 + x*tan(x) - log(1/cos(x)**2)/2`` was sent to the sampled march, whose budget
+    could not walk the steep branches (only the flat parts were drawn). ``x/sqrt(x**2)`` has
+    no sign pole and stays sampled.
     """
     has_denominator = False
 
@@ -309,4 +316,8 @@ def has_dependent_quotient(expr: sp.Expr) -> bool:
         return node.func(*[strip(cast(sp.Expr, arg)) for arg in node.args])
 
     outside = strip(expr)
-    return has_denominator and sp.Symbol("x") in outside.free_symbols
+    return (
+        has_denominator
+        and sp.Symbol("x") in outside.free_symbols
+        and not has_sign_pole(expr)
+    )
