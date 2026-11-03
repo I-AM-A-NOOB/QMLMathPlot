@@ -182,8 +182,6 @@ class GgbOracleTest extends BaseAppTestSetup {
         }
 
         @Override public void segment(double x1, double y1, double x2, double y2) {
-            if (y1 < 1 && y2 < 1) return;
-            if (y1 > height - 1 && y2 > height - 1) return;
             entries.add("{\"op\":\"SEGMENT\",\"x1\":" + n(x1) + ",\"y1\":" + n(y1)
                     + ",\"x2\":" + n(x2) + ",\"y2\":" + n(y2) + "}");
         }

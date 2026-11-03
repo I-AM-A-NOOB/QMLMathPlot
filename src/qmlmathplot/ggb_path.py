@@ -20,9 +20,9 @@ world units; the conversions happen at the edges.
 
 Both ``JoinLines`` comparisons are ported literally, because GGB's own plotter output
 shows they matter: the top-edge equality is a **tolerance** (``MAX_PRECISION = 1e-12`` in
-double; a float-safe relative tolerance on the GPU), and ``toBottom`` compares differences
-**after** ``toScreenCoordYd``, which reverses their order. ``VERTICAL_MARGIN`` is not
-reproduced; the GPU clips the segment to the viewport anyway.
+double; a float-safe relative tolerance on the GPU), ``toBottom`` compares differences
+**after** ``toScreenCoordYd``, which reverses their order, and ``VERTICAL_MARGIN = 5``
+discards a top/bottom edge that lies beyond the visible range.
 """
 
 from __future__ import annotations
@@ -37,6 +37,9 @@ Kind = Literal["empty", "connected", "inverted", "whole"]
 
 #: The GLSL library's infinity sentinel (``IINF``); real infinities are avoided on the GPU.
 IINF = 1e30
+
+# JoinLines.VERTICAL_MARGIN
+VERTICAL_MARGIN = 5.0
 
 
 @dataclass(frozen=True)
@@ -184,12 +187,15 @@ class IntervalPath:
         if y.inverted:
             self._draw_inverted(index)
             return
-        # DrawInterval.drawIndependent -> line(x, y): a vertical at the right edge. Infinities
-        # are clamped by ``_sy``; the segment runs off screen and is clipped.
-        self._segment(
-            (self._sx(column.x_hi), self._sy(y.hi)),
-            (self._sx(column.x_hi), self._sy(y.lo)),
-        )
+        # DrawInterval.drawIndependent -> line(x, y): moveTo/lineTo, not the clipped
+        # ``segment`` primitive. The oracle distinguishes them: the independent vertical
+        # survives even when both endpoints are off screen.
+        x = self._sx(column.x_hi)
+        # DrawInterval.line() is moveTo + lineTo: it starts a new subpath, so it must not
+        # join the previous column across a gap.
+        self._point = None
+        self._line_to(x, self._sy(y.hi))
+        self._line_to(x, self._sy(y.lo))
         self._last = y
 
     def _draw_whole(self, column: Column) -> None:
@@ -283,41 +289,53 @@ class IntervalPath:
 
     def _to_top(self, column: Column, left: Column | None, right: Column | None) -> None:
         current = column.y.payload_hi
-        left_diff = abs(current - left.y.payload_hi) if left is not None else float("inf")
-        right_diff = abs(current - right.y.payload_hi) if right is not None else float("inf")
-        # GGB reads ``left/rightXHigh`` without a null check; at a view edge one neighbour is
-        # missing, so fall back to this column's own edges (the segment is clipped anyway).
+        left_diff = abs(current - left.y.payload_hi) if left is not None else math.inf
+        right_diff = abs(current - right.y.payload_hi) if right is not None else math.inf
         left_x = self._sx(left.x_hi) if left is not None else self._sx(column.x_lo)
         right_x = self._sx(right.x_hi) if right is not None else self._sx(column.x_hi)
         x_low = self._sx(column.x_lo)
         x_high = self._sx(column.x_hi)
         if left is not None and _near(left_diff, 0.0):
-            self._segment((x_low, self._sy(left.y.payload_hi)), (x_low, 0.0))
+            # JoinLines.toTopCurrentXLow; an off-screen high edge is not drawn.
+            y = left.y.payload_hi
+            if y > self.y_hi + VERTICAL_MARGIN:
+                return
+            self._segment((x_low, self._sy(y)), (x_low, 0.0))
         elif right is not None and _near(right_diff, 0.0):
-            self._segment((x_high, self._sy(right.y.payload_hi)), (x_high, 0.0))
+            # JoinLines.toTopCurrentXHigh: rightXHigh -> currentXHigh.
+            y = right.y.payload_hi
+            if y > self.y_hi + VERTICAL_MARGIN:
+                return
+            self._segment((right_x, self._sy(y)), (x_high, 0.0))
         elif left_diff < right_diff:
-            self._segment((right_x, 0.0), (left_x, self._sy(current)))
+            # JoinLines.toTopLeft: rightXHigh, top -> leftXHigh, currentYHigh.
+            if current < self.y_hi:
+                self._segment((right_x, 0.0), (left_x, self._sy(current)))
         else:
-            self._segment((right_x, 0.0), (right_x, self._sy(current)))
+            # JoinLines.topToRight: rightXHigh, top -> rightXHigh, currentYHigh.
+            if current < self.y_hi:
+                self._segment((right_x, 0.0), (right_x, self._sy(current)))
 
-    def _screen_difference(self, value: float, neighbour: Column | None) -> float:
-        """``JoinLines.getLeftScreenDifference``: the difference in *screen* space.
+    def _screen_difference(self, value: float, neighbour: Column | None,
+                           right: bool = False) -> float:
+        """``JoinLines.getLeft/RightScreenDifference``: the difference in *screen* space.
 
         ``toScreenCoordYd`` is decreasing, so this reverses the ordering of a world-space
-        comparison. GGB's own tan output depends on it; using raw world differences selected
-        the mirrored branch and drew the asymptote on the wrong side.
+        comparison. A whole neighbour is an infinite screen edge: -inf on the left and
+        +inf on the right (GGB passes POSITIVE_INFINITY/NEGATIVE_INFINITY through
+        ``toScreenCoordYd``).
         """
         if neighbour is None or neighbour.y.empty:
             return -1.0
         if neighbour.y.whole:
-            return -math.inf
+            return math.inf if right else -math.inf
         return self._sy(value)
 
     def _to_bottom(self, column: Column, left: Column | None, right: Column | None) -> None:
         current = column.y.payload_lo
         left_diff = (self._screen_difference(abs(current - left.y.payload_lo), left)
                      if left is not None else -1.0)
-        right_diff = (self._screen_difference(abs(current - right.y.payload_lo), right)
+        right_diff = (self._screen_difference(abs(current - right.y.payload_lo), right, True)
                       if right is not None else -1.0)
         right_x = self._sx(right.x_hi) if right is not None else self._sx(column.x_hi)
         x_low = self._sx(column.x_lo)
@@ -325,11 +343,17 @@ class IntervalPath:
         if left_diff == 0.0 and left is not None:
             self._segment((x_low, self._sy(left.y.payload_lo)), (x_low, self.height))
         elif right_diff == 0.0 and right is not None:
-            self._segment((x_high, self._sy(right.y.payload_lo)), (x_high, self.height))
+            # JoinLines.toBottomCurrentXHigh: rightXHigh, currentYLow -> currentXHigh, ymin.
+            self._segment((right_x, self._sy(current)), (x_high, self.height))
         elif left_diff < right_diff:
-            # JoinLines.toBottomLeft: to *currentXHigh*, not currentXLow.
+            # JoinLines.toBottomLeft: rightXHigh, currentYLow -> currentXHigh, ymin.
+            if current < self.y_lo - VERTICAL_MARGIN:
+                return
             self._segment((right_x, self._sy(current)), (x_high, self.height))
         else:
+            # JoinLines.toBottomRight: currentXLow, currentYLow -> currentXHigh, ymin.
+            if current < self.y_lo - VERTICAL_MARGIN:
+                return
             self._segment((x_low, self._sy(current)), (x_high, self.height))
 
     # ------------------------------------------------------------- primitives
@@ -341,7 +365,11 @@ class IntervalPath:
         self._point = PathPoint(x, y)
 
     def _segment(self, start: tuple[float, float], end: tuple[float, float]) -> None:
-        """``IntervalPathPlotter.segment``: starts a new subpath."""
+        """``IntervalPathPlotter.segment``: starts a new subpath.
+
+        This spec records the state machine's operations. The production plotter's
+        ``PLOT_MARGIN`` clip is a separate layer (P2b), not part of the topology decisions.
+        """
         self.segments.append((PathPoint(*start), PathPoint(*end)))
         self._point = PathPoint(*end)
 
@@ -349,6 +377,10 @@ class IntervalPath:
         return (x - self.x_lo) / (self.x_hi - self.x_lo) * self.width
 
     def _sy(self, y: float) -> float:
-        # Clamp before mapping: the sentinel infinities would otherwise produce inf/NaN.
-        y = max(-1e12, min(1e12, y))
-        return (self.y_hi - y) / (self.y_hi - self.y_lo) * self.height
+        # GGB's DrawInterval.clamp maps infinite *screen* coordinates to +/-
+        # Double.MAX_VALUE. A world infinity (or an overflowing finite value) therefore
+        # comes out as the same sentinel, not as a raw inf.
+        screen = (self.y_hi - y) / (self.y_hi - self.y_lo) * self.height
+        if math.isinf(screen):
+            screen = math.copysign(1.7976931348623157e308, screen)
+        return screen

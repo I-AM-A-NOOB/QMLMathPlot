@@ -31,8 +31,9 @@ The baseline commit is `ae21d678407` (recorded in every fixture).
 - `columns`: one per screen column, from `FunctionSampler` (the same sampler the
   real `IntervalPlotter` uses): the x interval and the `IntervalSet` topology
   (`EMPTY/CONNECTED/INVERTED/WHOLE/OVERFLOW`), with the payload bounds.
-- `segments`: `IntervalPath` operations in screen coordinates. The recorder
-  applies the production plotter's `PLOT_MARGIN = 1` clip for `segment(...)`.
+- `segments`: `IntervalPath` operations in screen coordinates, **without** the production
+  plotter's `PLOT_MARGIN = 1` clip. This is the state-machine oracle; the plotter clip is a
+  separate P2b layer.
 
 The `EuclidianViewBounds` implementation uses the production mapping
 (`toScreenCoordXd/Yd` are not identity), because the identity mock hides the

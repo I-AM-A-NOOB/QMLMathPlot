@@ -17,9 +17,9 @@ X0, X1 = 0.0, 4.0
 Y0, Y1 = 0.0, 4.0
 
 
-def _path(columns: list[Column], x_hi: float = X1) -> list[tuple[tuple[float, float],
-                                                                  tuple[float, float]]]:
-    path = IntervalPath(columns, W, H, X0, x_hi, Y0, Y1)
+def _path(columns: list[Column], x_hi: float = X1, y0: float = Y0,
+          y1: float = Y1) -> list[tuple[tuple[float, float], tuple[float, float]]]:
+    path = IntervalPath(columns, W, H, X0, x_hi, y0, y1)
     return [((a.x, a.y), (b.x, b.y)) for a, b in path.update()]
 
 
@@ -137,7 +137,9 @@ def test_top_edge_equality_uses_a_tolerance() -> None:
         _col(1, IVal(-15.0, 10.0, "inverted")),
         _col(2, IVal(-15.1, -4.2)),
     ]
-    segments = _path(columns)
+    # GGB's JoinLines.VERTICAL_MARGIN (5) would discard an off-screen high edge, so put
+    # the values inside this view (y in [-20, 20]) to exercise the tolerance.
+    segments = _path(columns, y0=-20.0, y1=20.0)
     # toTopCurrentXLow: a vertical at x.low from the left neighbour's high to the top.
     assert any(
         a[0] == pytest.approx(10.0) and b[0] == pytest.approx(10.0)
@@ -161,6 +163,7 @@ def test_bottom_branch_compares_screen_differences_like_ggb() -> None:
         _col(1, IVal(-15.0, 10.0, "inverted")),
         _col(2, IVal(-15.1, -4.2)),
     ]
-    segments = _path(columns)
+    # The values must be inside GGB's VERTICAL_MARGIN to reach toBottomLeft.
+    segments = _path(columns, y0=-20.0, y1=20.0)
     # (right.x.high, current.low) -> (current.x.high, y_min)
-    assert ((30.0, 190.0), (20.0, 40.0)) in [tuple(map(tuple, s)) for s in segments]
+    assert ((30.0, 35.0), (20.0, 40.0)) in [tuple(map(tuple, s)) for s in segments]
