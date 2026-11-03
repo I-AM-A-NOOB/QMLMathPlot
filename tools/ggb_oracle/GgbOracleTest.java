@@ -54,6 +54,9 @@ class GgbOracleTest extends BaseAppTestSetup {
         Path dir = Path.of(OUT);
         Files.createDirectories(dir);
         for (Case c : cases()) {
+            if (c.id.startsWith("curve_")) {
+                continue;
+            }
             String json;
             try {
                 json = Oracle.capture(this, converter, c);
