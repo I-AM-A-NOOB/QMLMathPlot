@@ -75,9 +75,9 @@ bool nearly_zero(float value) {
 }
 // JoinLines.getLeft/RightScreenDifference: toScreenCoordYd is decreasing, so the ordering
 // of a world-space comparison is reversed.
-float screen_difference(float value, IVal neighbour) {
+float screen_difference(float value, IVal neighbour, bool right) {
     if (neighbour.kind == IK_EMPTY) return -1.0;
-    if (neighbour.kind == IK_WHOLE) return -1e30;
+    if (neighbour.kind == IK_WHOLE) return right ? 1e30 : -1e30;
     return syc(value);
 }
 bool infinite_boundary(IVal v) {
@@ -198,13 +198,25 @@ void to_top(int col, IVal gap) {
     float left_x = sx(col);
     float right_x = has_right ? sx(col + 2) : sx(col + 1);
     if (ld == 0.0 && has_left) {
-        add_segment(vec2(sx(col), syc(pay_hi(g_left))), vec2(sx(col), 0.0));
+        // JoinLines.toTopCurrentXLow: an off-screen high edge is not drawn.
+        float y = pay_hi(g_left);
+        if (y > ytop() + 5.0) return;
+        add_segment(vec2(sx(col), syc(y)), vec2(sx(col), 0.0));
     } else if (rd == 0.0 && has_right) {
-        add_segment(vec2(sx(col + 1), syc(pay_hi(g_next))), vec2(sx(col + 1), 0.0));
+        // JoinLines.toTopCurrentXHigh: rightXHigh -> currentXHigh.
+        float y = pay_hi(g_next);
+        if (y > ytop() + 5.0) return;
+        add_segment(vec2(right_x, syc(y)), vec2(sx(col + 1), 0.0));
     } else if (ld < rd) {
-        add_segment(vec2(right_x, 0.0), vec2(left_x, syc(current)));
+        // JoinLines.toTopLeft: rightXHigh, top -> leftXHigh, currentYHigh.
+        if (current < ytop()) {
+            add_segment(vec2(right_x, 0.0), vec2(left_x, syc(current)));
+        }
     } else {
-        add_segment(vec2(right_x, 0.0), vec2(right_x, syc(current)));
+        // JoinLines.topToRight: rightXHigh, top -> rightXHigh, currentYHigh.
+        if (current < ytop()) {
+            add_segment(vec2(right_x, 0.0), vec2(right_x, syc(current)));
+        }
     }
 }
 
@@ -212,18 +224,22 @@ void to_bottom(int col, IVal gap) {
     bool has_left = g_left.kind != IK_EMPTY;
     bool has_right = g_next.kind != IK_EMPTY;
     float current = pay_lo(gap);
-    float ld = has_left ? screen_difference(abs(current - pay_lo(g_left)), g_left) : -1.0;
-    float rd = has_right ? screen_difference(abs(current - pay_lo(g_next)), g_next) : -1.0;
+    float ld = has_left ? screen_difference(abs(current - pay_lo(g_left)), g_left, false) : -1.0;
+    float rd = has_right ? screen_difference(abs(current - pay_lo(g_next)), g_next, true) : -1.0;
     float left_x = sx(col);
     float right_x = has_right ? sx(col + 2) : sx(col + 1);
     if (ld == 0.0) {
         add_segment(vec2(sx(col), syc(pay_lo(g_left))), vec2(sx(col), size.y));
     } else if (rd == 0.0) {
-        add_segment(vec2(sx(col + 1), syc(pay_lo(g_next))), vec2(sx(col + 1), size.y));
+        // JoinLines.toBottomCurrentXHigh: rightXHigh -> currentXHigh.
+        add_segment(vec2(right_x, syc(current)), vec2(sx(col + 1), size.y));
     } else if (ld < rd) {
         // JoinLines.toBottomLeft: to *currentXHigh*, not currentXLow.
+        if (current < ybot() - 5.0) return;
         add_segment(vec2(right_x, syc(current)), vec2(sx(col + 1), size.y));
     } else {
+        // JoinLines.toBottomRight: currentXLow -> currentXHigh.
+        if (current < ybot() - 5.0) return;
         add_segment(vec2(sx(col), syc(current)), vec2(sx(col + 1), size.y));
     }
 }
