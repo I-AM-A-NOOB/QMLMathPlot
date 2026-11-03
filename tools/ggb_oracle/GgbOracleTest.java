@@ -17,6 +17,14 @@ import org.geogebra.common.kernel.interval.function.IntervalFunctionSupport;
 import org.geogebra.common.kernel.interval.function.IntervalTuple;
 import org.geogebra.common.kernel.interval.function.IntervalTupleList;
 import org.geogebra.common.kernel.interval.samplers.FunctionSampler;
+import org.geogebra.common.euclidian.EuclidianView;
+import org.geogebra.common.euclidian.plot.CurvePlotter;
+import org.geogebra.common.euclidian.plot.Gap;
+import org.geogebra.common.euclidian.plot.PathPlotter;
+import org.geogebra.common.kernel.MyPoint;
+import org.geogebra.common.kernel.SegmentType;
+import org.geogebra.common.kernel.matrix.CoordSys;
+import org.geogebra.common.awt.GPoint;
 import org.geogebra.test.BaseAppTestSetup;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -91,6 +99,19 @@ class GgbOracleTest extends BaseAppTestSetup {
         cases.add(new Case("ln_cosh", "ln(cosh(x))", -750, 750, -50, 750, 200, 200));
         cases.add(new Case("cube_root", "x^(1/3)", -6, 6, -2, 2, 900, 600));
         cases.add(new Case("tan_double", "tan(2*x)", -6, 6, -2, 2, 900, 600));
+        // CurvePlotter (GGB's fallback for unsupported expressions).
+        cases.add(new Case("curve_mixed_default",
+                "-x^2/2 + x*tan(x) - ln(cos(x)^(-2))/2", -6, 6, -2, 2, 900, 600));
+        cases.add(new Case("curve_mixed_wide",
+                "-x^2/2 + x*tan(x) - ln(cos(x)^(-2))/2",
+                -122.7308, 83.6330, -75.9195, 83.5434, 880, 680));
+        cases.add(new Case("curve_rational", "x/(1+x^2)", -6, 6, -2, 2, 900, 600));
+        cases.add(new Case("curve_dependent", "x/sqrt(x^2)", -6, 6, -2, 2, 900, 600));
+        cases.add(new Case("curve_abs_quotient", "x/abs(x)", -6, 6, -2, 2, 900, 600));
+        cases.add(new Case("curve_floor", "floor(x)", -6, 6, -2, 2, 900, 600));
+        cases.add(new Case("curve_sign", "sign(x)", -6, 6, -2, 2, 900, 600));
+        cases.add(new Case("curve_x_sin", "x*sin(x)", -6, 6, -2, 2, 900, 600));
+        cases.add(new Case("curve_sin_plus_x", "sin(x)+x", -6, 6, -2, 2, 900, 600));
         return cases;
     }
 
@@ -270,6 +291,78 @@ class GgbOracleTest extends BaseAppTestSetup {
             sb.append("}");
             return sb.toString();
         }
+    }
+
+    @Test
+    void writeCurvePlotterOracle() throws IOException {
+        Path dir = Path.of("D:/Projects/QMLMathPlot/tests/fixtures/ggb_curve_plotter");
+        Files.createDirectories(dir);
+        EuclidianView view = getApp().getActiveEuclidianView();
+        for (Case c : cases()) {
+            if (!c.id.startsWith("curve_")) {
+                continue;
+            }
+            String expression = c.expression;
+            try {
+                GeoFunction function = evaluateGeoElement(expression);
+                double xscale = view.getWidth() / (c.xmax - c.xmin);
+                double yscale = view.getHeight() / (c.ymax - c.ymin);
+                view.setCoordSystem(-c.xmin * xscale, c.ymax * yscale, xscale, yscale);
+                CurveRecorder recorder = new CurveRecorder();
+                GPoint label = CurvePlotter.plotCurve(function, c.xmin, c.xmax, view, recorder,
+                        false, Gap.MOVE_TO);
+                String json = "{\n  \"ggb_commit\": \"" + COMMIT + "\",\n"
+                        + "  \"id\": \"" + esc(c.id) + "\",\n"
+                        + "  \"expression\": \"" + esc(expression) + "\",\n"
+                        + "  \"view\": {\"xmin\":" + n(c.xmin) + ",\"xmax\":" + n(c.xmax)
+                        + ",\"ymin\":" + n(c.ymin) + ",\"ymax\":" + n(c.ymax)
+                        + ",\"width\":" + view.getWidth() + ",\"height\":" + view.getHeight() + "},\n"
+                        + "  \"label\": " + (label == null ? "null"
+                            : "{\"x\":" + n(label.x) + ",\"y\":" + n(label.y) + "}") + ",\n"
+                        + "  \"operations\": [" + recorder.json() + "]\n}\n";
+                Files.writeString(dir.resolve(c.id + ".json"), json);
+                System.out.println("curve oracle " + c.id + " " + recorder.size() + " ops");
+            } catch (RuntimeException e) {
+                System.err.println("curve oracle " + c.id + " FAILED: " + e);
+                Files.writeString(dir.resolve(c.id + ".json"),
+                        "{\n  \"id\": \"" + esc(c.id) + "\",\n  \"error\": \""
+                                + esc(String.valueOf(e)) + "\",\n  \"operations\": []\n}\n");
+            }
+        }
+    }
+
+    /** Records CurvePlotter's screen-space path operations. */
+    static final class CurveRecorder implements PathPlotter {
+        private final List<String> entries = new ArrayList<>();
+
+        @Override public void drawTo(double[] pos, SegmentType type) {
+            add(type == SegmentType.LINE_TO ? "LINE_TO" : "MOVE_TO", pos);
+        }
+
+        @Override public void lineTo(double[] pos) { add("LINE_TO", pos); }
+        @Override public void moveTo(double[] pos) { add("MOVE_TO", pos); }
+        @Override public void corner() { entries.add("{\"op\":\"CORNER\"}"); }
+        @Override public void corner(double[] pos) { add("CORNER", pos); }
+
+        @Override public void firstPoint(double[] pos, Gap gap) {
+            add(gap == Gap.MOVE_TO ? "MOVE_TO" : "LINE_TO", pos);
+        }
+
+        @Override public double[] newDoubleArray() { return new double[2]; }
+
+        @Override public boolean copyCoords(MyPoint point, double[] ret, CoordSys transformSys) {
+            return false;
+        }
+
+        @Override public void endPlot() { entries.add("{\"op\":\"END\"}"); }
+        @Override public boolean supports(CoordSys transformSys) { return true; }
+
+        private void add(String op, double[] pos) {
+            entries.add("{\"op\":\"" + op + "\",\"x\":" + n(pos[0]) + ",\"y\":" + n(pos[1]) + "}");
+        }
+
+        int size() { return entries.size(); }
+        String json() { return String.join(",", entries); }
     }
 
     private static String n(double v) {

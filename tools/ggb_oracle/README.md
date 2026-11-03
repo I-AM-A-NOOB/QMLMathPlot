@@ -39,6 +39,14 @@ The `EuclidianViewBounds` implementation uses the production mapping
 (`toScreenCoordXd/Yd` are not identity), because the identity mock hides the
 branch-reversal of `toScreenCoordYd`.
 
+## CurvePlotter oracle
+
+The same harness also writes `tests/fixtures/ggb_curve_plotter/` using GGB's real
+`CurvePlotter` (`Gap.MOVE_TO`, the active view at 800x600) for the expressions the interval
+gate rejects: the mixed tan/log expression, `x/(1+x^2)`, `x/sqrt(x^2)`, `x/abs(x)`,
+`floor`, `sign`, `x*sin(x)`, `sin(x)+x`. The recorded points are **world** coordinates from
+`GeoFunction.evaluateCurve`; the plotter maps them to screen when drawing.
+
 ## Notes
 
 - The harness is a temporary test, not vendored GGB code.
