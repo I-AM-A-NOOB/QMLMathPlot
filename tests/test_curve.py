@@ -13,12 +13,13 @@ from PySide6.QtGui import QColor
 from qmlmathplot import Curve, CurveListModel, Plot
 
 
-def test_curve_bakes_its_shaders() -> None:
-    curve = Curve("floor(x)")                                 # the sampled fallback
+def test_an_unsupported_curve_uses_the_cpu_curve_plotter() -> None:
+    """The sampled fragment fallback is gone for 1-D expressions; the CPU path owns them."""
+    curve = Curve("floor(x)")
     assert curve.error == ""
-    assert curve.fragmentShader.toString().endswith(".qsb")
-    assert curve.vertexShader.toString().endswith(".qsb")
-    assert "floor(" not in curve.fragmentShader.toString()    # a URL, not source
+    assert not curve.fragmentShader.toString()
+    assert not curve.vertexShader.toString()
+    assert curve.expr == sp.floor(sp.Symbol("x"))
 
 
 def test_a_compute_curve_skips_the_sampled_bake() -> None:
@@ -30,18 +31,16 @@ def test_a_compute_curve_skips_the_sampled_bake() -> None:
     assert not curve.vertexShader.toString()
 
 
-def test_a_bad_expression_keeps_the_last_working_shaders() -> None:
+def test_a_bad_expression_keeps_the_last_working_expression() -> None:
     curve = Curve("floor(x)")
-    vertex, fragment = curve.vertexShader, curve.fragmentShader
     curve.expression = "floor("                               # cannot be parsed
     assert curve.expression == "floor("                       # the box shows what was typed
     assert curve.error, "a failed expression must report a reason"
-    assert (curve.vertexShader, curve.fragmentShader) == (vertex, fragment), \
-        "the previous shaders must survive a failed bake"
+    assert curve.expr == sp.floor(sp.Symbol("x")), "the previous expression survives"
 
     curve.expression = "floor(2*x)"
     assert curve.error == ""
-    assert curve.fragmentShader != fragment
+    assert curve.expr == sp.floor(2 * sp.Symbol("x"))
 
 
 def test_curve_signals_fire_on_real_changes_only() -> None:
@@ -93,23 +92,20 @@ def test_expression_accepts_a_string_and_a_sympy_expression(monkeypatch) -> None
 
     curve.expression = "floor(2*x)"                   # a string: exactly one parse
     assert calls == ["floor(2*x)"]
-    after_string = curve.fragmentShader
 
     curve.expression = sp.floor(2 * x)                # the same expression, as an object
     assert calls == ["floor(2*x)"], "the canonical string already matches"
-    assert curve.fragmentShader == after_string, "and nothing re-bakes"
+    assert curve.expr == sp.floor(2 * x)
     curve.expression = "floor(2*x)"                   # and a repeated string is free too
     assert calls == ["floor(2*x)"]
 
     curve.expression = sp.floor(3 * x)                # a real change: one string conversion
     assert calls == ["floor(2*x)"], "still no parse"
-    assert curve.expression == "floor(3*x)" and curve.fragmentShader != after_string, \
-        "a real change still re-bakes"
+    assert curve.expression == "floor(3*x)" and curve.expr == sp.floor(3 * x)
 
-    curve.expression = "floor("                       # unparsable: one attempt, shaders kept
+    curve.expression = "floor("                       # unparsable: one attempt, expression kept
     assert calls == ["floor(2*x)", "floor("]
     assert curve.error and curve.expression == "floor(" and curve.expr == sp.floor(3 * x)
-    assert curve.fragmentShader == curve.fragmentShader
 
     plot = Plot()                                     # the entry point too: `add_curve(expr)`
     added = plot.add_curve(sp.tan(x))                 # must not stringify on the way in

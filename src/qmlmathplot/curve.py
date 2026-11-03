@@ -28,7 +28,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QColor
 
 from .interval import compute_supported
-from .model import implicit_shader_sources, shader_sources
+from .model import implicit_shader_sources
 from .qsb import bake
 
 __all__ = ["Curve", "CurveListModel", "ImplicitCurve", "curve_for", "parsed"]
@@ -349,7 +349,9 @@ class Curve(QObject):
             # The compute renderer generates its shader from `expr`; baking the sampled
             # fallback here would be dead work (qsb + the edge analysis, ~130 ms/curve).
             return "", ""
-        return shader_sources(expr)
+        # Unsupported 1-D expressions use GGB's CurvePlotter on the CPU; the renderer
+        # builds the stroke vertices from the resulting path. No fragment shader is baked.
+        return "", ""
 
     def _start_bake(
         self,

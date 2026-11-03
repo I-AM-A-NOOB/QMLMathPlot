@@ -436,3 +436,11 @@ def test_a_widget_host_can_export_a_region_it_is_not_showing(app: QApplication) 
     assert image.size() == QSize(240, 120)
     assert _lit_rows(image), "the widget's own curve must appear in the export"
     widget.hide()
+
+
+def test_an_unsupported_expression_exports_through_the_cpu_curve_plotter(
+        app: QApplication) -> None:
+    """x/(1+x^2) is rejected by the interval gate; GGB's CurvePlotter path must be exported."""
+    plot = _plot("x/(1+x^2)")
+    image = plot.to_image()
+    assert _hue(image, "blue"), "the CPU CurvePlotter path is missing from the export"

@@ -546,3 +546,70 @@ def plot_curve(expression: sp.Expr, view: PlotView, t_min: float, t_max: float,
     recorder = PathRecorder()
     CurvePlotter(FunctionCurve(expression), t_min, t_max, view, recorder, False, gap)
     return recorder.operations
+
+
+def stroke_vertices(operations: list[tuple[Any, ...]], view: PlotView,
+                    size: tuple[float, float], line_width: float,
+                    color: tuple[float, float, float, float]) -> tuple[bytes, int]:
+    """World path operations -> screen-space stroke quads for the RHI path pipeline.
+
+    The path pipeline's vertex layout is (ndc.xy, rgba premultiplied, local.xy): segment
+    quads carry local (0, 0); join/cap discs carry local (+-1, +-1) and are clipped by
+    path.frag. This mirrors the compute path's ``slot``/``join`` stroke.
+    """
+    import struct
+
+    width, height = size
+    if width <= 0 or height <= 0 or view.xmax == view.xmin or view.ymax == view.ymin:
+        return b"", 0
+    r, g, b, a = color
+    half = max(0.01, line_width * 0.5)
+    data = bytearray()
+
+    def screen(point: tuple[float, float]) -> tuple[float, float]:
+        return ((point[0] - view.xmin) / (view.xmax - view.xmin) * width,
+                (view.ymax - point[1]) / (view.ymax - view.ymin) * height)
+
+    def vertex(point: tuple[float, float], local: tuple[float, float]) -> None:
+        sx, sy = point
+        data.extend(struct.pack("<2f4f2f",
+                                sx / width * 2.0 - 1.0,
+                                1.0 - sy / height * 2.0,
+                                r * a, g * a, b * a, a,
+                                local[0], local[1]))
+
+    def segment(start: tuple[float, float], end: tuple[float, float]) -> None:
+        dx = end[0] - start[0]
+        dy = end[1] - start[1]
+        length = math.hypot(dx, dy)
+        if length < 1e-6:
+            return
+        nx, ny = -dy / length * half, dx / length * half
+        a1 = (start[0] + nx, start[1] + ny)
+        a2 = (start[0] - nx, start[1] - ny)
+        b2 = (end[0] - nx, end[1] - ny)
+        b1 = (end[0] + nx, end[1] + ny)
+        for point in (a1, a2, b2, a1, b2, b1):
+            vertex(point, (0.0, 0.0))
+
+    def disc(point: tuple[float, float]) -> None:
+        x, y = point
+        for local in ((-1.0, -1.0), (1.0, -1.0), (1.0, 1.0),
+                      (-1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)):
+            vertex((x + local[0] * half, y + local[1] * half), local)
+
+    current: tuple[float, float] | None = None
+    for operation in operations:
+        kind = operation[0]
+        if kind == "MOVE_TO":
+            current = screen((operation[1], operation[2]))
+            disc(current)
+        elif kind == "LINE_TO":
+            point = screen((operation[1], operation[2]))
+            if current is not None:
+                segment(current, point)
+            disc(point)
+            current = point
+        elif kind == "END":
+            current = None
+    return bytes(data), len(data) // 32

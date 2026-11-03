@@ -36,31 +36,33 @@ def test_expression_bakes_off_the_gui_thread(app: QApplication, monkeypatch) -> 
         return real_bake(source, stage, *args, **kwargs)
 
     monkeypatch.setattr(curve_module, "bake", slow_bake)
-    curve = Curve("floor(x)")                 # construction is always synchronous
+    # The async shader bake is now only for implicit curves; 1-D unsupported expressions
+    # use the CPU CurvePlotter and have no shader to bake.
+    curve = Curve("x**2 + y**2 - 1")          # construction is always synchronous
     old_fragment = curve.fragmentShader
-    curve.expression = "floor(2*x)"
-    assert curve.expression == "floor(2*x)"
+    curve.expression = "x**2 + y**2 - 2"
+    assert curve.expression == "x**2 + y**2 - 2"
     assert curve.fragmentShader == old_fragment, "the setter blocked on the bake"
 
     _wait(curve.shadersChanged)
     assert curve.fragmentShader != old_fragment
-    assert curve.expr == sp.floor(2 * X)
+    assert curve.expr == sp.sympify("x**2 + y**2 - 2")
     assert curve.error == ""
 
 
 def test_a_stale_bake_does_not_replace_the_newer_expression(app: QApplication, monkeypatch) -> None:
     monkeypatch.setattr(Curve, "bake_async", True)
-    curve = Curve("floor(x)")
-    curve.expression = "floor(2*x)"
-    curve.expression = "floor(3*x)"             # supersedes the floor(2*x) bake before it lands
+    curve = Curve("x**2 + y**2 - 1")
+    curve.expression = "x**2 + y**2 - 2"
+    curve.expression = "x**2 + y**2 - 3"        # supersedes the -2 bake before it lands
     _wait(curve.shadersChanged)
-    assert curve.expr == sp.floor(3 * X)
-    assert curve.expression == "floor(3*x)"
+    assert curve.expr == sp.sympify("x**2 + y**2 - 3")
+    assert curve.expression == "x**2 + y**2 - 3"
 
 
 def test_a_failed_async_bake_keeps_the_drawn_curve(app: QApplication, monkeypatch) -> None:
     monkeypatch.setattr(Curve, "bake_async", True)
-    curve = Curve("floor(x)")
+    curve = Curve("x**2 + y**2 - 1")
     old_fragment = curve.fragmentShader
     old_expr = curve.expr
 
@@ -68,7 +70,7 @@ def test_a_failed_async_bake_keeps_the_drawn_curve(app: QApplication, monkeypatc
         raise RuntimeError("qsb exploded")
 
     monkeypatch.setattr(curve_module, "bake", broken_bake)
-    curve.expression = "floor(2*x)"
+    curve.expression = "x**2 + y**2 - 2"
     _wait(curve.errorChanged)
     assert "qsb exploded" in curve.error
     assert curve.fragmentShader == old_fragment

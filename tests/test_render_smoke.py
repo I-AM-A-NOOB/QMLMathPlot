@@ -715,11 +715,10 @@ def test_wrapped_pole_transition_fills_the_attained_half_plane(app: QGuiApplicat
         "the fill paints below the function's range"
 
 
-def test_slow_boundary_ray_is_live_in_the_sampled_fallback(app: QGuiApplication) -> None:
-    """The boundary ray is not dead: `floor(log(x))` is unsupported by the interval backend,
-    so it uses the sampled fallback, and its descent to -inf at x=0 can only be reached by the
-    analytic ray (the sampler never reaches x=1e-7). Measured: 1020 lit pixels with the ray,
-    0 without; the centre column (x=0) is the wall.
-    """
-    image, _ = _render_plot(app, "floor(log(x))", xlim=(-1.0, 1.0), ylim=(-16.0, -12.0))
-    assert _column_lit_at(image, image.width() // 2) > 0, "the boundary ray is missing"
+
+def test_the_problem_expression_is_drawn_by_the_cpu_curve_plotter(
+        app: QGuiApplication) -> None:
+    """The interval gate rejects this expression; GGB uses CurvePlotter, not the old march."""
+    image, _ = _render_plot(app, "-x**2/2 + x*tan(x) - log(cos(x)**(-2))/2",
+                            xlim=(-6.0, 6.0), ylim=(-2.0, 2.0))
+    assert _curve_count(image) > 100, "the CPU CurvePlotter path did not reach the item"

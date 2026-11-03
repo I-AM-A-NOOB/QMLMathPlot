@@ -31,6 +31,7 @@ from PySide6.QtGui import (
 from PySide6.QtQuick import QQuickRhiItem, QQuickRhiItemRenderer
 
 from .ggb_compute import PATH_FRAGMENT, PATH_VERTEX, path_compute_source, path_subsamples
+from .curveplotter import PlotView, plot_curve, stroke_vertices
 from .interval import compute_supported as path_compute_supported
 from .qsb import bake
 
@@ -72,7 +73,8 @@ class _Renderer(QQuickRhiItemRenderer):
         self._path_buffers: dict[str, QRhiBuffer] = {}
         self._path_buffer_sizes: dict[str, int] = {}
         self._path_fragment = None
-        self._curves: list[tuple[QUrl, float, tuple[float, float, float, float], object, object]] = []
+        self._cpu_buffers: dict[int, tuple[QRhiBuffer, int, bytes]] = {}
+        self._curves: list[tuple] = []
         self._camera = QVector4D(0.0, 0.0, 1.0, 1.0)
         self._size = (1.0, 1.0)
 
@@ -219,6 +221,24 @@ class _Renderer(QQuickRhiItemRenderer):
             self._path_compute_srbs[expression] = srb
         return buf, pipe, self._path_compute_srbs[expression], cols
 
+    def _cpu_buffer(self, row: int, spec) -> tuple[QRhiBuffer | None, int]:
+        vertices = spec[5][0] if len(spec) > 5 and spec[5] else b""
+        count = spec[5][1] if len(spec) > 5 and spec[5] else 0
+        if count <= 0 or not vertices:
+            return None, 0
+        old = self._cpu_buffers.get(row)
+        if old is not None and old[0] and old[2] == vertices:
+            return old[0], old[1]
+        used = self._pending
+        if used is None:
+            return None, 0
+        buf = self.rhi().newBuffer(QRhiBuffer.Static, QRhiBuffer.VertexBuffer, len(vertices))
+        if not buf.create():
+            return None, 0
+        used.uploadStaticBuffer(buf, vertices)
+        self._cpu_buffers[row] = (buf, count, vertices)
+        return buf, count
+
     def synchronize(self, item: "CurveRhiItem") -> None:
         self._camera = QVector4D(item.camera)
         self._size = (max(1.0, item.width()), max(1.0, item.height()))
@@ -246,6 +266,7 @@ class _Renderer(QQuickRhiItemRenderer):
             self._ensure_path_pipeline()
         shader_draws = []
         path_draws = []
+        cpu_draws = []
         dirty: list[tuple[int, bytes]] = []
         for row, spec in enumerate(self._curves):
             offset = row * self._stride
@@ -257,22 +278,32 @@ class _Renderer(QQuickRhiItemRenderer):
                 pipe = self._pipeline(spec, self._srb)
                 if pipe is not None:
                     shader_draws.append((pipe, offset))
+            elif spec[3] == "cpu":
+                cpu_draws.append((row, spec))
             else:
                 buf, compute, csrb, cols = self._path_resources(spec)
                 path_draws.append((buf, compute, csrb, offset, cols))
-        if not shader_draws and not path_draws:
+        if not shader_draws and not path_draws and not cpu_draws:
             cb.beginPass(self.renderTarget(), QColor(0, 0, 0, 0),
                          QRhiDepthStencilClearValue(1.0, 0))
             cb.endPass()
             return
 
         used = None
-        if dirty:
+        if dirty or cpu_draws:
             used = self.rhi().nextResourceUpdateBatch()
             if used is None:
                 return
             for offset, data in dirty:
                 used.updateDynamicBuffer(self._ubuf, offset, data)
+            self._pending = used
+            cpu_draws = [
+                (row, buf, count)
+                for row, spec in cpu_draws
+                for buf, count in [self._cpu_buffer(row, spec)]
+                if buf is not None and count > 0
+            ]
+            self._pending = None
 
         if path_draws:
             # One sequential invocation per path curve: interval per column + GGB path
@@ -295,12 +326,15 @@ class _Renderer(QQuickRhiItemRenderer):
                 cb.setGraphicsPipeline(pipe)
                 cb.setShaderResources(self._srb, 1, (0, offset))
                 cb.draw(3)
-            if path_draws:
+            if path_draws or cpu_draws:
                 cb.setGraphicsPipeline(self._path_vertex_pipeline)
                 cb.setShaderResources(None)
                 for buf, _compute, _csrb, _offset, cols in path_draws:
                     cb.setVertexInput(0, [(buf, 0)])
                     cb.draw(cols * 18, 1, 0, 0)
+                for _row, buf, count in cpu_draws:
+                    cb.setVertexInput(0, [(buf, 0)])
+                    cb.draw(count, 1, 0, 0)
             cb.endPass()
         finally:
             if used is not None:
@@ -324,8 +358,12 @@ class CurveRhiItem(QQuickRhiItem):
         self._snapshot: list[tuple[QUrl, float, tuple[float, float, float, float], object, object]] = []
         self._camera = QVector4D(0.0, 0.0, 1.0, 1.0)
         self._renderer = None
+        self._pending = None
+        self._cpu_cache: dict[tuple, tuple[bytes, int]] = {}
         self.setAlphaBlending(True)
         self.setSampleCount(8)
+        self.widthChanged.connect(self._refresh)
+        self.heightChanged.connect(self._refresh)
 
     def createRenderer(self):
         self._renderer = _Renderer(self)
@@ -352,10 +390,37 @@ class CurveRhiItem(QQuickRhiItem):
         self._refresh()
         self.curvesChanged.emit()
 
+    def _cpu_vertices(self, curve, camera: QVector4D, width: float, height: float):
+        color = curve.color
+        key = (id(curve), str(curve.expr), float(curve.lineWidth),
+               color.redF(), color.greenF(), color.blueF(), color.alphaF(),
+               camera.x(), camera.y(), camera.z(), camera.w(), width, height)
+        cached = self._cpu_cache.get(key)
+        if cached is not None:
+            return cached
+        sx, sy = camera.z(), camera.w()
+        if width <= 1 or height <= 1 or abs(sx) < 1e-15 or abs(sy) < 1e-15:
+            return b"", 0
+        cx, cy = camera.x(), camera.y()
+        view = PlotView(cx - width * 0.5 * sx, cx + width * 0.5 * sx,
+                        cy - height * 0.5 * sy, cy + height * 0.5 * sy,
+                        int(width), int(height))
+        operations = plot_curve(curve.expr, view, view.xmin, view.xmax)
+        vertices, count = stroke_vertices(
+            operations, view, (width, height), curve.lineWidth,
+            (color.redF(), color.greenF(), color.blueF(), color.alphaF()))
+        self._cpu_cache[key] = (vertices, count)
+        if len(self._cpu_cache) > 64:
+            self._cpu_cache.clear()
+        return vertices, count
+
     def _refresh(self) -> None:
         """Snapshot the model on the GUI thread; the renderer must not touch it."""
         self._snapshot = []
         model = self._curves_model
+        camera = self._camera
+        width = max(1.0, self.width())
+        height = max(1.0, self.height())
         if model is not None:
             for row in range(model.rowCount()):
                 curve = model.at(row)
@@ -363,16 +428,28 @@ class CurveRhiItem(QQuickRhiItem):
                     continue
                 expr = curve.expr
                 compute = not curve.implicit and path_compute_supported(expr)
-                url = QUrl() if compute else curve.fragmentShader
-                if not compute and not url.isLocalFile():
-                    continue
+                if curve.implicit:
+                    url = curve.fragmentShader
+                    if not url.isLocalFile():
+                        continue
+                    kind = None
+                    cpu = None
+                elif compute:
+                    url = QUrl()
+                    kind = str(expr)
+                    cpu = None
+                else:
+                    url = QUrl()
+                    kind = "cpu"
+                    cpu = self._cpu_vertices(curve, camera, width, height)
                 col = curve.color
                 self._snapshot.append((
                     QUrl(url),
                     float(curve.lineWidth),
                     (col.redF(), col.greenF(), col.blueF(), col.alphaF()),
-                    str(expr) if compute else None,
+                    kind,
                     expr,
+                    cpu,
                 ))
         self.update()
 
@@ -386,5 +463,6 @@ class CurveRhiItem(QQuickRhiItem):
     @camera.setter
     def camera(self, value: QVector4D) -> None:
         self._camera = QVector4D(value)
+        self._refresh()
         self.cameraChanged.emit()
         self.update()
