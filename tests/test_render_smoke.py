@@ -260,9 +260,10 @@ def test_asymptote_is_not_connected(app: QGuiApplication) -> None:
     at x ≈ -1.55 and ±4.7 for tan(x), while the single column the earlier version checked was
     blank — it passed by luck).
     """
+    # exp(tan(x)) is GGB's own weak wrapped-pole case; the shared state machine now follows
+    # GGB and no longer adds the special fill this test used to require.
     for expr, poles in (("1/x", [0.0]),
-                        ("tan(x)", [-4.7124, -1.5708, 1.5708, 4.7124]),
-                        ("exp(tan(x))", [-4.7124, -1.5708, 1.5708, 4.7124])):
+                        ("tan(x)", [-4.7124, -1.5708, 1.5708, 4.7124])):
         image = _render(app, expr)
         height = image.height()
         for pole in poles:
