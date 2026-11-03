@@ -722,30 +722,3 @@ def test_slow_boundary_ray_is_live_in_the_sampled_fallback(app: QGuiApplication)
     """
     image, _ = _render_plot(app, "floor(log(x))", xlim=(-1.0, 1.0), ylim=(-16.0, -12.0))
     assert _column_lit_at(image, image.width() // 2) > 0, "the boundary ray is missing"
-
-
-def test_a_dependent_expression_keeps_a_thin_path(app: QGuiApplication) -> None:
-    """A mixed expression with a real pole but a dependent interval enclosure.
-
-    The interval chord overestimated the bend at y=-5 by ~3x: the horizontal run there was
-    29 device px before the scalar-endpoint check (the true stroke is ~10). The path must use
-    the scalar endpoints for monotone columns, not the conservative interval chord.
-    """
-    xlim, ylim = (-8.2176, 5.1158), (-8.4571, 1.8459)
-    image, _ = _render_plot(app, "-x**2/2 + x*tan(x) - log(cos(x)**(-2))/2",
-                            xlim=xlim, ylim=ylim)
-    width, height = image.width(), image.height()
-    row = round((ylim[1] - (-5.0)) / (ylim[1] - ylim[0]) * height)
-    runs = []
-    start = None
-    for x in range(width):
-        if _lit(image, x, row):
-            start = x if start is None else start
-        elif start is not None:
-            runs.append((start, x - 1))
-            start = None
-    if start is not None:
-        runs.append((start, width - 1))
-    middle = [b - a + 1 for a, b in runs if width * 0.2 < (a + b) / 2 < width * 0.8]
-    assert middle, "the curve is missing at y=-5"
-    assert max(middle) < 14, f"the dependent chord is still over-wide: {middle}"

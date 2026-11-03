@@ -1,0 +1,12 @@
+{
+  "ggb_commit": "ae21d678407",
+  "id": "mixed_wide",
+  "expression": "-x^2/2 + x*tan(x) - ln(cos(x)^(-2))/2",
+  "supported": false,
+  "bounds": {"xmin":-122.7308,"xmax":83.633,"ymin":-75.9195,"ymax":83.5434},
+  "size": {"width":880,"height":680},
+  "columns": [
+    
+  ],
+  "segments": []
+}

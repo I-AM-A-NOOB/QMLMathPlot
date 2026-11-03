@@ -444,10 +444,11 @@ def test_the_renderer_policy_is_capability_based_not_a_string_list():
     for expression in ("tan(x)", "tan(2*x)", "log(x)", "log(1+x)", "1/x", "sin(1/x)",
                        "x**2", "sin(x)", "x**(1/3)"):
         assert path_compute_supported(sp.sympify(expression)), expression
-    # A dependent quotient has no sign pole to justify a gap; the fragment path draws its
-    # jump. Operations outside the interval library stay there too.
-    for expression in ("x/sqrt(x**2)", "floor(x)", "sign(x)"):
+    # GGB's gate is one function-variable occurrence, not a quotient heuristic: a
+    # two-x expression goes to the sampled plotter; floor/sign are unsupported operations.
+    for expression in ("x/sqrt(x**2)", "x/(1+x**2)", "floor(x)", "sign(x)"):
         assert not path_compute_supported(sp.sympify(expression)), expression
+    assert path_compute_supported(sp.sympify("1/(1+x**2)**2"))
 
 
 def test_the_interval_library_is_trimmed_to_the_functions_the_expression_uses():
@@ -501,13 +502,13 @@ def test_compute_source_accepts_a_parsed_expression(monkeypatch):
     assert calls == [], "a parsed Expr must reach the generator without parsing"
 
 
-def test_a_quotient_with_a_sign_pole_stays_on_the_interval_path():
-    """`x/sqrt(x**2)` is a bounded dependent quotient (sampled); a mixed expression with a
-    genuine pole must not be vetoed by the same structural rule."""
+def test_the_interval_gate_is_ggbs_single_variable_rule():
+    """GGB rejects every expression with more than one x occurrence, whatever its poles."""
     x = sp.Symbol("x")
     mixed = -x**2 / 2 + x * sp.tan(x) - sp.log(1 / sp.cos(x) ** 2) / 2
-    from qmlmathplot.interval import compute_supported, has_dependent_quotient
+    from qmlmathplot.interval import compute_supported
 
-    assert compute_supported(mixed)
-    assert not has_dependent_quotient(mixed)
+    assert not compute_supported(mixed)
     assert not compute_supported(x / sp.sqrt(x**2))
+    assert not compute_supported(x / (1 + x**2))
+    assert compute_supported(1 / (1 + x**2) ** 2)

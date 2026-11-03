@@ -1,0 +1,12 @@
+{
+  "ggb_commit": "ae21d678407",
+  "id": "abs_quotient",
+  "expression": "x/abs(x)",
+  "supported": false,
+  "bounds": {"xmin":-6.0,"xmax":6.0,"ymin":-2.0,"ymax":2.0},
+  "size": {"width":900,"height":600},
+  "columns": [
+    
+  ],
+  "segments": []
+}

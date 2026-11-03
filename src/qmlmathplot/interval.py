@@ -214,11 +214,14 @@ def _library_functions() -> tuple[str, list[str], dict[str, str]]:
 def compute_supported(expr: sp.Expr) -> bool:
     """Whether the compute interval renderer can draw this 1-D expression.
 
-    This mirrors GGB's ``IntervalFunctionSupport`` eligibility: the interval library must
-    support every operation, and a dependent quotient (``x/sqrt(x**2)``) is rejected because
-    its interval explodes without a sign pole. Everything else uses the sampled fallback.
+    The route is GGB's: ``ggb_eligibility.supported`` (exactly one x occurrence and a
+    supported operation). The interval library must also be able to emit the expression;
+    a GGB-supported operation our GLSL lacks is a capability gap, and the caller falls
+    back rather than failing.
     """
-    if has_dependent_quotient(expr):
+    from .ggb_eligibility import supported as ggb_supported
+
+    if not ggb_supported(expr):
         return False
     try:
         interval_glsl(expr)
