@@ -12,24 +12,25 @@ histories and numbers belong here.
   on the compute path when `interval_glsl()` supports it and it is not a dependent
   quotient. The old `("tan(x)", "log(x)")` string whitelist is gone; `1/x`, `sin(1/x)` and
   `tan(2*x)` now use the same path as `tan`/`log`.
-- Fragment shader fallback: expressions the interval library does not cover (`floor`,
-  `sign`, `Min/Max`, `Piecewise`, …) and dependent quotients (`x/sqrt(x**2)`, whose interval
-  explodes without a sign pole). Implicit curves always use their own fragment shader.
-- CPU fallback: `view.cpuRenderer = true` replaces the RHI item with one `QPainterPath` per
-  curve (`CpuCurves.qml` + `pathcurve.py` + `ggb_reference.py`). It is explicit, not auto.
-  `ggb_reference` now feeds the shared state machine (`ggb_path.py`); its `mpmath.iv`
-  sampler cannot express a gap, so a pole column is reported as empty (a path break).
-- Known deviation: a wrapped pole (`exp(tan(x))`) becomes a connected `[0, +inf]` column.
-  While the column is narrower than half the pole spacing it draws the branch that
-  approaches +∞ (the side with the larger neighbour high edge) and leaves the other branch to
-  the next column. At or above half the spacing (two adjacent columns can hold poles) a
-  non-negative, pole-only-domain expression fills the attained half-plane uniformly
-  (`UNIFORM_FILL`): the per-column spikes would otherwise form a moiré of top heights. GGB's
-  interval renderer would draw a connector instead. The threshold is derived from the
-  expression (`_pole_spacing()` in `model.py`), not from `camera.z`.
-- Do not use `ggb_reference.py` (mpmath.iv) as a pixel-exact oracle for GPU `FI`
-  (float32/GLSL): the two classify poles/domains differently. Compare visual invariants,
-  not pixels.
+- Unsupported 1-D (GGB `IntervalFunctionSupport` false: `floor`, `sign`, Min/Max,
+  Piecewise, dependent quotients, or more than one x): GGB uses `CurvePlotter`, and so do
+  we. `curveplotter.py` generates GGB's world-space path; `CurveRhiItem._refresh` maps it
+  to screen stroke quads (`stroke_vertices`) and the existing RHI path pipeline strokes
+  them. The path is cached per curve/camera/viewport. No fragment shader is baked for these
+  curves; `Curve._sources` returns empty.
+- Implicit curves always use their own fragment shader (`implicit.frag`).
+- Explicit CPU fallback: `view.cpuRenderer = true` replaces the RHI item with one
+  `QPainterPath` per curve (`CpuCurves.qml` + `pathcurve.py` + `ggb_reference.py`). It is
+  explicit, not auto. `ggb_reference` feeds the shared state machine (`ggb_path.py`); its
+  `mpmath.iv` sampler cannot express a gap, so a pole column is reported as empty (a path
+  break). Do not use it as a pixel-exact oracle for the GPU `FI`.
+- Known GGB-weak case: `exp(tan(x))` follows GGB's own wrapped-pole behaviour; the old
+  `UNIFORM_FILL`/`_pole_spacing` compensations were deleted. The `ggb_path` oracle is
+  segment-exact for 9 of 12 supported fixtures; `cot(sec)`/`ln(cosh)` keep small documented
+  deviations.
+- The old sampled fragment (`oned_sampled.frag`), the march, `model.shader_sources`,
+  `unbounded_edges`, the boundary ray and `UNIFORM_FILL` were deleted in P3. Items
+  5/13/44/45/50/51 describe that superseded renderer; do not resurrect it for new work.
 
 ## Shader generation
 
@@ -1414,72 +1415,57 @@ the full step budget in both directions plus both windows.
     to the renderer.
 
 74. **Shader sources are files under `src/qmlmathplot/shaders/`, assembled by
-    `shaderbuild.render`.** The old 41.9 KB `FRAGMENT_TEMPLATE` carried two renderers behind
-    `#if USE_INTERVAL`. During the split it became `oned_interval.frag` +
-    `oned_legacy.frag`; after the eligibility fix (item 75) the interval fragment was
-    **deleted** and the one remaining 1-D fragment is `oned_sampled.frag` (the march).
-    `shader_sources` now **always** returns the sampled fallback; the interval path is
-    compute-only. Generated sizes: sampled **28.4 KB** (the old interval fragment was 51.7),
-    compute 13–17 KB, implicit 14 KB. `model.py` 1583 → ~430 lines, `ggb_compute.py`
-    404 → 55, `interval.py` 621 → 295.
+    `shaderbuild.render`.** The current 1-D production paths are the interval compute
+    (`interval_path.comp` + `path_state.glsl`), the implicit fragment (`implicit.frag`) and
+    the RHI path pipeline (`path.vert`/`path.frag`) used by both compute output and the CPU
+    CurvePlotter stroke. The old sampled fragment (`oned_sampled.frag`) and
+    `model.shader_sources` were deleted in P3; the remaining sources are compute, implicit,
+    path and `interval_lib`.
 
     Shared prologues live in `shaders/common/` (`uniforms`, `arg_reduction`, `seg_dist`,
     `span_cov`, `real_pow`) and are expanded by `render` through
     `@INCLUDE:common/<name>.glsl@` (recursive, cycle-checked) before placeholder
-    substitution. The 1-D and implicit sources differ from their pre-dedupe versions only in
-    comments (the 1-D templates were byte-identical before the interval fragment was
-    removed).
+    substitution. `render(name, **values)` raises if any placeholder remains; the templates
+    are cached by `shader_source` and included in the wheel.
 
-    Compute curves bake **no** fragment: `Curve._sources` checks
-    `interval.compute_supported(expr)` (the same predicate `rhi` uses) and returns empty
-    sources, so `Curve` skips `shader_sources` and qsb entirely; `rhi._refresh` snapshots
-    compute curves with an empty URL and the compute path uses `expr`. Measured curve
-    creation: `sin(x)` ~4.5 ms, `sin(1/x)` ~0.6 ms; the sampled fallback still bakes
-    (`floor(x)` ~100 ms). `Curve.vertexShader`/`fragmentShader` are empty for compute
-    curves — do not use them as a "has shaders" flag.
-
-    `render(name, **values)` replaces `@NAME@`, then raises if any placeholder remains (a
-    missing substitution used to surface only as a cryptic qsb parse error). The templates
-    are cached by `shader_source` (`importlib.resources`, read once); `uv build` includes the
-    shader tree (verified in the wheel). Tests: `tests/test_shader_build.py` (resources load,
-    unresolved placeholders raise, no `USE_INTERVAL`/`IVal FI` in the fragment, size
-    budgets), `test_model.py::test_the_fragment_is_only_the_sampled_fallback`. Do not
-    reintroduce `#if USE_INTERVAL`; add a file (or a placeholder) instead.
+    `Curve._sources` returns `implicit_shader_sources` for level sets, and empty sources for
+    both compute curves and unsupported 1-D curves (the latter use the CPU CurvePlotter).
+    `Curve.vertexShader`/`fragmentShader` are therefore empty for every 1-D curve; do not
+    use them as a "has shaders" flag. Tests:
+    `tests/test_shader_build.py` (resources, unresolved placeholders, includes),
+    `tests/test_shader_bake.py`, `tests/test_qsb_cache.py`.
 
 75. **GGB's interval renderer has an explicit eligibility list; floor/sign and dependent
     quotients are not in it.** `IntervalOperation` supports ABS/ACOS/ASIN/ATAN/COS/COSH/COT/
     CSC/DIVIDE/EXP/LOG/MINUS/MULTIPLY/NROOT/PLUS/POWER/LOGB/SEC/SIN/SINH/SQRT/TAN/TANH —
     no floor, sign, Min/Max or If/Piecewise. `IntervalFunctionSupport.isSupported()` rejects
-    anything outside that list, and GGB then draws the function with its classic sampled
+    anything outside that list, and GGB then draws the function with its classic
     `CurvePlotter`, not `IntervalPath`. **`x/sqrt(x**2)` is rejected too**: GGB's algebra
     simplifies it to `sgn` (the probe on the real `IntervalFunctionSupport` returned
-    `supported=false` for `x/sqrt(x**2)`, `floor(x)`, `sign(x)` and `x/abs(x)`). So there is
-    no GGB interval mechanism to port for those classes; the faithful implementation is the
-    sampled fallback, which our `oned_sampled.frag` is. Consequence: the interval fragment
-    (`oned_interval.frag`, 17.5 KB generated) had no production user and was removed;
-    `rhi.path_compute_supported()` keeps the same split (interval support + not a dependent
-    quotient), and the sampled fragment is the only 1-D fragment. If a future expression
+    `supported=false` for `x/sqrt(x**2)`, `floor(x)`, `sign(x)` and `x/abs(x)`).
+
+    Our port follows the same split: `rhi.path_compute_supported()` keeps supported
+    expressions on the interval compute, and unsupported 1-D expressions use the CPU
+    CurvePlotter (item 76). The sampled fragment fallback is gone. If a future expression
     class is added, check GGB's operation list first: extending our interval library beyond
     it is a deliberate divergence, not a port.
 
-76. **The boundary ray is live — only in the sampled fallback.** `unbounded_edges(expr)`
-    finds a polynomial domain boundary (from `_domain_conditions`), rejects one that is also
-    a pole (so `1/x`/`tan` get no ray), and evaluates the one-sided `sp.limit` of the whole
-    expression. `_edge_glsl` turns it into `EDGEHIT`/`EDGEDU`; `oned_sampled.frag`'s
-    `_ray_dist` extends the polyline vertically along the boundary x to ±1e12. It exists
-    because a slowly diverging boundary (`log(x)` as x→0+) is never reached by a fixed-width
-    sample window or the march's 12-step budget: in a deep viewport the curve would vanish.
-    It is **not** dead: `floor(log(x))` is rejected by the interval backend (floor) and goes
-    to the sampled fallback, where the deep descent exists only through the ray. Measured on
-    x∈[-1,1], y∈[-16,-12]: **1020 lit pixels with the ray, 0 without**; regression
-    `test_render_smoke.py::test_slow_boundary_ray_is_live_in_the_sampled_fallback`. Cases
-    that do **not** use it: `log(x)`/`sqrt(x)`/`sin(1/x)` (compute/no edge), `sign(log(x))`
-    (the limit is finite), `1/x`/`tan` (boundary is a pole). Deleting the ray also removes
-    the last `sp.solve`/`sp.limit`/`sp.simplify` use (and `unbounded_edges`); do that only if
-    `floor(log(x))`-style deep views are declared out of scope.
+76. **The unsupported 1-D renderer is the CPU CurvePlotter (P3), not the old sampled
+    fragment.** `curveplotter.py` is a port of GGB's `CurvePlotter` / `CurveSegmentPlotter`
+    for 1-D functions: bisection stack, SegmentParams, distance/angle limits, continuity
+    checks, definition-border search and problem-interval recursion. It produces world-space
+    `MOVE_TO`/`LINE_TO`/`END` operations. The `tests/fixtures/ggb_curve_plotter/` oracle
+    (real GGB, 9 unsupported expressions) matches it operation by operation within 1e-8.
 
-    The sampled template also stopped defining the unused `POLE`/`HAS_SIGN_POLE`/
-    `HAS_DEPENDENT_QUOTIENT` macros: the march's join invariant replaced the fixed-x pole
-    guard, and the interval-vs-sampled routing lives in `interval.compute_supported`, so no
-    shader-side policy macro remains. `test_model.py::test_shader_sources_inject_domain`
-    pins `#define POLE` *absent* from the sampled source.
+    `CurveRhiItem._refresh` generates the path when the camera or viewport changes, caches it
+    per `(curve, camera, viewport, line width, colour)`, converts it to screen stroke quads
+    with `stroke_vertices`, and the renderer uploads a static vertex buffer for the RHI path
+    pipeline. The problem expression `-x**2/2 + x*tan(x) - log(cos(x)**(-2))/2`, `x/(1+x^2)`,
+    `x/sqrt(x**2)`, `floor` and `sign` are covered by render and export tests.
+
+    Deleted with the old fallback: `oned_sampled.frag`, `model.shader_sources`,
+    `unbounded_edges`, `_edge_glsl`, `UNIFORM_FILL`, `_pole_spacing`, `_non_negative` and the
+    boundary ray. Items 5/13/44/45/50/51 are historical notes about that superseded
+    renderer; the current tests are `test_ggb_curve_plotter.py`,
+    `test_ggb_path_oracle.py`, the unsupported render smoke cases and
+    `test_export.py::test_an_unsupported_expression_exports_through_the_cpu_curve_plotter`.

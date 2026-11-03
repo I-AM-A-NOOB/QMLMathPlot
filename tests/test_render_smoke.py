@@ -402,11 +402,10 @@ def test_tan_branch_width_does_not_collapse_at_large_y(app: QGuiApplication) -> 
 def test_descent_is_one_wall_not_two(app: QGuiApplication) -> None:
     """A shallower descent view must not fork into two parallel walls.
 
-    When the curve's own samples already reach the viewport's bottom, the boundary ray
-    is redundant — and drawing it next to the visible curve reads as a fork (measured:
-    the ray at x = −1 beside the curve at x ≈ −0.996 in a 0.9-unit-wide view of
-    log(1+x)). The gate is the samples' deepest point; the ray's *top edge* is a
-    separate, higher quantity, and conflating them was the fork.
+    When the curve's own samples already reach the viewport's bottom, an extra
+    extension next to the visible curve reads as a fork (measured: the old ray at
+    x = −1 beside the curve at x ≈ −0.996 in a 0.9-unit-wide view of log(1+x)).
+    The current interval/CurvePlotter path must stay one wall.
     """
     image, _ = _render_plot(app, "log(1+x)", xlim=(-1.5912, -0.4357),
                             ylim=(-6.0641, -5.1712))
@@ -467,9 +466,8 @@ def test_log_descends_into_deep_views(app: QGuiApplication) -> None:
 
     With the viewport panned to y in [-16,-12], the visible curve lies entirely in
     x in [1e-7, 6e-6], hugging the domain boundary x=0; a fixed-width sampling window can
-    only reach log≈-7, so the whole segment would disappear. It is drawn by the "unbounded
-    boundary ray" along x=0, which shows up as a full column of vertical descent hugging
-    the y axis.
+    only reach log≈-7. The renderer's whole-column/normal-infinity rule draws the descent
+    as a full column hugging the y axis.
     """
     image = _render(app, "log(x)", pan_pixels=-2100.0)
     height = image.height()

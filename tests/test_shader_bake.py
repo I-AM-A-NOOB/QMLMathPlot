@@ -18,7 +18,7 @@ X = sp.Symbol("x")
 
 
 def test_baked_stage_matches_use():
-    vert_src, frag_src = model.shader_sources(sp.sin(1 / X))
+    vert_src, frag_src = model.implicit_shader_sources(sp.sympify("x**2 + y**2 - 1"))
     for stage, expected in (("vert", QShader.Stage.VertexStage),
                             ("frag", QShader.Stage.FragmentStage)):
         data = bake(vert_src if stage == "vert" else frag_src, stage).read_bytes()
@@ -29,7 +29,7 @@ def test_baked_stage_matches_use():
 
 def test_baked_shader_covers_every_backend():
     """The target set of qsb --qt6: GLSL(OpenGL) / HLSL(D3D11) / MSL(Metal) / SPIR-V(Vulkan)."""
-    _, frag_src = model.shader_sources(sp.sin(X))
+    _, frag_src = model.implicit_shader_sources(sp.sympify("x**2 + y**2 - 1"))
     shader = QShader.fromSerialized(bake(frag_src, "frag").read_bytes())
     sources = {key.source() for key in shader.availableShaders()}
     assert {

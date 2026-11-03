@@ -23,7 +23,7 @@ def _write(path: Path, age_days: float, size: int = 1024) -> None:
 
 
 def test_bake_uses_the_explicit_cache_and_cache_info_counts_it(tmp_path):
-    vertex_source, _ = model.shader_sources(sp.sin(X))
+    vertex_source = model.implicit_shader_sources(sp.sympify("x**2 + y**2 - 1"))[0]
     path = qsb.bake(vertex_source, "vert", cache_dir=tmp_path)
     assert path.parent == tmp_path and path.suffix == ".qsb"
 
@@ -65,7 +65,7 @@ def test_prune_removes_age_and_lru_entries_and_keeps_unrelated_files(tmp_path):
 def test_bake_runs_automatic_prune_before_use(tmp_path, monkeypatch):
     seen: list[Path] = []
     monkeypatch.setattr(qsb, "_prune_if_due", lambda directory: seen.append(directory))
-    vertex_source, _ = model.shader_sources(sp.sin(X))
+    vertex_source = model.implicit_shader_sources(sp.sympify("x**2 + y**2 - 1"))[0]
     qsb.bake(vertex_source, "vert", cache_dir=tmp_path)
     assert seen and seen[0] == tmp_path
 

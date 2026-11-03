@@ -3,7 +3,8 @@
 A curve knows nothing about the view: the camera decides where we look, the curve decides what is
 drawn. One curve = one fragment shader pass, so ``visible`` is the lever that costs nothing.
 
-Two artists share the class: ``Curve`` draws ``y = f(x)`` (see ``shaders/oned_sampled.frag``) and
+Two artists share the class: ``Curve`` draws ``y = f(x)`` (interval compute, or the CPU
+CurvePlotter port for expressions the interval gate rejects) and
 ``ImplicitCurve`` draws the level set ``F(x, y) = 0`` (``shaders/implicit.frag``).
 They differ only in the shader *sources* — the uniform block, the model roles and the QML side
 are the same — so ``curve_for()`` can pick one from the expression's free symbols.

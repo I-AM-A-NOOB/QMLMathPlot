@@ -6,13 +6,13 @@
 GeoGebra samples one *interval* of x per pixel column and evaluates the whole expression in
 interval arithmetic. The result is a conservative y-enclosure with a topology: empty,
 connected, inverted (two rays around a gap), or whole. This module generates the same
-evaluation as GLSL from a sympy expression, so the renderer keeps its per-pixel GPU march for
-the stroke while the envelope band becomes exact instead of a heuristic.
+evaluation as GLSL from a sympy expression, so the renderer evaluates one interval per
+screen column in the compute shader.
 
 The GLSL side is deliberately small: a value is ``(lo, hi, kind)``; an inverted set stores the
 *excluded* gap; sentinel ``IINF`` stands for infinity (real infinities are not needed and make
 NaN handling worse). Anything this module cannot evaluate raises :class:`Unsupported`, and the
-caller falls back to the previous shader (sampled envelope band + boundary ray).
+caller uses the CPU CurvePlotter port instead.
 
 The interval library is a port of the relevant parts of GeoGebra's
 ``org.geogebra.common.kernel.interval`` (``IntervalSet`` topology, ``IntervalSinCos``,
@@ -37,8 +37,6 @@ __all__ = [
     "as_rational",
     "compute_supported",
     "interval_lib_for",
-    "has_dependent_quotient",
-    "has_sign_pole",
     "interval_glsl",
 ]
 
@@ -257,70 +255,3 @@ def interval_glsl(expr: sp.Expr) -> str:
     result = emitter.emit(expr)
     body = "\n".join(emitter.lines)
     return f"IVal FI(float xlo, float xhi) {{\n{body}\n    return {result};\n}}\n"
-
-
-# --------------------------------------------------------------------------------------------
-# Pole topology (which WHOLE results are safe to fill)
-# --------------------------------------------------------------------------------------------
-def _pole_factors(expr: sp.Expr):
-    out: list[sp.Expr] = []
-    if isinstance(expr, sp.Pow) and expr.exp.is_number and expr.exp.is_negative:
-        out.append(expr.base)
-    if isinstance(expr, sp.tan | sp.sec):
-        out.append(sp.cos(expr.args[0]))
-    elif isinstance(expr, sp.cot | sp.csc):
-        out.append(sp.sin(expr.args[0]))
-    for arg in expr.args:
-        out.extend(_pole_factors(cast(sp.Expr, arg)))
-    return out
-
-
-def _changes_sign(factor: sp.Expr) -> bool:
-    # Even powers and absolute values do not change sign at a zero; their poles send both
-    # branches to the same infinity and a filled column is the true one-sided image.
-    if isinstance(factor, sp.Pow) and factor.exp.is_Integer and int(factor.exp) % 2 == 0:
-        return False
-    return not factor.has(sp.Abs)
-
-
-def has_sign_pole(expr: sp.Expr) -> bool:
-    """Whether a WHOLE column may be filled: a sign-changing pole sends branches to ±inf.
-
-    ``tan`` (cos factor) and ``1/x`` qualify; ``x/sqrt(x**2)`` does not (its factor is x**2), so
-    a jump is left to the march's join invariant instead of being flooded.
-    """
-    return any(_changes_sign(factor) for factor in _pole_factors(expr))
-
-
-def has_dependent_quotient(expr: sp.Expr) -> bool:
-    """Whether x survives outside a denominator that also contains x.
-
-    That is the pattern whose interval extension explodes even though the function is bounded:
-    ``x/sqrt(x**2)`` is ±1, but ``x * 1/[0,h]`` is unbounded. ``sin(1/x)`` has x only inside
-    the denominator and is not flagged. Used to veto an unbounded *band* from such a column;
-    the march still draws the true jump.
-
-    A **sign pole** exempts the expression: there the quotient is genuinely unbounded at the
-    denominator's zero, so the interval topology (inverted/whole + ``JoinLines``) is the right
-    renderer. Without this exemption a mixed expression such as
-    ``-x**2/2 + x*tan(x) - log(1/cos(x)**2)/2`` was sent to the sampled march, whose budget
-    could not walk the steep branches (only the flat parts were drawn). ``x/sqrt(x**2)`` has
-    no sign pole and stays sampled.
-    """
-    has_denominator = False
-
-    def strip(node: sp.Expr) -> sp.Expr:
-        nonlocal has_denominator
-        if isinstance(node, sp.Pow) and node.exp.is_number and node.exp.is_negative:
-            has_denominator = True
-            return sp.Integer(1)
-        if not node.args:
-            return node
-        return node.func(*[strip(cast(sp.Expr, arg)) for arg in node.args])
-
-    outside = strip(expr)
-    return (
-        has_denominator
-        and sp.Symbol("x") in outside.free_symbols
-        and not has_sign_pole(expr)
-    )

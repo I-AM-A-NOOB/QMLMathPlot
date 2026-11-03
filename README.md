@@ -580,20 +580,15 @@ same state machine (topology in, screen-space segments out).
    the compute path from the expression). Expressions
    GGB's `IntervalFunctionSupport` rejects — `floor`, `sign`, `Min/Max`, `Piecewise`, and
    dependent quotients such as `x/sqrt(x**2)` (GGB's algebra simplifies it to `sgn`) — use
-   the sampled fragment: arc-length marching, the join invariant, the envelope band and the
-   boundary ray. Implicit curves always use their own level-set shader.
+   GGB's classic `CurvePlotter`, ported to `curveplotter.py`: adaptive sampling, continuity
+   checks and a world-space path, stroked by the RHI path pipeline (the CPU owns the path,
+   the GPU owns the stroke). Implicit curves always use their own level-set shader.
 
-Deliberate deviations: a wrapped pole (`exp(tan(x))`) becomes a connected `[0, +inf]`
-column. The rule is a Nyquist test against half the pole spacing (the distance between two
-poles, derived from the expression's period): below it the column is resolved, so the branch
-that approaches +∞ (the side with the larger neighbour high edge) is drawn and the other
-branch is left to the next column; at or above it the column width cannot guarantee one pole
-per column, and a non-negative, pole-only-domain expression fills the attained half-plane
-uniformly instead of leaving a moiré of spike tops. GGB's conservative connector would
-violate the "no line across a pole" invariant. The CPU sampler (`ggb_reference.py`,
-`mpmath.iv`) cannot express a gap, so its pole columns are path breaks; it feeds the same
-state machine. The deep-`log` view is handled by `drawNormalInfinity`'s on-screen test plus
-the whole-column rule, as before.
+Deliberate deviation: `exp(tan(x))` follows GGB's own wrapped-pole behaviour; no special
+fill compensates for it. The CPU sampler (`ggb_reference.py`, `mpmath.iv`) cannot express a
+gap, so its pole columns are path breaks; it feeds the same `ggb_path` state machine. The
+deep-`log` view is handled by `drawNormalInfinity`'s on-screen test plus the whole-column
+rule.
 
 
 ## Tests
@@ -606,11 +601,11 @@ uv run ruff check src tests examples   # bug-level lint (undefined names, unused
 ```
 
 - `test_model.py`: GLSL generation (small integer powers as repeated
-  multiplication, avoiding `pow(x, y)`'s undefined behaviour for x<0), shader
-  injection (including the camera uniform and the mapping), and the camera math
+  multiplication, avoiding `pow(x, y)`'s undefined behaviour for x<0), domain analysis,
+  and the camera math
   (the home view at the first size, resize keeping the scale, an anchored zoom that
   is exactly reversible, the aspect expanding but never cropping, ticks).
-- `test_curve.py`: a failed expression keeps the last working shaders, the style
+- `test_curve.py`: a failed expression keeps the last working expression, the style
   setters are idempotent, and the list model reports the right roles — plus the
   `Expr`/string round-trip accounting (a string is parsed once, an expression never).
 - `test_implicit.py`: the routing by free symbols (and the `ValueError` for a third symbol), the
@@ -734,7 +729,7 @@ Startup to the first frame is about **230 ms**, attributed as follows
 | Qt graphics device init (RHI/D3D11) | **~160 ms** | exactly what the first window's `show→expose` costs; a **bare window (no ShaderEffect) is the same**, so it is not the shader's fault |
 | Window creation + QML load + first frame | ~80 ms | from the second window on (device already created) this is the order of magnitude |
 | `qsb` bake | 0 / ~126 ms | cached by source hash: 0.15 ms on a hit; later `expression` assignments bake on Qt's thread pool, so only the first curve construction blocks (tests force the synchronous path) |
-| Expression analysis (sympy) | 0.6~3 ms | `unbounded_edges` only analyses **polynomial** boundaries (`tan(x)`'s `cos(x)=0` takes 94 ms via solve+limit, while tan diverges fast and sampling is naturally deep enough, so that ray is not needed) |
+| Expression analysis (sympy) | 0.6~3 ms | domain/pole analysis for the interval and implicit renderers; unsupported 1-D expressions go to the CPU CurvePlotter |
 
 Per-frame grab cycles (900×600, `grabToImage` — frame + readback, so an upper bound on
 the GPU cost), steady state on the same window: `sin(1/x)` default **13.6 ms**, `tan(x)`

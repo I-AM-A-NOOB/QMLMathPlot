@@ -7,7 +7,7 @@ The drawing model is **implicit (signed-distance)**: the fragment shader compute
 pixel, the first-order screen-space distance "to the curve", sampling it by **marching
 along the curve at uniform screen-space arc length** (so steep parts keep their width
 and a pole/discontinuity connector can never be formed — see the comment above
-``shaders/oned_sampled.frag``). Cost per frame is proportional to the pixel count and independent
+``shaders/implicit.frag`` or the compute path). Cost per frame is proportional to the pixel count and independent
 of function frequency (oscillatory functions cannot drag the frame rate down through
 aliasing): a column the march cannot resolve is filled as a [min,max] envelope band.
 """
@@ -30,7 +30,6 @@ __all__ = [
     "dfunc_glsl",
     "func_glsl",
     "implicit_shader_sources",
-    "shader_sources",
 ]
 
 
@@ -127,50 +126,6 @@ def _pole_factors(expr: sp.Expr) -> list[sp.Expr]:
     return out
 
 
-def _non_negative(expr: sp.Expr) -> bool:
-    """A conservative test for ``f(x) >= 0`` everywhere it is defined.
-
-    Used only for the undersampled wrapped-pole fill: when the range floor is known, the
-    attained half-plane can be filled uniformly instead of leaving a column-phase moiré.
-    """
-    if expr.is_number:
-        try:
-            return float(expr) >= 0.0
-        except (TypeError, ValueError):  # pragma: no cover - symbolic number
-            return False
-    if isinstance(expr, sp.exp | sp.Abs | sp.cosh):
-        return True
-    if isinstance(expr, sp.Pow):
-        exponent = expr.exp
-        if exponent.is_Integer and int(exponent) % 2 == 0:
-            return True
-        return as_rational(exponent) == sp.Rational(1, 2)   # sqrt
-    if isinstance(expr, sp.Mul | sp.Add):
-        return all(_non_negative(arg) for arg in expr.args)
-    return False
-
-
-def _pole_spacing(expr: sp.Expr) -> float:
-    """The distance between consecutive zeros of the pole factor (world x units).
-
-    ``tan``'s factor is ``cos(x)``: its period is ``2*pi`` and its zeros are ``pi`` apart.
-    A column at least that wide contains a full pole-to-pole interval, so the inner function
-    attains every real value and a wrapped pole (``exp(tan(x))``) has a connected image, not
-    a gap. A non-periodic factor (``x`` for ``1/x``) has a single zero; 0 means "never dense".
-    """
-    spacings: list[float] = []
-    for factor in _pole_factors(expr):
-        period = sp.periodicity(factor, sp.Symbol("x"))
-        if period is None:
-            spacings.append(0.0)
-            continue
-        try:
-            spacings.append(float(period) / 2.0)
-        except (TypeError, ValueError):  # pragma: no cover - exotic period
-            spacings.append(0.0)
-    return min(spacings) if spacings else 0.0
-
-
 def _pole_glsl(expr: sp.Expr, name: str = "x") -> str:
     """GLSL for the product of the expression's pole factors (``1.0`` when there are none).
 
@@ -218,87 +173,6 @@ def _domain_conditions(expr: sp.Expr) -> list[sp.Expr]:
     for arg in expr.args:
         out.extend(_domain_conditions(arg))
     return out
-
-
-def _domain_is_pole_only(expr: sp.Expr) -> bool:
-    """True when every domain condition is just "denominator != 0" (tan, sec, 1/x, …).
-
-    Those functions are defined everywhere except at the poles, where the value itself
-    blows up and the NaN/inf test already rejects the sample. Evaluating the predicate
-    again for every sample is then pure overhead.
-    """
-    return all(isinstance(cond, sp.Ne) and cond.rhs == 0 for cond in _domain_conditions(expr))
-
-
-def unbounded_edges(expr: sp.Expr, name: str = "x") -> list[tuple[float, bool, bool]]:
-    """Points on a domain boundary where the function genuinely tends to ±∞:
-    [(boundary x, tends to -∞?, tends to +∞?)].
-
-    Only **slow divergence** needs this: log(x) tends to -∞ as x→0+, but a fixed-width
-    sampling window can never sample deep enough, so the curve vanishes entirely in a deep
-    viewport. 1/x and tan diverge fast; their sampled values naturally exceed any viewport,
-    so they need no ray (and tan's pole set is infinite, hence not enumerable analytically
-    either).
-    """
-    sym = sp.Symbol(name)
-    poles = _pole_factors(expr)
-    out: list[tuple[float, bool, bool]] = []
-    for cond in _domain_conditions(expr):
-        lhs = cond.lhs if isinstance(cond, (sp.Gt, sp.Ge, sp.Ne)) else None
-        if lhs is None or sym not in lhs.free_symbols:
-            continue
-        # Only polynomial boundaries (x=0, x-1=0, …) are analysed. Non-polynomial ones
-        # (cos(x)=0 for tan) cost ~94ms with solve+limit, and those functions diverge fast
-        # so sampling is naturally deep enough without this ray.
-        if not lhs.is_polynomial(sym):
-            continue
-        try:
-            points = sp.solve(sp.Eq(lhs, 0), sym)
-        except Exception:  # noqa: BLE001 — give up if it can't be solved
-            continue
-        for point in points:
-            if not point.is_number:
-                continue
-            # A boundary that is also a *pole* (a sign-changing denominator vanishes there)
-            # needs no ray: its samples already exceed any viewport, and a ray would draw the
-            # very connector the pole rules remove. This is the difference the module docstring
-            # always claimed ("1/x and tan diverge fast") — it held for tan only because its
-            # boundary is non-polynomial, while `1/x`'s x=0 boundary is polynomial and got a
-            # ray, which drew a pale line across the viewport (measured at x = ±0.014).
-            if any(sp.simplify(f.subs(sym, point)) == 0 for f in poles):
-                continue
-            down = up = False
-            for side in ("+", "-"):
-                try:
-                    lim = sp.limit(expr, sym, point, side)
-                except Exception:  # noqa: BLE001
-                    continue
-                if lim is sp.oo:
-                    up = True
-                elif lim is -sp.oo:
-                    down = True
-            if down or up:
-                out.append((float(point), down, up))
-    return sorted(set(out))
-
-
-def _edge_glsl(expr: sp.Expr) -> tuple[str, str]:
-    """Generate two GLSL fragments: the boundary-hit query and the boundary-direction query
-    (both empty when there is no boundary)."""
-    edges = unbounded_edges(expr)
-    if not edges:
-        return "", ""
-    hit = "\n".join(
-        f"    if ((xa <= {x!r}) && ({x!r} <= xb)"
-        f" && abs({x!r} - 0.5 * (xa + xb)) < abs(best - 0.5 * (xa + xb))) best = {x!r};"
-        for x, _d, _u in edges
-    )
-    du = "\n".join(
-        f"    if (abs(ex - {x!r}) < 1e-9) return vec2({-1.0 if d else 0.0}, {1.0 if u else 0.0});"
-        for x, d, u in edges
-    )
-    return hit, du
-
 
 
 def domain_glsl(expr: sp.Expr, name: str = "x") -> str | None:
@@ -393,34 +267,3 @@ def implicit_shader_sources(expr: sp.Expr) -> tuple[str, str]:
         DOMXY=dom,
         POLEXY=_pole_glsl(expr),
     ))
-
-def shader_sources(expr: sp.Expr) -> tuple[str, str]:
-    """Vertex/fragment sources for the sampled fallback.
-
-    The interval renderer runs only in the compute path (`rhi.path_compute_supported`).
-    This fragment is GGB's classic curve-plotter counterpart, used when the interval path
-    rejects the expression: unsupported operations (floor/sign/Min/Max/Piecewise) or a
-    dependent quotient. GGB's own `IntervalFunctionSupport` rejects both classes too, so the
-    interval path never sees them.
-    """
-    # f'(x) is the march's slope bootstrap, an optimization rather than a requirement:
-    # an unprintable derivative (Derivative(floor(x)) and friends) must not kill the
-    # curve. A NaN bootstrap sends the march down its probing path instead.
-    try:
-        dfunc = dfunc_glsl(expr)
-    except Exception:  # noqa: BLE001 — the printer raises its own error types
-        dfunc = "0.0 / 0.0"
-    edge_hit, edge_du = _edge_glsl(expr)
-    # Domain: the macro argument is parenthesized, same reasoning as F (macros are
-    # text substitution).
-    dom = domain_glsl(expr, "u")
-    frag = render(
-        "oned_sampled.frag",
-        FUNC=func_glsl(expr, "u", wrap=True),
-        DFUNC=dfunc,
-        EDGEHIT=edge_hit,
-        EDGEDU=edge_du,
-        DOM=f"#define DOM(u) ({dom})" if dom else "#define DOM(u) true",
-        DOMS="#define DOMS(u) true" if _domain_is_pole_only(expr) else "#define DOMS(u) DOM(u)",
-    )
-    return (VERTEX_SHADER, frag)

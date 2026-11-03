@@ -9,9 +9,13 @@ The derived files are:
 - `src/qmlmathplot/ggb_path.py`
 - `src/qmlmathplot/ggb_compute.py`
 - `src/qmlmathplot/ggb_reference.py`
+- `src/qmlmathplot/curveplotter.py`
+- `src/qmlmathplot/shaders/path_state.glsl`
 
 Original work: GeoGebra, `source/shared/common/src/main/java/org/geogebra/common/euclidian/plot/interval/`
 and `source/shared/common/src/main/java/org/geogebra/common/kernel/interval/`,
+and the Cartesian `CurvePlotter`/`CurveSegmentPlotter` under
+`source/shared/common/src/main/java/org/geogebra/common/euclidian/plot/`,
 Copyright (c) GeoGebra GmbH, licensed under the **European Union Public Licence v. 1.2
 (EUPL-1.2)**. The full licence text is in [`LICENSES/EUPL-1.2.txt`](LICENSES/EUPL-1.2.txt);
 the upstream project is <https://github.com/geogebra/geogebra>.

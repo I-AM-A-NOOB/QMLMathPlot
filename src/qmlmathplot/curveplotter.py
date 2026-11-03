@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2007-2026 GeoGebra GmbH
+# SPDX-License-Identifier: GPL-3.0-only
+# Portions derived from GeoGebra (EUPL-1.2); see THIRD_PARTY_NOTICES.md.
 """GGB's adaptive CurvePlotter, ported for 1-D functions.
 
 This is the semantic core of ``org.geogebra.common.euclidian.plot.CurvePlotter`` /

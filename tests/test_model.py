@@ -45,16 +45,6 @@ def test_fractional_powers_use_the_real_branch():
     assert model.domain_glsl(X ** sp.Rational(-1, 3)) == "(x != 0)"
 
 
-def test_the_fragment_is_only_the_sampled_fallback():
-    """The interval renderer is compute-only; GGB's eligibility rejects floor/sign and
-    dependent quotients, so the fragment is the classic sampled plotter counterpart."""
-    for expression in (sp.sin(1 / X), sp.floor(X), X / sp.sqrt(X**2)):
-        _, fragment = model.shader_sources(expression)
-        assert "IVal FI(" not in fragment
-        assert "#define MARCH 12" in fragment
-        assert "@" not in fragment
-
-
 def test_dfunc_glsl():
     assert model.dfunc_glsl(sp.sin(1 / X)) == "-COS(1.0/x)/(x*x)"
 
@@ -65,71 +55,12 @@ def test_func_glsl_wraps_macro_parameter():
     assert model.func_glsl(sp.sin(1 / X), "u", wrap=True) == "SIN(1.0/(u))"
 
 
-def test_shader_sources_inject_expression():
-    vert, frag = model.shader_sources(sp.sin(1 / X))
-    assert vert == model.VERTEX_SHADER
-    assert "@FUNC@" not in frag
-    assert "@DFUNC@" not in frag
-    # Macros are textual substitution: the argument needs parentheses, otherwise
-    # F(x - h) would expand to 1.0/x - h
-    assert "#define F(u) (SIN(1.0/(u)))" in frag
-    assert "#define DF -COS(1.0/x)/(x*x)" in frag  # the derivative is still evaluated in x
-    assert "@DOM@" not in frag and "@POLE@" not in frag and "@EDGEHIT@" not in frag
-
-
-def test_shader_sources_use_the_camera():
-    """The fragment shader maps through the camera (centre + units per logical pixel), not
-    through a view rectangle: the drawing must not depend on a size round-trip."""
-    _, frag = model.shader_sources(sp.sin(X))
-    assert "vec4 camera;" in frag
-    assert "vec4 view;" not in frag
-    assert "float x = camera.x + (vUV.x - 0.5) * size.x * camera.z;" in frag
-    assert "float y = camera.y + (0.5 - vUV.y) * size.y * camera.w;" in frag
-    # the sampling code reads the scales off the camera, not off a span
-    assert "float dx = camera.z;" in frag
-    assert "float sx = 1.0 / camera.z;" in frag
-    assert "float sy = 1.0 / camera.w;" in frag
-
-
 def test_domain_analysis():
     """Domain conditions (where the function's value is defined at all)."""
     assert model.domain_glsl(sp.log(X)) == "(x > 0)"      # default symbol name
     assert model.domain_glsl(sp.log(X), "u") == "(u > 0)"
     assert model.domain_glsl(sp.sqrt(X)) == "(x >= 0)"
     assert model.domain_glsl(X**2) is None               # the whole domain
-
-
-def test_shader_sources_inject_domain():
-    _, frag = model.shader_sources(1 / X)
-    assert "#define DOM(u) ((u != 0))" in frag
-    # The sampled fragment is the march: its join invariant (a segment only joins samples
-    # within the radius) replaced the fixed-x polyline's POLE guard, so the sampled source
-    # no longer defines POLE at all.
-    assert "#define MARCH 12" in frag
-    assert "#define POLE" not in frag
-    _, smooth = model.shader_sources(X**2)
-    assert "#define DOM(u) true" in smooth               # not analysable => identically true
-
-
-def test_unbounded_edges():
-    """Which domain boundaries need "infinite extension": only the slowly diverging ones.
-
-    log(x) tends to -inf as x->0+, but the sampling window has a fixed width and cannot
-    reach that deep, so in a deep viewport the whole curve would vanish and has to be
-    added back by the analytically derived boundary ray. sqrt(x) is bounded at 0 (0), and
-    sin(1/x) has no limit at 0, so neither needs it. A boundary that is *also a pole* gets no
-    ray either: its samples already exceed any viewport, and the ray would draw exactly the
-    connector the pole rules remove — measured, `1/x` grew a pale vertical line at x = ±0.014
-    when it did get one (AGENTS item 12).
-    """
-    assert model.unbounded_edges(sp.log(X)) == [(0.0, True, False)]
-    assert model.unbounded_edges(sp.sqrt(X)) == []
-    assert model.unbounded_edges(sp.sin(1 / X)) == []
-    assert model.unbounded_edges(X**2) == []
-    assert model.unbounded_edges(1 / X) == []
-    assert model.unbounded_edges(1 / X**2) == []
-    # ... while a log-type boundary next to a pole still gets its ray.
-    assert [point for point, _down, _up in model.unbounded_edges(sp.log(X) + 1 / (X - 1))] == [0.0]
 
 
 # --------------------------------------------------------------------------
@@ -461,29 +392,6 @@ def test_the_interval_library_is_trimmed_to_the_functions_the_expression_uses():
     assert "i_sin(" in sine and "i_tan(" not in sine
     assert "i_pow_int(" in square and "i_sin(" not in square
     assert len(sine) < len(INTERVAL_LIB) // 3
-
-
-def test_pole_spacing_is_half_the_pole_factor_period():
-    """The wrapped-pole fill threshold is derived from the expression, not from a zoom."""
-    from qmlmathplot.model import _pole_spacing
-
-    assert _pole_spacing(sp.tan(X)) == pytest.approx(float(sp.pi))
-    assert _pole_spacing(sp.tan(2 * X)) == pytest.approx(float(sp.pi) / 2)
-    assert _pole_spacing(1 / X) == 0.0          # a single zero: never "dense"
-    assert _pole_spacing(sp.exp(sp.tan(X))) == pytest.approx(float(sp.pi))
-    assert _pole_spacing(sp.sin(X)) == 0.0      # no pole factor
-
-
-def test_non_negative_detection():
-    """The uniform fill needs a conservative range floor; it must not guess."""
-    from qmlmathplot.model import _non_negative
-
-    assert _non_negative(sp.exp(sp.tan(X)))
-    assert _non_negative(sp.sqrt(sp.tan(X)))
-    assert _non_negative(sp.Abs(sp.tan(X)))
-    assert _non_negative(sp.exp(sp.tan(X)) + 1)
-    assert not _non_negative(sp.tan(X))
-    assert not _non_negative(-sp.exp(sp.tan(X)))
 
 
 def test_compute_source_accepts_a_parsed_expression(monkeypatch):
