@@ -15,16 +15,17 @@ from qmlmathplot.interval_reference import (
     CONNECTED,
     EMPTY,
     INVERTED,
+    OVERFLOW,
     WHOLE,
     evaluate,
 )
 
-REVERSE = {EMPTY: "EMPTY", CONNECTED: "CONNECTED", INVERTED: "INVERTED", WHOLE: "WHOLE"}
+REVERSE = {EMPTY: "EMPTY", CONNECTED: "CONNECTED", INVERTED: "INVERTED", WHOLE: "WHOLE", OVERFLOW: "OVERFLOW"}
 EXACT = [
     "cube_root", "rational_sq", "sin_inv_default", "tan_default", "tan_wide_y",
-    "tan_double", "inv_default",
+    "tan_double", "inv_default", "ln_default", "exp_tan_wide",
 ]
-KNOWN = ["cot_sec", "ln_default", "ln_cosh", "exp_tan_wide", "sqrt_tan_cot"]
+KNOWN = ["cot_sec", "ln_cosh", "sqrt_tan_cot"]
 
 
 def _num(value):
@@ -34,7 +35,11 @@ def _num(value):
 
 
 def _matches(got, column) -> bool:
-    if REVERSE[got.kind] != column["kind"]:
+    # GGB's FunctionSampler reports an OVERFLOW y as EMPTY; both break the path.
+    got_kind = REVERSE[got.kind]
+    if got_kind == "OVERFLOW" and column["kind"] == "EMPTY":
+        return True
+    if got_kind != column["kind"]:
         return False
     if column["kind"] not in ("CONNECTED", "INVERTED"):
         return True

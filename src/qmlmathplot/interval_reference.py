@@ -20,7 +20,7 @@ TAU = 2.0 * math.pi
 PI = math.pi
 PI_HALF = math.pi / 2.0
 
-EMPTY, CONNECTED, INVERTED, WHOLE = 0, 1, 2, 3
+EMPTY, CONNECTED, INVERTED, WHOLE, OVERFLOW = 0, 1, 2, 3, 4
 
 
 class Unsupported(Exception):
@@ -56,6 +56,10 @@ def whole() -> IVal:
     return IVal(-IINF, IINF, WHOLE)
 
 
+def overflow() -> IVal:
+    return IVal(0.0, 0.0, OVERFLOW)
+
+
 def point(v: float) -> IVal:
     return conn(v, v)
 
@@ -69,6 +73,8 @@ def union(a: IVal, b: IVal) -> IVal:
         return b
     if b.kind == EMPTY:
         return a
+    if a.kind == OVERFLOW or b.kind == OVERFLOW:
+        return overflow()
     if a.kind == WHOLE or b.kind == WHOLE:
         return whole()
     if a.kind == CONNECTED and b.kind == CONNECTED:
@@ -106,6 +112,8 @@ def add_inv_conn(inv: IVal, con: IVal) -> IVal:
 def add(a: IVal, b: IVal) -> IVal:
     if a.kind == EMPTY or b.kind == EMPTY:
         return empty()
+    if a.kind == OVERFLOW or b.kind == OVERFLOW:
+        return overflow()
     if a.kind == WHOLE or b.kind == WHOLE:
         return whole()
     if a.kind == INVERTED and b.kind == INVERTED:
@@ -130,6 +138,8 @@ def mul_conn(a: IVal, b: IVal) -> IVal:
 def mul(a: IVal, b: IVal) -> IVal:
     if a.kind == EMPTY or b.kind == EMPTY:
         return empty()
+    if a.kind == OVERFLOW or b.kind == OVERFLOW:
+        return overflow()
     az = a.kind == CONNECTED and a.lo == 0.0 and a.hi == 0.0
     bz = b.kind == CONNECTED and b.lo == 0.0 and b.hi == 0.0
     if az or bz:
@@ -291,14 +301,21 @@ def _cosh(v: float) -> float:
 def exp(a: IVal) -> IVal:
     if a.kind == EMPTY:
         return a
+    if a.kind == OVERFLOW:
+        return overflow()
     if a.kind != CONNECTED:
         return conn(0.0, IINF)
+    if a.hi > 709.0:
+        return overflow()
     return conn(_exp(a.lo), _exp(a.hi))
 
 
 def log_conn(a: IVal) -> IVal:
-    if a.hi <= 0.0:
+    if a.hi < 0.0:
         return empty()
+    if a.hi == 0.0:
+        # GGB: a connected interval with high == 0 maps to CONNECTED(-inf, -inf).
+        return conn(-IINF, -IINF)
     if a.lo <= 0.0:
         return conn(-IINF, math.log(a.hi))
     return conn(math.log(a.lo), math.log(a.hi))
@@ -307,6 +324,8 @@ def log_conn(a: IVal) -> IVal:
 def log(a: IVal) -> IVal:
     if a.kind == EMPTY:
         return a
+    if a.kind == OVERFLOW:
+        return overflow()
     if a.kind == WHOLE:
         return whole()
     if a.kind == INVERTED:
@@ -408,6 +427,8 @@ def sinh(a: IVal) -> IVal:
 def cosh(a: IVal) -> IVal:
     if a.kind == EMPTY:
         return a
+    if a.kind == OVERFLOW:
+        return overflow()
     if a.kind == WHOLE:
         return conn(1.0, IINF)
     if a.kind == INVERTED:
@@ -415,9 +436,15 @@ def cosh(a: IVal) -> IVal:
             return conn(1.0, IINF)
         return conn(_cosh(min(-a.lo, a.hi)), IINF)
     if a.hi < 0.0:
+        if abs(a.lo) > 710.0:
+            return overflow()
         return conn(_cosh(a.hi), _cosh(a.lo))
     if a.lo >= 0.0:
+        if abs(a.hi) > 710.0:
+            return overflow()
         return conn(_cosh(a.lo), _cosh(a.hi))
+    if abs(min(-a.lo, a.hi)) > 710.0:
+        return overflow()
     return conn(1.0, _cosh(max(-a.lo, a.hi)))
 
 
