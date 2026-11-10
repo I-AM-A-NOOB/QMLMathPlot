@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from qmlmathplot import Figure, Plot
+from qmlmathplot import Plot
 
 
 def test_annotations_and_text_are_model_objects() -> None:
@@ -67,40 +67,6 @@ def test_legend_and_tick_properties() -> None:
         (False, True, 2.0, 5.0)
     assert plot.ticks_top and plot.ticks_right and plot.minor_ticks
     assert plot.spine_top is False
-
-
-def test_axes_facade_annotation_legend_ticks_and_guides() -> None:
-    figure = Figure()
-    axes = figure.gca()
-    annotation = axes.annotate("point", (1.0, 2.0), (12.0, -8.0),
-                               arrowprops={"color": "#123456"})
-    text = axes.text(0.0, 0.0, "origin")
-    assert annotation.arrow is True and text.arrow is False
-    assert figure.plot.annotations.rowCount() == 2
-
-    axes.legend(loc="lower right")
-    assert figure.plot.legend is True
-    assert figure.plot.legend_position == "lower right"
-    axes.legend(False)
-    assert figure.plot.legend is False
-
-    axes.set_xticks([0, 5], ["0", "five"])
-    axes.set_yticks([-1, 1])
-    assert figure.plot.xticks == [[0.0, "0"], [5.0, "five"]]
-    assert figure.plot.yticks == [[-1.0, "-1"], [1.0, "1"]]
-
-    axes.tick_params(axis="x", length=8.0, width=2.0, pad=4.0, top=True)
-    assert figure.plot.tick_length == 8.0 and figure.plot.tick_width == 2.0
-    assert figure.plot.tick_pad == 4.0 and figure.plot.ticks_top is True
-
-    axes.grid(True, axis="x")
-    assert figure.plot.grid is True
-    assert figure.plot.grid_x is True
-    figure.plot.grid_y = False
-    assert figure.plot.grid_y is False
-
-    assert axes.axhline(0.5).kind == "h"
-    assert axes.axvline(0.25).kind == "v"
 
 
 def test_handoff_maps_labels_legend_annotations_guides_and_ticks() -> None:

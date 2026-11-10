@@ -30,10 +30,13 @@ from PySide6.QtGui import (
 )
 from PySide6.QtQuick import QQuickRhiItem, QQuickRhiItemRenderer
 
-from .ggb_compute import PATH_FRAGMENT, PATH_VERTEX, path_compute_source, path_subsamples
 from .curveplotter import PlotView, plot_curve, stroke_vertices
-from .interval import compute_supported as path_compute_supported
 from .qsb import bake
+from .shaderbuild import shader_source
+
+#: The stroke pipeline shared by every CPU-generated path (CurvePlotter and, later, data).
+PATH_VERTEX = shader_source("path.vert")
+PATH_FRAGMENT = shader_source("path.frag")
 
 __all__ = ["CurveRhiItem"]
 
@@ -183,26 +186,25 @@ class _Renderer(QQuickRhiItemRenderer):
         self._path_vertex_pipeline = pipe
 
     def _path_resources(self, spec):
-        expression = spec[4]
-        subsamples = path_subsamples(expression)
-        cols = int(max(1.0, self._size[0]) * subsamples)
+        shader_url = spec[4]
+        key = shader_url.toString()
+        cols = int(max(1.0, self._size[0]))
         size = cols * 18 * 8 * 4
-        buf = self._path_buffers.get(expression)
-        if buf is None or self._path_buffer_sizes.get(expression) != size:
+        buf = self._path_buffers.get(key)
+        if buf is None or self._path_buffer_sizes.get(key) != size:
             buf = self.rhi().newBuffer(
                 QRhiBuffer.Static,
                 QRhiBuffer.StorageBuffer | QRhiBuffer.VertexBuffer,
                 size)
             if not buf.create():
                 raise RuntimeError("cannot create the path vertex buffer")
-            self._path_buffers[expression] = buf
-            self._path_buffer_sizes[expression] = size
-            self._path_compute_pipelines.pop(expression, None)
-            self._path_compute_srbs.pop(expression, None)
-        pipe = self._path_compute_pipelines.get(expression)
+            self._path_buffers[key] = buf
+            self._path_buffer_sizes[key] = size
+            self._path_compute_pipelines.pop(key, None)
+            self._path_compute_srbs.pop(key, None)
+        pipe = self._path_compute_pipelines.get(key)
         if pipe is None:
-            shader = _qshader(QUrl.fromLocalFile(
-                str(bake(path_compute_source(expression), "comp"))))
+            shader = _qshader(shader_url)
             pipe = self.rhi().newComputePipeline()
             pipe.setShaderStage(QRhiShaderStage(QRhiShaderStage.Compute, shader))
             srb = self.rhi().newShaderResourceBindings()
@@ -217,9 +219,9 @@ class _Renderer(QQuickRhiItemRenderer):
             pipe.setShaderResourceBindings(srb)
             if not pipe.create():
                 raise RuntimeError("cannot create the path compute pipeline")
-            self._path_compute_pipelines[expression] = pipe
-            self._path_compute_srbs[expression] = srb
-        return buf, pipe, self._path_compute_srbs[expression], cols
+            self._path_compute_pipelines[key] = pipe
+            self._path_compute_srbs[key] = srb
+        return buf, pipe, self._path_compute_srbs[key], cols
 
     def _cpu_buffer(self, row: int, spec) -> tuple[QRhiBuffer | None, int]:
         vertices = spec[5][0] if len(spec) > 5 and spec[5] else b""
@@ -280,7 +282,7 @@ class _Renderer(QQuickRhiItemRenderer):
                     shader_draws.append((pipe, offset))
             elif spec[3] == "cpu":
                 cpu_draws.append((row, spec))
-            else:
+            else:                          # "compute"
                 buf, compute, csrb, cols = self._path_resources(spec)
                 path_draws.append((buf, compute, csrb, offset, cols))
         if not shader_draws and not path_draws and not cpu_draws:
@@ -392,7 +394,7 @@ class CurveRhiItem(QQuickRhiItem):
 
     def _cpu_vertices(self, curve, camera: QVector4D, width: float, height: float):
         color = curve.color
-        key = (id(curve), str(curve.expr), float(curve.lineWidth),
+        key = (id(curve), curve.mathSource, float(curve.lineWidth),
                color.redF(), color.greenF(), color.blueF(), color.alphaF(),
                camera.x(), camera.y(), camera.z(), camera.w(), width, height)
         cached = self._cpu_cache.get(key)
@@ -405,7 +407,7 @@ class CurveRhiItem(QQuickRhiItem):
         view = PlotView(cx - width * 0.5 * sx, cx + width * 0.5 * sx,
                         cy - height * 0.5 * sy, cy + height * 0.5 * sy,
                         int(width), int(height))
-        operations = plot_curve(curve.expr, view, view.xmin, view.xmax)
+        operations = plot_curve(curve.mathSource, view, view.xmin, view.xmax)
         vertices, count = stroke_vertices(
             operations, view, (width, height), curve.lineWidth,
             (color.redF(), color.greenF(), color.blueF(), color.alphaF()))
@@ -426,29 +428,31 @@ class CurveRhiItem(QQuickRhiItem):
                 curve = model.at(row)
                 if curve is None or not curve.visible:
                     continue
-                expr = curve.expr
-                compute = not curve.implicit and path_compute_supported(expr)
-                if curve.implicit:
-                    url = curve.fragmentShader
-                    if not url.isLocalFile():
-                        continue
+                # The program decides the renderer; a curve whose program has not arrived
+                # yet simply is not in this snapshot (it keeps drawing the previous frame).
+                compute_url = curve.computeShader
+                fragment_url = curve.fragmentShader
+                if compute_url.isLocalFile():
+                    url = QUrl()
+                    kind = "compute"
+                    cpu = None
+                elif fragment_url.isLocalFile():
+                    url = fragment_url
                     kind = None
                     cpu = None
-                elif compute:
-                    url = QUrl()
-                    kind = str(expr)
-                    cpu = None
-                else:
+                elif curve.mathSource:
                     url = QUrl()
                     kind = "cpu"
                     cpu = self._cpu_vertices(curve, camera, width, height)
+                else:
+                    continue
                 col = curve.color
                 self._snapshot.append((
                     QUrl(url),
                     float(curve.lineWidth),
                     (col.redF(), col.greenF(), col.blueF(), col.alphaF()),
                     kind,
-                    expr,
+                    QUrl(compute_url),
                     cpu,
                 ))
         self.update()

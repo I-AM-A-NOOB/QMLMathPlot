@@ -23,7 +23,7 @@ def test_cpu_renderer_draws_a_curve(app: QGuiApplication) -> None:
     plot = Plot()
     plot.add_curve("tan(x)")
     root.setProperty("plot", plot)
-    root.setProperty("cpuRenderer", True)
+    root.setProperty("renderMode", "cpu")
     view.show()
     for _ in range(200):
         app.processEvents()

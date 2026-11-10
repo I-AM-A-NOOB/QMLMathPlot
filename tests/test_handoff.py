@@ -201,9 +201,12 @@ def test_the_hand_off_skips_implicit_curves() -> None:
         implicit_only.to_sympy()
 
 
-def test_the_hand_off_does_not_reparse_the_expression(monkeypatch) -> None:
-    """Both hand-offs use the expression the curve cached: no ``sympify`` on the string."""
+def test_the_hand_off_reuses_the_cached_expression(monkeypatch) -> None:
+    """The deprecated sympy view is parsed once per expression, then cached."""
     import sympy as sp
+
+    plot = _plot()
+    plot.to_matplotlib(samples=20)          # the first access parses the text, once
 
     calls: list[object] = []
     real = sp.sympify
@@ -212,11 +215,10 @@ def test_the_hand_off_does_not_reparse_the_expression(monkeypatch) -> None:
         calls.append(value)
         return real(value, *args, **kwargs)
 
-    plot = _plot()
     monkeypatch.setattr(sp, "sympify", counting)
     plot.to_matplotlib(samples=20)
     plot.to_sympy(samples=20)
-    assert calls == [], "the hand-off must not re-parse the expression string"
+    assert calls == [], "the hand-off must reuse the cached expression"
 
 
 def test_to_sympy_needs_a_visible_curve() -> None:

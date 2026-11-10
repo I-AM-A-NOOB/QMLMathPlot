@@ -86,13 +86,13 @@ def test_assigning_an_expression_reroutes_the_same_curve() -> None:
     assert curve.implicit is False and curve.fragmentShader == one_d_shader
 
 
-def test_a_third_symbol_raises() -> None:
+def test_a_third_symbol_is_reported_on_the_curve() -> None:
+    """Routing happens in the calculator now, so the error arrives with the program."""
     model_ = CurveListModel()
-    with pytest.raises(ValueError, match="substituted first"):
-        model_.add_curve("a*sin(x)")
-    with pytest.raises(ValueError, match="only x"):
-        model_.add_curve("x**2 + t**2 - 1")
-    assert len(model_) == 0, "a rejected expression must not be added"
+    first = model_.add_curve("a*sin(x)")
+    assert "substitute parameters first" in first.error
+    second = model_.add_curve("x**2 + t**2 - 1")
+    assert "only x" in second.error
 
 
 def test_add_implicit_is_explicit() -> None:

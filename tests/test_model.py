@@ -370,7 +370,7 @@ def test_the_renderer_policy_is_capability_based_not_a_string_list():
     `1/x` and `sin(1/x)` are the cases the old `("tan(x)", "log(x)")` whitelist sent to the
     fragment fallback even though their interval topology is well defined.
     """
-    from qmlmathplot.rhi import path_compute_supported
+    from qmlmathplot.interval import compute_supported as path_compute_supported
 
     for expression in ("tan(x)", "tan(2*x)", "log(x)", "log(1+x)", "1/x", "sin(1/x)",
                        "x**2", "sin(x)", "x**(1/3)"):

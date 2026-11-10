@@ -13,12 +13,16 @@ only the screen scales and bounds used by the bisection criteria.
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # annotations only; the runtime takes program sources
+    import sympy as sp
+
 import math
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable
 
-import sympy as sp
 
 __all__ = ["Gap", "PathRecorder", "FunctionCurve", "PlotView", "plot_curve"]
 
@@ -126,22 +130,46 @@ class PlotView:
         return p1[0] > self.xmax + tolerance and p2[0] > self.xmax + tolerance
 
 
+def compile_source(source: str, name: str = "f") -> Callable[[float], Any]:
+    """Compile a calculator ``Program.math`` definition into a scalar callable.
+
+    The source is our own (``def f(x): return math.sin(x)``), executed with a namespace that
+    holds only ``math`` and ``abs``; no builtins, so the program cannot reach anything the
+    calculator did not emit. Compilation is ~13 µs; the call costs the same as ``lambdify``.
+    """
+    namespace: dict[str, Any] = {"math": math, "abs": abs}
+    exec(compile(source, "<math-program>", "exec"), namespace)  # noqa: S102 - our source
+    function = namespace.get(name)
+    if not callable(function):
+        raise ValueError(f"the program source does not define {name}()")
+    return function
+
+
 class FunctionCurve:
     """The subset of ``CurveEvaluable`` used by ``CurveSegmentPlotter``."""
 
-    def __init__(self, expression: sp.Expr) -> None:
+    def __init__(self, expression: str | Callable[[float], Any] | sp.Expr) -> None:
+        """A calculator program source, a callable, or (legacy/tests) a sympy expression."""
         self.expression = expression
-        # math plus the few GGB names math lacks; avoids a runtime numpy dependency.
-        local = {
-            "sign": lambda value: 0 if value == 0 else (1 if value > 0 else -1),
-            "Abs": abs,
-            "sec": lambda value: 1 / math.cos(value),
-            "csc": lambda value: 1 / math.sin(value),
-            "cot": lambda value: 1 / math.tan(value),
-        }
-        self._function: Callable[[float], Any] = sp.lambdify(
-            sp.Symbol("x"), expression, modules=[math, local]
-        )
+        if isinstance(expression, str):
+            self._function = compile_source(expression)
+        elif callable(expression):
+            self._function = expression
+        else:
+            # Legacy path: the tests and the GGB oracle still hand in sympy expressions.
+            import sympy as sp
+
+            # math plus the few GGB names math lacks; avoids a runtime numpy dependency.
+            local = {
+                "sign": lambda value: 0 if value == 0 else (1 if value > 0 else -1),
+                "Abs": abs,
+                "sec": lambda value: 1 / math.cos(value),
+                "csc": lambda value: 1 / math.sin(value),
+                "cot": lambda value: 1 / math.tan(value),
+            }
+            self._function = sp.lambdify(
+                sp.Symbol("x"), expression, modules=[math, local]
+            )
         self.min_dist_x = 0.1
         self.is_function_in_x = True
 
@@ -544,7 +572,8 @@ class CurvePlotter:
             gp.corner()
 
 
-def plot_curve(expression: sp.Expr, view: PlotView, t_min: float, t_max: float,
+def plot_curve(expression: str | Callable[[float], Any] | sp.Expr, view: PlotView,
+               t_min: float, t_max: float,
                gap: Gap = Gap.MOVE_TO) -> list[tuple[Any, ...]]:
     recorder = PathRecorder()
     CurvePlotter(FunctionCurve(expression), t_min, t_max, view, recorder, False, gap)

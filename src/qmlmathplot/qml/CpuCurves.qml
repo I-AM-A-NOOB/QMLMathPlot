@@ -1,6 +1,6 @@
 // CPU fallback: one QPainterPath per curve. Used when RHI/compute is unavailable.
 import QtQuick
-import QmlMathPlot 1.0
+import QmlMathPlot 2.0
 
 Item {
     id: cpuRoot
@@ -12,6 +12,7 @@ Item {
             anchors.fill: parent
             visible: model.visible
             expression: model.expression
+            mathSource: model.mathSource
             color: model.color
             lineWidth: model.lineWidth
             camera: Qt.vector4d(cpuRoot.view.plot.camera.centre.x,

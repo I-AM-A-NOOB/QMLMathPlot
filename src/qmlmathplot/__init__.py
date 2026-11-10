@@ -20,7 +20,7 @@ QtWidgets layout in one line:
 
 Qt Quick (QML) — the component plus the model:
 
-    import QmlMathPlot 1.0
+    import QmlMathPlot 2.0
     PlotView { plot: myPlot; anchors.fill: parent }
 
     from PySide6.QtGui import QGuiApplication
@@ -50,30 +50,24 @@ Demos: ``examples/minimal.py``, ``examples/explorer_qtwidgets.py``,
 
 from typing import TYPE_CHECKING
 
-from .camera import HOME_SIZE, HOME_VIEW, Camera, nice_ticks
-from .curve import Curve, CurveListModel, ImplicitCurve
-from .figure import Axes, Figure
-from .input import ViewInput
-from .overlay import Annotation, Guide
-from .plot import Plot
-from .qsb import cache_dir, cache_info, clear_cache, prune_cache
-from .view import QML_MAJOR, QML_MINOR, QML_URI, qml_component_path, register_qml_types
-
 if TYPE_CHECKING:  # only for type checkers; at runtime the module-level __getattr__ is used
-    from .canvas import FigureCanvasQt
+    from .camera import HOME_SIZE, HOME_VIEW, Camera, nice_ticks
+    from .curve import Curve, CurveListModel, ImplicitCurve
+    from .input import ViewInput
+    from .overlay import Annotation, Guide
+    from .plot import Plot
+    from .qsb import cache_dir, cache_info, clear_cache, prune_cache
+    from .view import QML_MAJOR, QML_MINOR, QML_URI, qml_component_path, register_qml_types
     from .widget import MathPlotWidget
 
 __all__ = [
     "Annotation",
-    "Axes",
     "cache_dir",
     "cache_info",
     "Camera",
     "clear_cache",
     "Curve",
     "CurveListModel",
-    "Figure",
-    "FigureCanvasQt",
     "Guide",
     "HOME_SIZE",
     "HOME_VIEW",
@@ -91,18 +85,45 @@ __all__ = [
 ]
 
 
+#: name -> (module, attribute). ``None`` for the attribute means "the module itself".
+_LAZY: dict[str, tuple[str, str | None]] = {
+    "Annotation": (".overlay", "Annotation"),
+        "cache_dir": (".qsb", "cache_dir"),
+    "cache_info": (".qsb", "cache_info"),
+    "Camera": (".camera", "Camera"),
+    "clear_cache": (".qsb", "clear_cache"),
+    "Curve": (".curve", "Curve"),
+    "CurveListModel": (".curve", "CurveListModel"),
+            "Guide": (".overlay", "Guide"),
+    "HOME_SIZE": (".camera", "HOME_SIZE"),
+    "HOME_VIEW": (".camera", "HOME_VIEW"),
+    "ImplicitCurve": (".curve", "ImplicitCurve"),
+    "MathPlotWidget": (".widget", "MathPlotWidget"),
+    "nice_ticks": (".camera", "nice_ticks"),
+    "Plot": (".plot", "Plot"),
+    "prune_cache": (".qsb", "prune_cache"),
+        "qml_component_path": (".view", "qml_component_path"),
+    "QML_MAJOR": (".view", "QML_MAJOR"),
+    "QML_MINOR": (".view", "QML_MINOR"),
+    "QML_URI": (".view", "QML_URI"),
+    "register_qml_types": (".view", "register_qml_types"),
+    "ViewInput": (".input", "ViewInput"),
+}
+
+
 def __getattr__(name: str) -> object:
-    """QtWidgets-backed names are lazy, so pure-QML use never loads QtWidgets."""
-    if name == "MathPlotWidget":
-        from .widget import MathPlotWidget
+    """Resolve public names lazily.
 
-        return MathPlotWidget
-    if name == "FigureCanvasQt":
-        from .canvas import FigureCanvasQt
+    Nothing is imported at package-import time: ``import qmlmathplot`` must not load Qt or
+    sympy, so a host that only needs the calculator protocol (or a QML-only app) pays for
+    nothing it does not use. The same laziness keeps the calculator process free of Qt.
+    """
+    target = _LAZY.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    from importlib import import_module
 
-        return FigureCanvasQt
-    if name == "pyplot":
-        from importlib import import_module
-
-        return import_module(".pyplot", __name__)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module = import_module(target[0], __name__)
+    value = module if target[1] is None else getattr(module, target[1])
+    globals()[name] = value
+    return value

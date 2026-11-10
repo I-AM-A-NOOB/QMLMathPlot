@@ -73,43 +73,34 @@ def test_curve_signals_fire_on_real_changes_only() -> None:
     assert seen["style"] == 2                                 # …and nothing on a repeat
 
 
-def test_expression_accepts_a_string_and_a_sympy_expression(monkeypatch) -> None:
-    """The parse happens once, at assignment: an ``Expr`` is never stringified and re-parsed,
-    the canonical string is what identifies the expression, and a real change still re-bakes."""
-    calls: list[object] = []
-    real = sp.sympify
+def test_expression_accepts_a_string_and_a_sympy_expression() -> None:
+    """Both input forms end up as the same canonical text; a repeat assignment is free.
 
-    def counting(value, *args, **kwargs):
-        calls.append(value)
-        return real(value, *args, **kwargs)
-
-    monkeypatch.setattr(sp, "sympify", counting)
+    The parsed form lives in the calculator's ``Program`` now, so a sympy object is converted
+    to its canonical string exactly once and the model never parses it again.
+    """
     x = sp.Symbol("x")
 
-    curve = Curve(sp.floor(x))                        # an expression: no parse at all
-    assert calls == [], "an Expr input must not be stringified and re-parsed"
+    curve = Curve(sp.floor(x))
     assert curve.expression == "floor(x)" and curve.expr == sp.floor(x)
 
-    curve.expression = "floor(2*x)"                   # a string: exactly one parse
-    assert calls == ["floor(2*x)"]
+    changed = []
+    curve.expressionChanged.connect(lambda: changed.append(curve.expression))
+    curve.expression = "floor(2*x)"
+    assert curve.expr == sp.floor(2 * x) and changed == ["floor(2*x)"]
 
-    curve.expression = sp.floor(2 * x)                # the same expression, as an object
-    assert calls == ["floor(2*x)"], "the canonical string already matches"
-    assert curve.expr == sp.floor(2 * x)
-    curve.expression = "floor(2*x)"                   # and a repeated string is free too
-    assert calls == ["floor(2*x)"]
+    curve.expression = sp.floor(2 * x)               # the same canonical string
+    assert changed == ["floor(2*x)"], "a repeated expression must not re-request"
 
-    curve.expression = sp.floor(3 * x)                # a real change: one string conversion
-    assert calls == ["floor(2*x)"], "still no parse"
+    curve.expression = sp.floor(3 * x)
     assert curve.expression == "floor(3*x)" and curve.expr == sp.floor(3 * x)
 
-    curve.expression = "floor("                       # unparsable: one attempt, expression kept
-    assert calls == ["floor(2*x)", "floor("]
-    assert curve.error and curve.expression == "floor(" and curve.expr == sp.floor(3 * x)
+    curve.expression = "floor("
+    assert curve.error and curve.expression == "floor("
+    assert curve.expr == sp.floor(3 * x), "the last working expression survives"
 
-    plot = Plot()                                     # the entry point too: `add_curve(expr)`
-    added = plot.add_curve(sp.tan(x))                 # must not stringify on the way in
-    assert calls == ["floor(2*x)", "floor("], "add_curve(Expr) parsed"
+    plot = Plot()
+    added = plot.add_curve(sp.tan(x))
     assert added.expression == "tan(x)" and added.expr == sp.tan(x)
 
 
@@ -119,7 +110,7 @@ def test_model_roles_and_data() -> None:
     assert curve.expr == sp.sin(1 / sp.Symbol("x"))   # the parsed form is cached
     names = model.roleNames()
     assert set(names.values()) == {b"curve", b"expression", b"color", b"lineWidth", b"visible",
-                                   b"vertexShader", b"fragmentShader", b"label"}
+                                   b"vertexShader", b"fragmentShader", b"label", b"mathSource"}
     index = model.index(0, 0)
     assert model.data(index, model.CurveRole) is curve
     assert model.data(index, model.ExpressionRole) == "sin(1/x)"
@@ -128,6 +119,7 @@ def test_model_roles_and_data() -> None:
     assert model.data(index, model.VisibleRole) is True
     assert model.data(index, model.VertexShaderRole) == curve.vertexShader
     assert model.data(index, model.FragmentShaderRole) == curve.fragmentShader
+    assert model.data(index, model.MathSourceRole) == curve.mathSource
     assert model.data(QModelIndex(), model.CurveRole) is None
 
 
@@ -160,8 +152,9 @@ def test_model_reports_changes_with_the_right_roles() -> None:
     model.dataChanged.connect(lambda top, bottom, roles: report.append(list(roles)))
 
     curve.expression = "cos(x)"
-    # the new expression is announced first, then the freshly baked shaders
-    assert report[-2:] == [[model.ExpressionRole],
+    # the new expression is announced first, then the program arrives with its math source
+    # and its freshly baked shader
+    assert report[-2:] == [[model.MathSourceRole],
                            [model.VertexShaderRole, model.FragmentShaderRole]]
     curve.shadersChanged.emit()
     assert report[-1] == [model.VertexShaderRole, model.FragmentShaderRole]

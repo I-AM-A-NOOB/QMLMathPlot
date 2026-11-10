@@ -15,7 +15,7 @@ from .rhi import CurveRhiItem
 __all__ = ["QML_MAJOR", "QML_MINOR", "QML_URI", "qml_component_path", "register_qml_types"]
 
 QML_URI = "QmlMathPlot"
-QML_MAJOR = 1
+QML_MAJOR = 2
 QML_MINOR = 0
 
 _registered = False
@@ -27,7 +27,7 @@ def register_qml_types() -> None:
     Registers the model side (``Plot``, ``Camera``, ``Curve``, ``CurveListModel``) and the
     ``PlotView`` component, so a Qt Quick app can simply write::
 
-        import QmlMathPlot 1.0
+        import QmlMathPlot 2.0
         PlotView { anchors.fill: parent; defaultExpression: "sin(x)" }
 
     Idempotent: repeated calls are a no-op (Qt complains about duplicate registrations).

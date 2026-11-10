@@ -106,7 +106,7 @@ QTimer.singleShot(1000, lambda: setattr(c1, "expression", "sin(3/x)"))
 ## 4. QML surface
 
 ```qml
-import QmlMathPlot 1.0
+import QmlMathPlot 2.0
 
 PlotView {
     plot: myPlot                     // inject the model (or let it create one)

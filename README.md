@@ -12,6 +12,24 @@ The state is a **camera on an infinite canvas**: a `Plot` holds a `Camera` (wher
 and a list of `Curve`s (what is drawn), and the QML component `PlotView` binds to it. Several
 panels are several `Plot`s in a Qt layout — there is no figure, no axes box and no page.
 
+## Breaking changes in 0.6
+
+- **The model no longer parses expressions.** A calculator turns text into a `Program`
+  (`qmlmathplot.protocol`) and the model consumes it; the UI process does not import sympy.
+  The in-process default (`InlineCalculator`) needs the `calc` extra
+  (`pip install qmlmathplot[calc]`); a host that isolates the calculator injects
+  `ProcessCalculator` — see `examples/process_calculator.py`.
+- `Curve` and `add_curve` are **asynchronous**: shaders arrive with the program. Wait for
+  `shadersChanged`, and read `curve.error` for a failing edit (the previous drawing stays).
+  `Curve.expr` is a deprecated, lazily imported sympy view.
+- Routing is `Program.kind`: `intervals` (compute shader), `adaptive` (CPU `CurvePlotter`),
+  `implicit` (level set). `add_curve("a*x")` reports the parameter error on the curve
+  instead of raising.
+- **Removed:** `Figure`, `Axes`, `FigureCanvasQt`, `qmlmathplot.pyplot`. `MathPlotWidget`
+  stays.
+- **QML:** `import QmlMathPlot 2.0`; `cpuRenderer: true` became `renderMode: "cpu"`
+  (`"auto"` / `"gpu"` / `"cpu"`).
+
 ## Quick start
 
 One line in a QtWidgets layout (least effort):
@@ -33,16 +51,15 @@ An un-themed plot looks like matplotlib (white background, tab10 colours, grey g
 axes through the origin with the tick labels riding them) — the default style sheet is applied
 at construction, so `plot.theme = "default"` is the reset.
 
-`add_curve()` (and `Curve.expression`) accept the expression **either as a string or as a sympy
-expression**: `plot.add_curve(sp.sin(1 / sp.Symbol("x")))` is the same curve as
-`plot.add_curve("sin(1/x)")`. The stored and reported form is always the canonical string — QML,
-a project file and the text field want one — while the parsed expression is cached and exposed as
-`Curve.expr`, which is what re-baking and the matplotlib hand-off use. The object form exists so a
-curve can be composed without string interpolation:
+`add_curve()` (and `Curve.expression`) take the expression as text; a sympy object is also
+accepted and converted to its canonical string once. The model never parses it: a calculator
+turns the text into a `Program` (`kind`, shader sources, `math`/`numpy` programs), so the UI
+process can stay sympy-free. `Curve.expr` still exists as a deprecated, lazily imported sympy
+view for the compatibility layer, and the matplotlib hand-off uses it.
 
 ```python
 curve = plot.add_curve("sin(x)")
-plot.add_curve(sp.diff(sp.sympify(curve.expression, locals={"x": sp.Symbol("x")})), label="f'")
+plot.add_curve(sp.diff(sp.sympify(curve.expression)), label="f'")   # needs the [calc] extra
 ```
 
 `MathPlotWidget` keeps one curve's worth of convenience (`expression`, `error`,
@@ -61,14 +78,14 @@ Standalone window / command line:
 ```
 uv run qmlmathplot "sin(1/x)"                    # equivalent to python examples/minimal.py …
 uv run qmlmathplot --backend d3d11 "sin(1/x)"    # force a specific backend
-python examples/explorer_qtwidgets.py            # function input box + sibling widgets
+python examples/widget_minimal.py               # QtWidgets host
+python examples/process_calculator.py           # calculator in its own process
 ```
 
 The examples live in `examples/`: `minimal.py` is the smallest window;
-`explorer_qtwidgets.py` deliberately puts the plot widget into a "grabby"
-environment (input box, `QScrollArea`, `QSplitter`, overlay) to verify the widgets
-do not fight each other; `explorer_qtquick.py` (plus `explorer_qtquick.qml`) is
-the pure Qt Quick demo.
+`explorer_qtquick.py` (plus `explorer_qtquick.qml`) is the pure Qt Quick demo;
+`process_calculator.py` runs the calculator in its own process and can prove the isolation
+with `--check-isolation`; `widget_minimal.py` embeds `MathPlotWidget` in a QtWidgets layout.
 
 ## Embedding into an app
 
@@ -100,7 +117,7 @@ app.exec()
 ```
 
 ```qml
-import QmlMathPlot 1.0
+import QmlMathPlot 2.0
 
 PlotView {                       // inject a Plot, or let the component create its own
     anchors.fill: parent
@@ -155,74 +172,8 @@ Matplotlib *vocabulary* is kept where it is vocabulary (limits, grid, title, tic
 *mechanism* is refused — no `Figure`/`Axes`/`subplots` in the core (one view per widget, no
 bounded page), no redraw loop (the scene is live), no toolbar and no legend (host chrome), and
 an export is a canvas region at a pixel size rather than a re-rendered page (§9, implemented —
-see *Export* below). A **thin compatibility facade** (`Figure`, `Axes`, `FigureCanvasQt`,
-`qmlmathplot.pyplot`) provides the familiar names for porting scripts; it maps onto the same
-model and refuses the mechanisms that do not fit (see *Matplotlib-style facade* below).
-
-## Matplotlib-style facade
-
-For porting scripts and for code that expects Matplotlib's vocabulary, the package ships a
-**thin** compatibility layer. It maps onto the same `Plot`/`Camera` model and refuses the
-mechanisms that do not fit an infinite, live canvas.
-
-```python
-from qmlmathplot import Figure, FigureCanvasQt
-
-fig = Figure(figsize=(6.4, 4.8))       # stored for the window size only; no page is implied
-ax = fig.gca()                         # exactly one axes per figure
-ax.plot("sin(1/x)", label="sin(1/x)")
-ax.set_xlim(-1, 1)
-ax.set_ylim(-2, 2)
-ax.set_title("sin(1/x)")
-ax.set_xlabel("x")
-ax.set_ylabel("y")
-ax.grid(True)
-ax.set_aspect("equal")
-
-canvas = FigureCanvasQt(fig)           # a QWidget, like MathPlotWidget
-layout.addWidget(canvas)
-canvas.draw()                          # no-op: the Qt scene is already live
-```
-
-The same model through a pyplot-shaped module (global current figure, for scripts and
-notebooks; applications should keep the object API):
-
-```python
-import qmlmathplot.pyplot as plt
-
-plt.figure()
-plt.plot("sin(1/x)")
-plt.xlim(-1, 1)
-plt.title("sin(1/x)")
-plt.xlabel("x")
-plt.grid(True)
-plt.savefig("out.png")                 # Qt raster export
-plt.show()                             # blocks in a script; use block=False in a host
-```
-
-What maps: one figure/one axes (`subplots()` and `subplot(111)`), `plot(expression)`,
-`xlim`/`ylim`, `title`/`xlabel`/`ylabel`, `grid(axis=...)`, `aspect`, `savefig`/`to_image`,
-themes, `legend`, `annotate`/`text`, `axhline`/`axvline`, `set_xticks`/`set_yticks` and
-`tick_params`. `plt.gcf()`/`gca()`/`sca()`/`close()`/`show()` follow Matplotlib's
-current-figure shape.
-
-What is deliberately different:
-
-- **One view per figure.** `subplots(2, 1)`/`add_subplot(211)` raise `NotImplementedError`;
-  several panels are several `Figure` objects in a Qt layout, not a `GridSpec`.
-- **Expressions, not x/y arrays.** `ax.plot("sin(x)")` is native; `ax.plot(x, y)` is refused
-  because the Qt renderer evaluates an expression per pixel. For sampled data use
-  `Plot.to_matplotlib()` (the hand-off), or add a data-series artist.
-- **`draw()` / `draw_idle()` are no-ops.** The scene repaints from model signals; there is no
-  deferred renderer or blitting.
-- **`savefig` is a region at a pixel size**, not a page at a dpi. `width`/`height` are device
-  pixels and `dpi` is a multiplier; `backend="matplotlib"` is the vector route.
-- **Log axes and full annotation styling are not implemented.** `set_xscale()`/`set_yscale()`
-  raise with the reason; annotations support text + a straight arrow + pixel offset, not
-  Matplotlib's bbox/connectionstyle engine.
-- **Themes are per figure**, not `rcParams`; `plt` has no global style state beyond the current
-  figure.
-- **`mpl_connect`/`blit` are absent.** Qt signals are the event system.
+see *Export* below). 0.6 removed the Matplotlib-shaped facade entirely: the model is `Plot` /
+`Camera` / `Curve`, and the optional matplotlib hand-off is `Plot.to_matplotlib()`.
 
 ## Implicit curves
 
@@ -525,20 +476,17 @@ three import QtWidgets lazily, so a pure-QML host never loads it.
 
 | Layer | File | Responsibility |
 |---|---|---|
-| Model | `src/qmlmathplot/model.py` | expression → GLSL (no Qt dependency, unit-testable) |
+| Calculator | `src/qmlmathplot/calc/` | text → `Program` (GLSL, `math` and `numpy` sources); the only code that imports sympy. Qt-free, runs in-process or as `python -m qmlmathplot.calc` |
 | Shaders | `src/qmlmathplot/shaders/` + `shaderbuild.py` | GLSL resources, `@NAME@` substitution, shared `@INCLUDE` blocks, validation (no template strings in Python) |
 | Camera | `src/qmlmathplot/camera.py` | `Camera`: centre / zoom / aspect, the derived ranges, pan/zoom/reset, the nice-number tick algorithm |
 | Input | `src/qmlmathplot/input.py` | `ViewInput`: keyboard switch, pan step, rebindable shortcuts, key matching |
 | Animation | `src/qmlmathplot/animation.py` | `CameraAnimator`: the one eased interpolator behind wheel/keyboard moves |
-| Curves | `src/qmlmathplot/curve.py` | `Curve` (expression → baked `.qsb`, style, error; later edits bake on the thread pool) and `CurveListModel` |
+| Curves | `src/qmlmathplot/curve.py` | `Curve` (requests a `Program`, bakes its GLSL on the thread pool, keeps the last drawing on failure) and `CurveListModel` |
 | Render | `src/qmlmathplot/rhi.py` + `ggb_compute.py` | `CurveRhiItem`: one `QQuickRhiItem` draws every curve in one pass; interval-supported 1-D curves run the GGB path state machine in a compute shader |
 | Path spec | `src/qmlmathplot/ggb_path.py` | The GGB path state machine (topology in, segments out), shared by the CPU sampler and the tests; no interval arithmetic |
-| Reference | `src/qmlmathplot/ggb_reference.py` | CPU sampler (`mpmath.iv`) feeding the shared state machine; also used by the CPU fallback |
-| CPU fallback | `src/qmlmathplot/qml/CpuCurves.qml` + `pathcurve.py` | `view.cpuRenderer = true`: one QPainterPath per curve when RHI is unavailable |
+| Reference | `src/qmlmathplot/ggb_reference.py` | test oracle: CPU sampler (`mpmath.iv`) feeding the shared state machine |
+| CPU fallback | `src/qmlmathplot/qml/CpuCurves.qml` + `pathcurve.py` | `view.renderMode = "cpu"`: one QPainterPath per curve when RHI is unavailable |
 | Plot | `src/qmlmathplot/plot.py` | `Plot`: the camera, the curves and the styling the view binds to |
-| Facade | `src/qmlmathplot/figure.py` | `Figure` / `Axes`: Matplotlib-shaped names over one `Plot` (no Qt beyond the model) |
-| Facade host | `src/qmlmathplot/canvas.py` | `FigureCanvasQt`: a `MathPlotWidget` attached to a `Figure` (QtWidgets, lazy) |
-| Facade scripting | `src/qmlmathplot/pyplot.py` | `qmlmathplot.pyplot`: current figure, `plot`/`xlim`/`show`/`savefig` for scripts |
 | View | `src/qmlmathplot/qml/PlotView.qml` (+ `PlotCurves.qml`, `PlotFurniture.qml`, `PlotInput.qml`, `view.py`) | composition: model injection, camera mapping and keyboard focus; curves, furniture and pointer input live in the three child components (one `QQuickRhiItem` pass for all curves) |
 | Themes | `src/qmlmathplot/themes.py` + `themes/` | the vendored Matplotlib style sheets, resolved onto the `Plot`'s properties |
 | Export | `src/qmlmathplot/export.py` | `Plot.savefig()` / `to_image()`: the canvas region rendered offscreen at a pixel size (QtWidgets is imported lazily) |
@@ -546,7 +494,7 @@ three import QtWidgets lazily, so a pure-QML host never loads it.
 | Bake | `src/qmlmathplot/qsb.py` | GLSL → `.qsb` (PySide6 ships `qsb.exe`), cached by source hash |
 | Widget | `src/qmlmathplot/widget.py` | `MathPlotWidget`: QQuickWidget bridge, drops straight into QtWidgets layouts |
 | Entry | `src/qmlmathplot/app.py` | command line / standalone window (the `qmlmathplot` script, `examples/minimal.py`) |
-| Examples | `examples/` | `minimal.py` (minimal), `explorer_qtwidgets.py` (input box + widget coexistence), `explorer_qtquick.py` (Qt Quick) |
+| Examples | `examples/` | `minimal.py` (standalone window), `explorer_qtquick.py` (Qt Quick), `process_calculator.py` (the process split + `--check-isolation`), `widget_minimal.py` (QtWidgets) |
 
 ## Algorithm (GeoGebra's interval path on the GPU)
 
@@ -620,8 +568,8 @@ uv run ruff check src tests examples   # bug-level lint (undefined names, unused
   matplotlib's default style, the limits are forwarded to the camera, and a theme applies
   (and re-applies as a reset) while an unknown name is rejected.
 - `test_themes.py`: the vendored style sheets resolve to this library's properties.
-- `test_overlay.py`: annotations (`annotate`/`text`), horizontal/vertical guides, legend and
-  custom ticks, the `Axes`/`pyplot` forwarding, and the matplotlib hand-off mapping.
+- `test_overlay.py`: annotations, horizontal/vertical guides, legend and custom ticks, and
+  the matplotlib hand-off mapping.
 - `test_qsb_cache.py`: the cache location/info/clear API and the age + LRU prune; unrelated
   files in the temp directory are not touched.
 - `test_shader_bake.py`: the stage of a baked `.qsb` must match its purpose, and
@@ -649,10 +597,6 @@ uv run ruff check src tests examples   # bug-level lint (undefined names, unused
   extra.
 - `test_async_bake.py`: a later expression assignment bakes on the thread pool, a stale bake
   is discarded, and a failed bake keeps the drawn curve.
-- `test_compat.py`: the Matplotlib-shaped facade — expressions (and the refusal of x/y arrays),
-  limits/title/labels/grid/aspect, the single-axes rule, `pyplot` current-figure semantics,
-  `FigureCanvasQt` rendering and export, and that importing `qmlmathplot` does not load
-  QtWidgets.
 - `test_export.py`: `to_image()`/`savefig()` — the image is exactly the requested device size
   (`dpi` multiplies it), the no-argument form reproduces the live centre and scale, the three
   `adjustable` modes reconcile range and size as documented (a world 45-degree line stays at 45

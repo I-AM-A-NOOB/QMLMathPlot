@@ -23,7 +23,7 @@ PLOT_WIDTH, PLOT_HEIGHT = 1200, 800
 
 QML = f"""
 import QtQuick
-import QmlMathPlot 1.0
+import QmlMathPlot 2.0
 
 Item {{
     width: {WIDTH}
@@ -71,7 +71,7 @@ def test_plot_joins_the_qml_tab_chain(app: QGuiApplication, tmp_path: Path) -> N
     qml_file.write_text(
         """
 import QtQuick
-import QmlMathPlot 1.0
+import QmlMathPlot 2.0
 
 Item {
     width: 480

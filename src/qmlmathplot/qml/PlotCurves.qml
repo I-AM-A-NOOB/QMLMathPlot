@@ -1,17 +1,17 @@
 // One QRhi pass for every curve. The curve list is read by the Python renderer; the
 // camera and the viewport are the only per-frame QML inputs.
 import QtQuick
-import QmlMathPlot 1.0
+import QmlMathPlot 2.0
 
 Item {
     id: curvesRoot
 
     property Item view
-    property bool cpuRenderer: false
+    property string renderMode: "auto"
 
     CurveRhiItem {
         anchors.fill: parent
-        visible: !curvesRoot.cpuRenderer
+        visible: curvesRoot.renderMode !== "cpu"
         curves: curvesRoot.view.plot.curves
         camera: Qt.vector4d(curvesRoot.view.plot.camera.centre.x,
                             curvesRoot.view.plot.camera.centre.y,
@@ -25,7 +25,7 @@ Item {
     }
     Loader {
         anchors.fill: parent
-        active: curvesRoot.cpuRenderer
+        active: curvesRoot.renderMode === "cpu"
         sourceComponent: cpuCurvesComponent
     }
 }

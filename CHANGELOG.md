@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.6.0 — unreleased
+
+### Breaking
+
+- **The model no longer parses expressions.** A calculator turns text into a `Program`
+  (`qmlmathplot.protocol`) and the model only consumes that; sympy is no longer imported by
+  the UI process. The library ships `InlineCalculator` (default, in-process) and
+  `ProcessCalculator` (`python -m qmlmathplot.calc`), and does not manage process lifecycle.
+- `Curve` is asynchronous: `add_curve`/`expression` request a program and the shaders arrive
+  later (`ready` state via `expressionChanged`/`shadersChanged`; a failure keeps the last
+  drawing). `Curve.expr` is a deprecated, lazily imported sympy view.
+- `Curve.expr` is no longer the internal representation; routing (function / interval path /
+  level set) is decided by the calculator and exposed as `Program.kind`.
+- `add_curve("a*x")` no longer raises: the third-symbol error is reported on the curve.
+- Removed the Matplotlib-shaped front end: `Figure`, `Axes`, `FigureCanvasQt`, `pyplot`.
+  `MathPlotWidget` stays.
+- `pyproject`: sympy moved to the `[calc]` extra; `numpy` is a core dependency (programs may
+  carry numpy sources); new `mpl` alias for the matplotlib hand-off.
+
+### Added
+
+- `qmlmathplot.protocol`: `Program` + framed JSON, the stable boundary for host implementations.
+- `qmlmathplot.client`: `Calculator`, `InlineCalculator`, `ProcessCalculator` (framed JSON,
+  timeouts, restart-after-crash, caller tokens).
+- `qmlmathplot.calc`: text → `Program` (GLSL fragment/compute, `math` and `numpy` sources).
+- `Curve.computeShader`, `Curve.mathSource`; `CurveListModel` gained a `mathSource` role for
+  the CPU fallback.
+- Examples: `process_calculator.py` (the process split, with `--check-isolation`) and
+  `widget_minimal.py`; `explorer_qtwidgets.py` was removed.
+- Tests: protocol, program construction, the worker round trip, and a subprocess test that
+  proves the UI process never imports sympy.
+
+
 ## 0.5.0 — 2026-10-30
 
 ### Added

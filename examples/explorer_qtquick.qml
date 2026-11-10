@@ -15,7 +15,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
-import QmlMathPlot 1.0
+import QmlMathPlot 2.0
 
 ApplicationWindow {
     id: window

@@ -8,15 +8,19 @@ names — see ``theme``.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from PySide6.QtCore import Property, QObject, Signal, Slot
 from PySide6.QtGui import QColor, QImage, QVector2D
 
-import sympy as sp
-
 from .camera import Camera
+from .client import Calculator, InlineCalculator
 from .curve import DEFAULT_COLOR_CYCLE, Curve, CurveListModel
 from .overlay import Annotation, AnnotationListModel, Guide, GuideListModel
 from .themes import names, resolve
+
+if TYPE_CHECKING:  # annotations only; the model never parses expressions itself
+    import sympy as sp
 
 __all__ = ["Plot"]
 
@@ -83,6 +87,7 @@ class Plot(QObject):
 
     cameraChanged = Signal()
     curvesChanged = Signal()
+    calculatorChanged = Signal()
     viewChanged = Signal()
     aspectChanged = Signal()  # forwarded from the camera (the forwarded `aspect`)
     themeChanged = Signal()
@@ -133,7 +138,9 @@ class Plot(QObject):
         super().__init__(parent)
         self._camera = Camera(self)
         self._theme = ""
-        self._curves = CurveListModel(DEFAULT_COLOR_CYCLE, self.line_width, self)
+        self._calculator: Calculator = InlineCalculator(self)
+        self._curves = CurveListModel(DEFAULT_COLOR_CYCLE, self.line_width, self,
+                                      calculator=self._calculator)
         self._annotations = AnnotationListModel(self)
         self._guides = GuideListModel(self)
         self._camera.viewChanged.connect(self.viewChanged)
@@ -149,6 +156,19 @@ class Plot(QObject):
         return self._camera
 
     camera: Camera = Property(Camera, _get_camera, notify=cameraChanged)
+
+    @property
+    def calculator(self) -> Calculator:
+        """Where expressions become programs; inject a process client for process isolation."""
+        return self._calculator
+
+    @calculator.setter
+    def calculator(self, value: Calculator) -> None:
+        if value is self._calculator:
+            return
+        self._calculator = value
+        self._curves.set_calculator(value)
+        self.calculatorChanged.emit()
 
     def _get_curves(self) -> CurveListModel:
         return self._curves
