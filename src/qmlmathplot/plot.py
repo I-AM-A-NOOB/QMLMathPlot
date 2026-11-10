@@ -333,6 +333,19 @@ class Plot(QObject):
         """
         return self._curves.add_curve(expression, color, line_width, label)
 
+    @Slot("QVariant", "QVariant", "QVariant", "QVariant", str, result=QObject)
+    @Slot("QVariant", "QVariant", result=QObject)
+    def add_points(
+        self,
+        x: object,
+        y: object,
+        color: object = None,
+        line_width: object = None,
+        label: str = "",
+    ) -> Curve:
+        """Add a data curve: the polyline through ``(x, y)`` (numpy arrays work; NaN breaks)."""
+        return self._curves.add_points(x, y, color, line_width, label)
+
     @Slot("QVariant", "QVariant", "QVariant", str, result=QObject)
     @Slot("QVariant", result=QObject)
     def add_implicit(

@@ -30,6 +30,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtQuick import QQuickRhiItem, QQuickRhiItemRenderer
 
+from .curve import points_operations
 from .curveplotter import PlotView, plot_curve, stroke_vertices
 from .qsb import bake
 from .shaderbuild import shader_source
@@ -280,7 +281,7 @@ class _Renderer(QQuickRhiItemRenderer):
                 pipe = self._pipeline(spec, self._srb)
                 if pipe is not None:
                     shader_draws.append((pipe, offset))
-            elif spec[3] == "cpu":
+            elif spec[3] in ("cpu", "data"):
                 cpu_draws.append((row, spec))
             else:                          # "compute"
                 buf, compute, csrb, cols = self._path_resources(spec)
@@ -416,6 +417,31 @@ class CurveRhiItem(QQuickRhiItem):
             self._cpu_cache.clear()
         return vertices, count
 
+    def _points_vertices(self, curve, camera: QVector4D, width: float, height: float):
+        """Screen-space stroke quads for a data curve (the same pipeline as the CPU path)."""
+        color = curve.color
+        key = (id(curve), id(curve.points), float(curve.lineWidth),
+               color.redF(), color.greenF(), color.blueF(), color.alphaF(),
+               camera.x(), camera.y(), camera.z(), camera.w(), width, height)
+        cached = self._cpu_cache.get(key)
+        if cached is not None:
+            return cached
+        sx, sy = camera.z(), camera.w()
+        points = curve.points
+        if points is None or width <= 1 or height <= 1 or abs(sx) < 1e-15 or abs(sy) < 1e-15:
+            return b"", 0
+        cx, cy = camera.x(), camera.y()
+        view = PlotView(cx - width * 0.5 * sx, cx + width * 0.5 * sx,
+                        cy - height * 0.5 * sy, cy + height * 0.5 * sy,
+                        int(width), int(height))
+        vertices, count = stroke_vertices(
+            points_operations(points), view, (width, height), curve.lineWidth,
+            (color.redF(), color.greenF(), color.blueF(), color.alphaF()))
+        self._cpu_cache[key] = (vertices, count)
+        if len(self._cpu_cache) > 64:
+            self._cpu_cache.clear()
+        return vertices, count
+
     def _refresh(self) -> None:
         """Snapshot the model on the GUI thread; the renderer must not touch it."""
         self._snapshot = []
@@ -432,7 +458,12 @@ class CurveRhiItem(QQuickRhiItem):
                 # yet simply is not in this snapshot (it keeps drawing the previous frame).
                 compute_url = curve.computeShader
                 fragment_url = curve.fragmentShader
-                if compute_url.isLocalFile():
+                if curve.is_data:
+                    url = QUrl()
+                    kind = "data"
+                    compute_url = QUrl()
+                    cpu = self._points_vertices(curve, camera, width, height)
+                elif compute_url.isLocalFile():
                     url = QUrl()
                     kind = "compute"
                     cpu = None

@@ -1469,3 +1469,28 @@ the full step budget in both directions plus both windows.
     renderer; the current tests are `test_ggb_curve_plotter.py`,
     `test_ggb_path_oracle.py`, the unsupported render smoke cases and
     `test_export.py::test_an_unsupported_expression_exports_through_the_cpu_curve_plotter`.
+
+77. **0.6: the model consumes `Program`s; sympy lives behind a calculator boundary.** The
+    package no longer parses expressions. `qmlmathplot.protocol.Program` (plain JSON:
+    `kind`, `glsl`, `math`, `numpy`, `error`) is the only contract between the model and a
+    calculator; `qmlmathplot.calc` builds it and is the only runtime importer of sympy.
+    `InlineCalculator` is the default (lazy: sympy is imported on the first request);
+    `ProcessCalculator` runs `python -m qmlmathplot.calc` and is injected by the host —
+    the library never starts or restarts a process. `tests/test_no_sympy_ui.py` proves the
+    UI process stays sympy-free with a process calculator, and
+    `examples/process_calculator.py --check-isolation` demonstrates it.
+
+    Consequences that were measured or bit during the port:
+    - package import is lazy (`__init__` maps names to modules); `import qmlmathplot` loads
+      neither Qt nor sympy;
+    - `Curve` is asynchronous: a program arrives later, shaders bake on the thread pool, a
+      failed edit keeps the last drawing (`_last_valid_text`, not the requested text);
+    - the compute shader source and its qsb bake moved off the render thread: the snapshot
+      carries `.qsb` URLs, `rhi._path_resources` only creates the pipeline;
+    - `curveplotter` compiles `Program.math` (~13 µs) instead of `lambdify` (~1.37 ms per
+      camera change); `pathcurve` draws its ops, so mpmath/`ggb_reference` are test-only;
+    - a data curve (`Plot.add_points`) is a `Program(kind="data")` plus point series; its
+      vertices go through `stroke_vertices` and the shared path pipeline;
+    - QML is `QmlMathPlot 2.0`; `cpuRenderer` became `renderMode` (`auto`/`gpu`/`cpu`).
+    - Removed with 0.6: `figure.py`, `pyplot.py`, `canvas.py` (`Figure`/`Axes`/`pyplot`).
+      `MathPlotWidget` stays.

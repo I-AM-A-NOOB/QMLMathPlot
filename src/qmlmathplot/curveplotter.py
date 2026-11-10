@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable
 
+from .program import compile_function
 
 __all__ = ["Gap", "PathRecorder", "FunctionCurve", "PlotView", "plot_curve"]
 
@@ -131,18 +132,8 @@ class PlotView:
 
 
 def compile_source(source: str, name: str = "f") -> Callable[[float], Any]:
-    """Compile a calculator ``Program.math`` definition into a scalar callable.
-
-    The source is our own (``def f(x): return math.sin(x)``), executed with a namespace that
-    holds only ``math`` and ``abs``; no builtins, so the program cannot reach anything the
-    calculator did not emit. Compilation is ~13 µs; the call costs the same as ``lambdify``.
-    """
-    namespace: dict[str, Any] = {"math": math, "abs": abs}
-    exec(compile(source, "<math-program>", "exec"), namespace)  # noqa: S102 - our source
-    function = namespace.get(name)
-    if not callable(function):
-        raise ValueError(f"the program source does not define {name}()")
-    return function
+    """Compile a calculator ``Program.math`` definition into a scalar callable."""
+    return compile_function(source, name)
 
 
 class FunctionCurve:

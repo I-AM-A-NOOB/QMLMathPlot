@@ -106,6 +106,42 @@ def _url(path: object) -> QUrl:
     return QUrl() if path is None else QUrl.fromLocalFile(str(path))
 
 
+def point_series(points: object) -> tuple[tuple[float, ...], tuple[float, ...]]:
+    """Normalise ``(x_values, y_values)`` (sequences, numpy arrays, …) to float tuples."""
+    try:
+        xs, ys = points  # type: ignore[misc]
+    except (TypeError, ValueError):
+        raise ValueError("points must be an (x, y) pair of sequences") from None
+    if isinstance(xs, (str, bytes)) or isinstance(ys, (str, bytes)):
+        raise ValueError("points must be two numeric sequences")
+    try:
+        xs_t = tuple(float(value) for value in xs)  # type: ignore[union-attr]
+        ys_t = tuple(float(value) for value in ys)  # type: ignore[union-attr]
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"points must be numeric: {exc}") from None
+    if not xs_t or len(xs_t) != len(ys_t):
+        raise ValueError("x and y must have the same non-zero length")
+    return xs_t, ys_t
+
+
+def points_operations(
+    points: tuple[tuple[float, ...], tuple[float, ...]],
+) -> list[tuple[object, ...]]:
+    """Data points as path operations; a non-finite x or y breaks the line."""
+    import math
+
+    xs, ys = points
+    operations: list[tuple[object, ...]] = []
+    down = False
+    for x, y in zip(xs, ys):
+        if not (math.isfinite(x) and math.isfinite(y)):
+            down = False
+            continue
+        operations.append(("MOVE_TO" if not down else "LINE_TO", x, y))
+        down = True
+    return operations
+
+
 _default_calculator_instance: Calculator | None = None
 
 
@@ -130,8 +166,9 @@ def curve_for(
     label: str = "",
     parent: QObject | None = None,
     calculator: Calculator | None = None,
+    points: object = None,
 ) -> Curve:
-    """Create the artist for an expression.
+    """Create the artist for an expression (or for data points).
 
     Routing happens in the calculator, not here: the curve follows the ``Program`` it receives
     (function, interval path or level set). ``implicit=True`` (``add_implicit``) forces the
@@ -145,6 +182,7 @@ def curve_for(
         label=label,
         parent=parent,
         calculator=calculator,
+        points=points,
     )
 
 
@@ -181,6 +219,7 @@ class Curve(QObject):
         label: str = "",
         parent: QObject | None = None,
         calculator: Calculator | None = None,
+        points: object = None,
     ) -> None:
         super().__init__(parent)
         self._calculator = calculator if calculator is not None else _default_calculator()
@@ -198,13 +237,18 @@ class Curve(QObject):
         self._compute = QUrl()
         self._generation = 0
         self._synchronous = False
+        self._points: tuple[tuple[float, ...], tuple[float, ...]] | None = None
         # Not parented: a job may outlive the curve; the signal object must stay valid for the
         # queued connection (Qt disconnects the receiver when the curve is destroyed).
         self._bake_signals = _BakeSignals()
         self._bake_signals.done.connect(self._on_bake_done, Qt.ConnectionType.QueuedConnection)
         self._calculator.ready.connect(self._on_program)
         self._calculator.failed.connect(self._on_program_failed)
-        self._set_expression(expression, synchronous=True)
+        if points is not None:
+            self._points = point_series(points)
+            self._program = Program(text="", kind="data")
+        else:
+            self._set_expression(expression, synchronous=True)
 
     # ---------------------------------------------------------------- Expression
     def _get_expression(self) -> str:
@@ -218,7 +262,9 @@ class Curve(QObject):
         program (and shaders) until then.
         """
         text = source if isinstance(source, str) else str(source)
-        if text == self._expression and self._program is not None:
+        if self._points is not None:
+            self._points = None
+        if text == self._expression and self._program is not None and self._program.kind != "data":
             return
         self._generation += 1
         self._expression = text
@@ -244,6 +290,8 @@ class Curve(QObject):
         """
         import sympy as sp
 
+        if self._points is not None:
+            raise ValueError("a points curve has no expression")
         text = self._last_valid_text or self._expression
         if self._expr_cache is not None and self._expr_cache[0] == text:
             return self._expr_cache[1]
@@ -321,6 +369,15 @@ class Curve(QObject):
     computeShader: QUrl = Property(QUrl, _get_compute_shader, notify=shadersChanged)
 
     @property
+    def is_data(self) -> bool:
+        """True for a curve built from ``(x, y)`` point data rather than an expression."""
+        return self._points is not None
+
+    @property
+    def points(self) -> tuple[tuple[float, ...], tuple[float, ...]] | None:
+        return self._points
+
+    @property
     def mathSource(self) -> str:
         """The program's scalar Python source (empty until a program arrives)."""
         if self._program is None or self._program.math is None:
@@ -340,6 +397,8 @@ class Curve(QObject):
         curve's shader to the implicit one. The matplotlib hand-off uses it to skip level sets,
         which cannot be sampled into a polyline.
         """
+        if self._points is not None:
+            return False
         if self._program is not None:
             return self._program.implicit
         return self._force_implicit
@@ -469,6 +528,7 @@ class CurveListModel(QAbstractListModel):
         default_line_width: float = 1.5,
         parent: QObject | None = None,
         calculator: Calculator | None = None,
+        points: object = None,
     ) -> None:
         super().__init__(parent)
         self._curves: list[Curve] = []
@@ -567,6 +627,23 @@ class CurveListModel(QAbstractListModel):
         return self._append(curve_for(expression, color=default_color, line_width=default_width,
                                       label=label, parent=self,
                                       calculator=self._calculator))
+
+    @Slot("QVariant", "QVariant", "QVariant", "QVariant", str, result=QObject)
+    @Slot("QVariant", "QVariant", result=QObject)
+    def add_points(
+        self,
+        x: object,
+        y: object,
+        color: object = None,
+        line_width: object = None,
+        label: str = "",
+    ) -> Curve:
+        """Append a data curve: the polyline through ``(x, y)`` (NaN/inf break the line)."""
+        default_color, default_width = self._defaults(color, line_width)
+        return self._append(curve_for(
+            "", color=default_color, line_width=default_width, label=label,
+            parent=self, calculator=self._calculator, points=(x, y),
+        ))
 
     @Slot("QVariant", "QVariant", "QVariant", str, result=QObject)
     @Slot("QVariant", result=QObject)

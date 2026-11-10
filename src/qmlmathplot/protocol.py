@@ -37,10 +37,10 @@ SCHEMA: Final = 2
 
 #: ``"intervals"`` = GeoGebra interval path (compute shader), ``"adaptive"`` = CPU path,
 #: ``"implicit"`` = level set (fragment shader).
-KINDS: Final = ("intervals", "adaptive", "implicit")
+KINDS: Final = ("intervals", "adaptive", "implicit", "data")
 
 #: Graph kinds the model knows how to draw.
-FUNCTION_NAMES: Final = {"intervals": "f", "adaptive": "f", "implicit": "F"}
+FUNCTION_NAMES: Final = {"intervals": "f", "adaptive": "f", "implicit": "F", "data": "f"}
 
 _MAX_FRAME: Final = 64 * 1024 * 1024
 
@@ -76,6 +76,15 @@ class Program:
     @property
     def implicit(self) -> bool:
         return self.kind == "implicit"
+
+    def compile(self, *, numpy: bool = False, name: str | None = None) -> object:
+        """Compile the ``math`` (or ``numpy``) source and return its function."""
+        from .program import compile_function
+
+        source = self.numpy if numpy else self.math
+        if not source:
+            raise ValueError(f"the program has no {'numpy' if numpy else 'math'} source")
+        return compile_function(source, name or self.name, numpy=numpy)
 
     def with_error(self, message: str) -> Program:
         return replace(self, error=str(message))
