@@ -71,8 +71,15 @@ class InlineCalculator(Calculator):
     """Build programs in-process — the default, and what the tests use."""
 
     def request(self, text: str, implicit: bool | None = None, *, token: object = None) -> None:
-        from .calc import build_program
-
+        try:
+            from .calc import build_program
+        except ImportError:  # the core install has no sympy; the host can inject a process
+            self.failed.emit(
+                token,
+                "the in-process calculator needs sympy: pip install 'qmlmathplot[calc]' "
+                "(or inject a ProcessCalculator / your own Calculator)",
+            )
+            return
         self.ready.emit(token, build_program(text, implicit=implicit))
 
 
