@@ -10,7 +10,10 @@
   `add_points()` work without a source. Removed: `qmlmathplot.client`, `Plot.calculator`,
   `Curve.expr`, `Plot.to_sympy`.
 - Construction resolves the `Program` synchronously; **the first qsb bake is asynchronous**
-  (thread pool) as well as later ones. A failed bake keeps the previous program and shaders.
+  (thread pool) as well as later ones. A failed bake keeps the previous shaders and reports
+  the error (the new program is still the one the curve describes).
+- QML `defaultExpression` was removed: a QML-created `Plot` has no text->Program source,
+  so curves are always added by the host (which injects the model).
 - QML `renderMode` is `"gpu"` (default) or `"cpu"`; the runtime `"auto"` value is gone. In cpu
   mode an implicit curve shows an explicit warning instead of a blank area.
 - `Program.compile` uses an explicit `__builtins__ = {}`; programs cannot reach builtins.

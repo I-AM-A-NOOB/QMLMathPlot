@@ -1508,8 +1508,10 @@ the full step budget in both directions plus both windows.
       test suite injects a `SymPyProgramSource` in `tests/conftest.py` (patching the
       `program_source` default) so the 0.6 tests keep their synchronous setup; tests that
       check the missing-source path pass `program_source=None` explicitly.
-    - a failed bake keeps the previous *program* as well as its shaders: the new program is
-      only adopted in `_finish_apply` (`_pending_program`).
+    - `curve.program` is set **synchronously** when the source answers; only the shader
+      bake is asynchronous. A failed bake keeps the previous shaders and sets `error` (the
+      program is the newly parsed one). QML has no `defaultExpression`: a QML-created Plot
+      has no source, so curves always come from the host.
     - `Program.compile` runs with an explicit `__builtins__ = {}` (trust boundary); the
       compiled function cannot reach `open`/`__import__`.
     - `mpl.py` samples `Program.numpy` (`compile(numpy=True)`), so the matplotlib extra no

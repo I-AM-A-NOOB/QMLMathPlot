@@ -144,11 +144,12 @@ PlotView {                       // inject a Plot, or let the component create i
 For a standalone view with no injected model, the curve is explicit:
 
 ```qml
-PlotView { defaultExpression: "sin(x)"; anchors.fill: parent }
+PlotView { plot: myPlot; anchors.fill: parent }
 ```
 
 There is no hidden default curve: the component creates its own empty `Plot` when none is
-injected, and `defaultExpression` is the only way it adds one.
+injected, and curves are always added by the host (text needs a `ProgramSource`, which only
+the host can provide).
 
 `PlotView` exposes `mapToScreen(x, y)` / `mapFromScreen(point)` plus the forwarders
 `camera` and `curves`; input handling (pan by left-drag, wheel zoom anchored at the cursor)
@@ -262,7 +263,8 @@ reported size, so they always say what is on screen; assigning them moves the ca
   a narrow window shows the same window of canvas rather than a sliver of it.
 
 ```python
-plot = MathPlotWidget("sin(1/x)", aspect=1.0)     # square units
+plot = MathPlotWidget("sin(1/x)", aspect=1.0,
+                      program_source=SymPyProgramSource())  # square units
 plot.aspect = "auto"                              # back to following the widget's shape
 plot.plot.camera.zoom_by(120, 0.5, 0.5, w, h)     # one wheel notch, anchored at the centre
 ```

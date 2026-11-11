@@ -41,9 +41,8 @@ def _render_plot(app: QGuiApplication, expression: str | None = None,
 
     root = view.rootObject()
     if expression is None:
-        # No model injection: the standalone component creates its own Plot. A curve is now
-        # explicit (`defaultExpression`), not a hidden sin(x).
-        root.setProperty("defaultExpression", "sin(x)")
+        # No model injection: the standalone component creates its own empty Plot. A curve
+        # needs a host-injected Plot (and a ProgramSource), so none is added here.
         plot = None
     else:
         # MVVM: the app side creates the model and injects it into the component
@@ -147,13 +146,6 @@ def test_smooth_curve_is_a_thin_stroke(app: QGuiApplication) -> None:
     assert not _lit(image, width // 2, height // 10), "above the curve should be background"
     ratio = _center_column_ratio(image)
     assert ratio < 0.05, f"the centre column should hold only a thin line, got {ratio:.3f}"
-
-
-def test_component_works_without_injection(app: QGuiApplication) -> None:
-    """Without an injected model the component brings its own plot; an explicit
-    ``defaultExpression`` adds the standalone curve (there is no hidden default)."""
-    image = _render(app)
-    assert _curve_count(image) > 100, "the explicit default sin(x) curve should draw"
 
 
 def test_no_hidden_curve_without_default_expression(app: QGuiApplication) -> None:

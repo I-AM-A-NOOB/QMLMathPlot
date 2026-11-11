@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import pickle
 
 import pytest
 
@@ -100,3 +101,8 @@ def test_malformed_messages_raise() -> None:
         parse_response({"schema": SCHEMA, "id": 1})
     with pytest.raises(ValueError, match="request schema"):
         parse_request({"schema": 99, "id": 1, "text": "x"})
+
+
+def test_programs_pickle_round_trip() -> None:
+    program = _program()
+    assert pickle.loads(pickle.dumps(program)) == program

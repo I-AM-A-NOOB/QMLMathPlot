@@ -124,7 +124,7 @@ PlotView {
 
 `PlotView` exposes `mapToScreen(x, y)` and `mapFromScreen(point)` so any QML element can sit
 at world coordinates without re-deriving the transform. Without an injected `plot` the
-component creates an empty one; a standalone curve is explicit (`defaultExpression: "sin(x)"`),
+component creates an empty one; a curve needs a host-injected Plot with a ProgramSource,
 so the reusable component has no hidden artist. The implementation is split into
 `PlotCurves.qml` (shader passes), `PlotFurniture.qml` (grid, axes, ticks, title, labels) and
 `PlotInput.qml` (mouse/wheel/touch); `PlotView.qml` owns the model injection, the camera

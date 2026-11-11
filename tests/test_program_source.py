@@ -67,3 +67,12 @@ def test_points_never_need_a_source() -> None:
     plot = Plot(program_source=None)
     curve = plot.add_points([0, 1], [0, 1])
     assert curve.is_data and curve.program is not None
+
+
+def test_clearing_the_source_keeps_the_drawing_and_does_not_raise() -> None:
+    plot = Plot(program_source=SymPyProgramSource())
+    curve = plot.add_curve("sin(x)")
+    plot.program_source = None
+    assert curve.program is not None and curve.error == ""
+    with pytest.raises(ProgramSourceMissingError):
+        curve.expression = "cos(x)"

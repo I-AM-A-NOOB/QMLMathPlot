@@ -62,9 +62,15 @@ class _BakeJob(QRunnable):
             baked = {stage: bake(source, _BAKE_STAGES[stage])
                      for stage, source in self._sources.items()}
         except Exception as exc:  # noqa: BLE001 - reported to the curve, never swallowed
-            self._signals.done.emit(self._generation, exc)
+            self._emit(exc)
         else:
-            self._signals.done.emit(self._generation, baked)
+            self._emit(baked)
+
+    def _emit(self, payload: object) -> None:
+        try:
+            self._signals.done.emit(self._generation, payload)
+        except RuntimeError:      # the curve was destroyed while the bake was running
+            pass
 
 
 #: First colour of the default cycle (matplotlib's "tab10" blue, as in its default style).
@@ -211,7 +217,6 @@ class Curve(QObject):
         self._last_valid_text = ""
         self._expr_cache: tuple[str, sp.Expr] | None = None
         self._program: Program | None = None
-        self._pending_program: Program | None = None
         self._color = _color(color)
         self._line_width = 1.5 if line_width is None else float(line_width)
         self._label = str(label)
@@ -380,11 +385,16 @@ class Curve(QObject):
         return self._force_implicit
 
     def set_program_source(self, source: ProgramSource | None) -> None:
-        """Use another source and re-resolve the current expression."""
+        """Use another source and re-resolve the current expression.
+
+        Clearing the source keeps the current drawing; it only affects the next request, so a
+        host can detach a calculator without an exception.
+        """
         self._program_source = source
-        if self._points is None and self._expression:
-            self._generation += 1
-            self._request(self._expression)
+        if source is None or self._points is not None or not self._expression:
+            return
+        self._generation += 1
+        self._request(self._expression)
 
     def set_program(self, program: Program) -> None:
         """Apply a program built elsewhere: no parsing, no SymPy, no process policy."""
@@ -411,7 +421,7 @@ class Curve(QObject):
         if program.error:
             self._fail(program.error)
             return
-        self._pending_program = program
+        self._program = program          # available synchronously; only the bake is async
         self._error = ""
         sources = dict(program.glsl)
         if not sources:
@@ -427,10 +437,6 @@ class Curve(QObject):
             )
 
     def _finish_apply(self) -> None:
-        # The drawn program follows a *successful* apply; a failed bake keeps the old one.
-        if self._pending_program is not None:
-            self._program = self._pending_program
-            self._pending_program = None
         self._last_valid_text = self._expression
         self.exprChanged.emit()
         self.errorChanged.emit()
@@ -451,7 +457,6 @@ class Curve(QObject):
         if generation != self._generation:
             return
         if isinstance(result, Exception):
-            self._pending_program = None
             self._error = f"{type(result).__name__}: {result}"
             self.errorChanged.emit()
             return

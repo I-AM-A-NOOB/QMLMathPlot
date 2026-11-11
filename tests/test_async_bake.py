@@ -65,7 +65,6 @@ def test_a_failed_async_bake_keeps_the_drawn_curve(app: QApplication, monkeypatc
     curve = Curve("x**2 + y**2 - 1")
     _wait(curve.shadersChanged)
     old_fragment = curve.fragmentShader
-    old_program = curve.program
 
     def broken_bake(*args: object, **kwargs: object):
         raise RuntimeError("qsb exploded")
@@ -75,7 +74,8 @@ def test_a_failed_async_bake_keeps_the_drawn_curve(app: QApplication, monkeypatc
     _wait(curve.errorChanged)
     assert "qsb exploded" in curve.error
     assert curve.fragmentShader == old_fragment
-    assert curve.program is old_program
+    # The program itself is the newly parsed one; only the drawing (shaders) failed to update.
+    assert curve.program is not None and curve.program.text == "x**2 + y**2 - 2"
 
 
 
@@ -90,6 +90,7 @@ def test_the_first_bake_is_asynchronous(app: QApplication, monkeypatch) -> None:
 
     monkeypatch.setattr(curve_module, "bake", slow_bake)
     curve = Curve("x**2 + y**2 - 1")
+    assert curve.program is not None, "the Program itself must be available synchronously"
     assert curve.fragmentShader.toString() == "", "construction blocked on qsb"
     _wait(curve.shadersChanged)
     assert curve.fragmentShader.toString().endswith(".qsb")

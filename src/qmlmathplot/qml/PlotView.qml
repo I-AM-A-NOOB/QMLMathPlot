@@ -4,8 +4,8 @@
 //
 // Usage (the host creates the model and injects it; MVVM):
 //     PlotView { plot: myPlot }
-// It also works standalone: the component brings its own empty Plot (`defaultExpression` adds
-// a curve). The view owns no state: everything it draws is read from the Plot.
+// Without injection the component brings its own empty Plot; text needs a ProgramSource,
+// which only the host can provide, so curves are always added by the host.
 import QtQuick
 import QmlMathPlot 2.0
 
@@ -34,12 +34,9 @@ Item {
             root._clearHeld();
     }
 
-    // The model (injected by the host). Without injection the component brings its own plot;
-    // it adds no curve by itself. A standalone user opts into one with `defaultExpression`
-    // (``PlotView { defaultExpression: "sin(x)" }``) — no hidden default, and a host that
-    // injects a model or adds its own curves never races this handler.
+    // The model (injected by the host). Without injection the component brings its own empty
+    // plot; it never adds a curve, because a QML-created Plot has no text->Program source.
     property Plot plot: defaultPlot
-    property string defaultExpression: ""
     Plot {
         id: defaultPlot
     }
@@ -249,8 +246,6 @@ Item {
     // The first report resolves the home view for the real size; later ones keep the scales, so
     // nothing zooms while a window or a splitter is dragged.
     Component.onCompleted: {
-        if (defaultExpression !== "" && curves.rowCount() === 0)
-            add_curve(defaultExpression);
         root.plot.camera.set_viewport(width, height);
     }
     onWidthChanged: root.plot.camera.set_viewport(width, height)
