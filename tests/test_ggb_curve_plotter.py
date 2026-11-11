@@ -1,10 +1,10 @@
 """P3b: the Python CurvePlotter against GGB's real CurveSegmentPlotter path."""
 from __future__ import annotations
 
-import pytest
-
 import ggb_curve_plotter_oracle
 import ggb_oracle
+import pytest
+
 from qmlmathplot.curveplotter import PlotView, plot_curve
 
 

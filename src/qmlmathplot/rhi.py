@@ -14,10 +14,9 @@ from pathlib import Path
 from PySide6.QtCore import Property, QByteArray, QObject, QUrl, Signal
 from PySide6.QtGui import (
     QColor,
-    QShader,
     QRhiBuffer,
-    QRhiDepthStencilClearValue,
     QRhiComputePipeline,
+    QRhiDepthStencilClearValue,
     QRhiGraphicsPipeline,
     QRhiShaderResourceBinding,
     QRhiShaderResourceBindings,
@@ -26,6 +25,7 @@ from PySide6.QtGui import (
     QRhiVertexInputBinding,
     QRhiVertexInputLayout,
     QRhiViewport,
+    QShader,
     QVector4D,
 )
 from PySide6.QtQuick import QQuickRhiItem, QQuickRhiItemRenderer

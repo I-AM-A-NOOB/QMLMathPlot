@@ -10,7 +10,7 @@ import sympy as sp
 from PySide6.QtCore import QModelIndex
 from PySide6.QtGui import QColor
 
-from qmlmathplot import Curve, CurveListModel, Plot
+from qmlmathplot import Curve, CurveListModel
 
 
 def test_an_unsupported_curve_uses_the_cpu_curve_plotter() -> None:
@@ -19,28 +19,31 @@ def test_an_unsupported_curve_uses_the_cpu_curve_plotter() -> None:
     assert curve.error == ""
     assert not curve.fragmentShader.toString()
     assert not curve.vertexShader.toString()
-    assert curve.expr == sp.floor(sp.Symbol("x"))
+    assert curve.program is not None and curve.program.kind == "adaptive"
+    assert curve.program.math and "math.floor" in curve.program.math
 
 
 def test_a_compute_curve_skips_the_sampled_bake() -> None:
     """The compute renderer owns `expr`; baking the unused fallback was ~130 ms/curve."""
     curve = Curve("sin(x)")
     assert curve.error == ""
-    assert curve.expr == sp.sin(sp.Symbol("x"))
+    assert curve.program is not None and curve.program.kind == "intervals"
+    assert curve.program.glsl.get("compute")
     assert not curve.fragmentShader.toString()
     assert not curve.vertexShader.toString()
 
 
 def test_a_bad_expression_keeps_the_last_working_expression() -> None:
     curve = Curve("floor(x)")
+    drawn = curve.program
     curve.expression = "floor("                               # cannot be parsed
     assert curve.expression == "floor("                       # the box shows what was typed
     assert curve.error, "a failed expression must report a reason"
-    assert curve.expr == sp.floor(sp.Symbol("x")), "the previous expression survives"
+    assert curve.program is drawn, "the previous program survives"
 
     curve.expression = "floor(2*x)"
     assert curve.error == ""
-    assert curve.expr == sp.floor(2 * sp.Symbol("x"))
+    assert curve.program is not None and curve.program.text == "floor(2*x)"
 
 
 def test_curve_signals_fire_on_real_changes_only() -> None:
@@ -74,43 +77,40 @@ def test_curve_signals_fire_on_real_changes_only() -> None:
 
 
 def test_expression_accepts_a_string_and_a_sympy_expression() -> None:
-    """Both input forms end up as the same canonical text; a repeat assignment is free.
-
-    The parsed form lives in the calculator's ``Program`` now, so a sympy object is converted
-    to its canonical string exactly once and the model never parses it again.
-    """
+    """A sympy object is converted to its canonical text once; repeats are free."""
     x = sp.Symbol("x")
 
     curve = Curve(sp.floor(x))
-    assert curve.expression == "floor(x)" and curve.expr == sp.floor(x)
+    assert curve.expression == "floor(x)" and curve.program is not None
+    assert curve.program.text == "floor(x)"
 
     changed = []
     curve.expressionChanged.connect(lambda: changed.append(curve.expression))
     curve.expression = "floor(2*x)"
-    assert curve.expr == sp.floor(2 * x) and changed == ["floor(2*x)"]
+    assert curve.program is not None and curve.program.text == "floor(2*x)"
+    assert changed == ["floor(2*x)"]
 
     curve.expression = sp.floor(2 * x)               # the same canonical string
     assert changed == ["floor(2*x)"], "a repeated expression must not re-request"
 
     curve.expression = sp.floor(3 * x)
-    assert curve.expression == "floor(3*x)" and curve.expr == sp.floor(3 * x)
+    assert curve.expression == "floor(3*x)" and curve.program is not None
+    assert curve.program.text == "floor(3*x)"
 
+    drawn = curve.program
     curve.expression = "floor("
     assert curve.error and curve.expression == "floor("
-    assert curve.expr == sp.floor(3 * x), "the last working expression survives"
-
-    plot = Plot()
-    added = plot.add_curve(sp.tan(x))
-    assert added.expression == "tan(x)" and added.expr == sp.tan(x)
+    assert curve.program is drawn, "the last working program survives"
 
 
 def test_model_roles_and_data() -> None:
     model = CurveListModel()
     curve = model.add_curve("sin(1/x)", color="#ff0000", line_width=3.0, label="pole")
-    assert curve.expr == sp.sin(1 / sp.Symbol("x"))   # the parsed form is cached
+    assert curve.program is not None and curve.program.kind == "intervals"
     names = model.roleNames()
     assert set(names.values()) == {b"curve", b"expression", b"color", b"lineWidth", b"visible",
-                                   b"vertexShader", b"fragmentShader", b"label", b"mathSource"}
+                                   b"vertexShader", b"fragmentShader", b"label", b"mathSource",
+                                   b"implicit"}
     index = model.index(0, 0)
     assert model.data(index, model.CurveRole) is curve
     assert model.data(index, model.ExpressionRole) == "sin(1/x)"
@@ -154,7 +154,7 @@ def test_model_reports_changes_with_the_right_roles() -> None:
     curve.expression = "cos(x)"
     # the new expression is announced first, then the program arrives with its math source
     # and its freshly baked shader
-    assert report[-2:] == [[model.MathSourceRole],
+    assert report[-2:] == [[model.MathSourceRole, model.ImplicitRole],
                            [model.VertexShaderRole, model.FragmentShaderRole]]
     curve.shadersChanged.emit()
     assert report[-1] == [model.VertexShaderRole, model.FragmentShaderRole]

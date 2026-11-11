@@ -1,11 +1,13 @@
-"""Hand-off to matplotlib — and through it to sympy's plotting.
+"""Hand-off to matplotlib (a second, sampled renderer).
 
 This is deliberately a **second renderer**, not the one the Qt view uses, and it is a *sampled*
 one: matplotlib draws polylines, so an oscillating function such as ``sin(1/x)`` aliases exactly
 as it does in any sampling renderer — which is the reason the Qt side exists and evaluates the
 expression per pixel instead. Fonts and antialiasing differ from the Qt view as well, and the
 style mapping below is partial. What this buys is **vector output** (``.svg``/``.pdf``) and
-matplotlib's ecosystem (and sympy's plotting), nothing else.
+matplotlib's ecosystem, nothing else. Sampling uses the curve's ``Program`` (<code>numpy</code>
+source), so the hand-off needs no SymPy and works with programs built anywhere. Implicit
+curves are skipped (a polyline cannot represent a level set).
 
 matplotlib is an *optional* dependency (the ``matplotlib`` extra): this module imports nothing
 until one of its functions is called, and ``import qmlmathplot`` never pulls it in.
@@ -16,8 +18,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
-import sympy as sp
-
 if TYPE_CHECKING:  # pragma: no cover - typing only; the real imports stay lazy
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     from matplotlib.figure import Figure
@@ -25,10 +25,8 @@ if TYPE_CHECKING:  # pragma: no cover - typing only; the real imports stay lazy
     from .curve import Curve
     from .plot import Plot
 
-__all__ = ["figure_for", "save_via_matplotlib", "sympy_plot_for"]
+__all__ = ["figure_for", "save_via_matplotlib"]
 
-#: The free symbol every curve is written in (see ``Curve``).
-_SYMBOL = sp.Symbol("x")
 #: Logical pixels to points (96 px/inch, 72 pt/inch): our sizes are in px, matplotlib's in pt.
 PX_TO_PT = 72.0 / 96.0
 #: The DPI the hand-off assumes for sizes that only exist in pixels (the live viewport).
@@ -74,22 +72,26 @@ def _sample(curve: Curve, x0: float, x1: float, samples: int) -> tuple[object, o
     """Uniform samples of one curve; NaN where the function is outside its domain.
 
     matplotlib breaks the line at NaN, which is how the hand-off keeps ``log(x)`` from being
-    drawn for x < 0. Infinities (poles, ``1/x`` at 0) are turned into NaN as well, so a pole
-    breaks the line instead of drawing a connector across it.
-
-    The expression comes from ``Curve.expr``: the curve parsed it once, so no string is parsed
-    again here.
+    drawn for x < 0. Infinities (poles) become NaN as well, so a pole breaks the line instead
+    of drawing a connector across it. The function comes from ``Program.numpy`` — the curve
+    never parses text again and SymPy is not involved.
     """
     import numpy
 
+    program = curve.program
+    if program is None:
+        raise ValueError(f"{curve.expression!r} has no program yet")
+    if program.kind == "data":
+        points = curve.points
+        if points is None:
+            raise ValueError("a data curve has no points")
+        return numpy.asarray(points[0]), numpy.asarray(points[1])
     try:
-        function = sp.lambdify(_SYMBOL, curve.expr, modules=["numpy"])
+        function = program.compile(numpy=True)
         with numpy.errstate(all="ignore"):        # log(x<0) etc.: NaN, not a warning storm
             xs = numpy.linspace(x0, x1, samples)
             ys = numpy.asarray(function(xs), dtype=float)
     except Exception as exc:
-        # Broad on purpose: lambdify and the evaluation itself report by raising, and the
-        # caller wants one clear message naming the expression.
         raise ValueError(f"cannot sample {curve.expression!r}: {exc}") from exc
     if ys.ndim == 0:                              # a constant expression evaluates to a scalar
         ys = numpy.full(xs.shape, float(ys))
@@ -260,37 +262,3 @@ def save_via_matplotlib(
     figure = figure_for(plot, xlim=xlim, ylim=ylim, samples=samples, adjustable=adjustable,
                         size=size, dpi=dpi, transparent=transparent)
     figure.savefig(str(path), transparent=transparent)
-
-
-def sympy_plot_for(
-    plot: Plot,
-    *,
-    xlim: Sequence[float] | None = None,
-    ylim: Sequence[float] | None = None,
-    samples: int = 2000,
-    adaptive: bool = False,
-) -> object:
-    """Hand this plot to ``sympy.plotting``, uniform by default (``adaptive`` asks for sympy's.
-
-    Returns whatever ``sympy.plotting.plot(..., show=False)`` returns (a matplotlib-backend
-    ``Plot`` object in sympy 1.14), so ``handle.save(path)``/``handle.show()`` work, the window
-    is the same one the matplotlib hand-off would show, and every curve keeps its colour.
-    """
-    _require()                                    # sympy's plotting backend is matplotlib too
-    curves = _visible_curves(plot)
-    if not curves:
-        raise ValueError("nothing to hand to sympy: the plot has no visible curve")
-    x_range = _pair(xlim, "xlim") if xlim is not None else (plot.xlim.x(), plot.xlim.y())
-    y_range = _pair(ylim, "ylim") if ylim is not None else (plot.ylim.x(), plot.ylim.y())
-    handle = sp.plotting.plot(
-        *(curve.expr for curve in curves),        # parsed once, by the curve
-        (_SYMBOL, x_range[0], x_range[1]), show=False,
-        adaptive=adaptive,                        # see Plot.to_sympy for why False is the default
-        nb_of_points=samples,
-        label=[curve.label or curve.expression for curve in curves],
-    )
-    handle.xlim = x_range                         # the same window as the matplotlib hand-off
-    handle.ylim = y_range
-    for index, curve in enumerate(curves):        # per-series style (not a global line_color)
-        handle[index].line_color = curve.color.name()
-    return handle

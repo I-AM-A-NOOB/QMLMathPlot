@@ -15,7 +15,6 @@ import numpy as np
 import pytest
 
 import qmlmathplot
-
 from qmlmathplot import Plot
 
 #: The hand-off is a *sampled* renderer; the tests check the mapping, not the pixels.
@@ -52,8 +51,6 @@ def test_missing_matplotlib_names_the_extra(monkeypatch) -> None:
     plot = _plot()
     with pytest.raises(ImportError, match=r"qmlmathplot\[matplotlib\]"):
         plot.to_matplotlib()
-    with pytest.raises(ImportError, match=r"qmlmathplot\[matplotlib\]"):
-        plot.to_sympy()
 
 
 def test_figure_reflects_limits_style_and_aspect() -> None:
@@ -171,21 +168,6 @@ def test_savefig_validates_the_backend(tmp_path) -> None:
         plot.savefig(str(tmp_path / "x.png"), backend="sympy")
 
 
-def test_to_sympy_returns_a_plot_whose_save_writes_a_file(tmp_path) -> None:
-    plot = _plot()
-    plot.add_curve("sin(x)", color="#ff7f0e", label="sin(x)")
-    handle = plot.to_sympy(xlim=(-2, 2), ylim=(-1, 1), samples=120)
-    assert hasattr(handle, "save") and hasattr(handle, "show")
-    assert handle[0].line_color == "#1f77b4", "each curve keeps its colour"
-    assert handle[1].line_color == "#ff7f0e"
-    assert len(handle[0].get_data()[0]) == 120, "our sampling count, not sympy's adaptive one"
-    target = tmp_path / "sympy.png"
-    handle.save(str(target))
-    assert target.exists() and target.stat().st_size > 0
-    # the window the hand-off asked for is the one sympy shows
-    assert tuple(float(value) for value in handle.ax.get_ylim()) == (-1.0, 1.0)
-
-
 def test_the_hand_off_skips_implicit_curves() -> None:
     """A level set has no polyline: the sampled hand-off skips it (documented in mpl.py) rather
     than pretending, and a plot made only of implicit curves is empty there."""
@@ -197,56 +179,13 @@ def test_the_hand_off_skips_implicit_curves() -> None:
     implicit_only = Plot()
     implicit_only.add_curve("x**2 + y**2 - 1")
     assert len(implicit_only.to_matplotlib().axes[0].lines) == 0
-    with pytest.raises(ValueError, match="no visible curve"):
-        implicit_only.to_sympy()
-
-
-def test_the_hand_off_reuses_the_cached_expression(monkeypatch) -> None:
-    """The deprecated sympy view is parsed once per expression, then cached."""
-    import sympy as sp
-
-    plot = _plot()
-    plot.to_matplotlib(samples=20)          # the first access parses the text, once
-
-    calls: list[object] = []
-    real = sp.sympify
-
-    def counting(value, *args, **kwargs):
-        calls.append(value)
-        return real(value, *args, **kwargs)
-
-    monkeypatch.setattr(sp, "sympify", counting)
-    plot.to_matplotlib(samples=20)
-    plot.to_sympy(samples=20)
-    assert calls == [], "the hand-off must reuse the cached expression"
-
-
-def test_to_sympy_needs_a_visible_curve() -> None:
-    plot = Plot()
-    with pytest.raises(ValueError, match="no visible curve"):
-        plot.to_sympy()
 
 
 def test_the_hand_off_is_reached_through_the_plot() -> None:
     """`mpl` is an implementation module, not a re-exported API: the entry points are methods
     (`test_importing_the_package_does_not_import_matplotlib` covers the lazy import)."""
-    for method in ("to_matplotlib", "to_sympy", "to_image"):
+    for method in ("to_matplotlib", "to_image"):
         assert callable(getattr(Plot(), method))
     assert callable(qmlmathplot.Plot.savefig)
 
 
-def test_to_sympy_passes_adaptive_through() -> None:
-    """``adaptive`` reaches sympy's own sampler; the default is the fixed, uniform count.
-
-    Measured on `sin(1/x)` over [-1, 1] with sympy 1.14: adaptive gives *fewer* points (296 vs
-    2000) and the same block of vertical connectors, which is why the fixed count is the default
-    — but sympy's sampler is one keyword away for anyone who wants it.
-    """
-    pytest.importorskip("matplotlib")
-    from qmlmathplot import Plot
-
-    plot = Plot()
-    plot.add_curve("sin(1/x)")
-
-    assert plot.to_sympy(samples=200)[0].adaptive is False
-    assert plot.to_sympy(samples=200, adaptive=True)[0].adaptive is True

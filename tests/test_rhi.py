@@ -126,6 +126,7 @@ from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import QUrl, qInstallMessageHandler
 from PySide6.QtQuick import QQuickView
 from qmlmathplot import Plot, qml_component_path, register_qml_types
+from qmlmathplot.calc import SymPyProgramSource
 
 bad = []
 qInstallMessageHandler(lambda mode, ctx, msg: bad.append(msg)
@@ -137,7 +138,7 @@ view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
 view.resize(900, 600)
 view.setSource(QUrl.fromLocalFile(qml_component_path()))
 root = view.rootObject()
-plot = Plot()
+plot = Plot(program_source=SymPyProgramSource())
 plot.add_curve("sin(x)")
 root.setProperty("plot", plot)
 plot.camera.set_viewport(900.0, 600.0)

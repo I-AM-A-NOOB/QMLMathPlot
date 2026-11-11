@@ -20,10 +20,10 @@ import sympy as sp
 from sympy.printing.glsl import GLSLPrinter
 from sympy.printing.precedence import PRECEDENCE
 
-from .shaderbuild import render, shader_source
 from .interval import (
     as_rational,
 )
+from .shaderbuild import render, shader_source
 
 __all__ = [
     "VERTEX_SHADER",

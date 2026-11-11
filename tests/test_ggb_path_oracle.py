@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import math
 
+import ggb_oracle
 import pytest
 
-import ggb_oracle
 from qmlmathplot.ggb_path import Column, IntervalPath, IVal
 
 # Exact on the oracle corpus. ``exp_tan_wide`` is a deliberate GGB-weak case (accepted);

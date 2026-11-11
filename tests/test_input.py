@@ -15,8 +15,8 @@ import PySide6.QtTest as _qt_test
 import pytest
 from PySide6.QtCore import QPoint, QPointF, Qt
 from PySide6.QtGui import QWheelEvent
-from PySide6.QtTest import QTest
 from PySide6.QtQuickWidgets import QQuickWidget
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from qmlmathplot import MathPlotWidget

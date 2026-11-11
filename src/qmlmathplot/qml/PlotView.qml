@@ -50,8 +50,8 @@ Item {
     // objects (the plot is an injected property, not an id).
     property QtObject camera: root.plot.camera
     property QtObject curves: root.plot.curves
-    //: "auto" / "gpu" draw through RHI; "cpu" draws one QPainterPath per curve.
-    property string renderMode: "auto"
+    //: "gpu" (default) draws through RHI; "cpu" draws one QPainterPath per curve.
+    property string renderMode: "gpu"
 
     // World <-> screen. The camera maps the centre to the middle of the item, so screen x grows
     // right and screen y grows down (vUV is top-down in the shader too).

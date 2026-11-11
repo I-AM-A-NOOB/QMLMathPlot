@@ -21,16 +21,15 @@ from PySide6.QtCore import (
     QModelIndex,
     QObject,
     QRunnable,
-    QThreadPool,
     Qt,
+    QThreadPool,
     QUrl,
     Signal,
     Slot,
 )
 from PySide6.QtGui import QColor
 
-from .client import Calculator, InlineCalculator
-from .protocol import Program
+from .protocol import Program, ProgramSource, ProgramSourceMissingError
 from .qsb import bake
 
 if TYPE_CHECKING:  # sympy is a calculator concern; only annotations and the legacy view need it
@@ -142,21 +141,6 @@ def points_operations(
     return operations
 
 
-_default_calculator_instance: Calculator | None = None
-
-
-def _default_calculator() -> Calculator:
-    """One in-process calculator shared by curves created without one.
-
-    The model does not own process policy: a host that wants sympy out of its UI process
-    injects a :class:`~qmlmathplot.client.ProcessCalculator` (directly or through ``Plot``).
-    """
-    global _default_calculator_instance
-    if _default_calculator_instance is None:
-        _default_calculator_instance = InlineCalculator()
-    return _default_calculator_instance
-
-
 def curve_for(
     expression: str | sp.Basic,
     *,
@@ -165,7 +149,7 @@ def curve_for(
     line_width: object = None,
     label: str = "",
     parent: QObject | None = None,
-    calculator: Calculator | None = None,
+    program_source: ProgramSource | None = None,
     points: object = None,
 ) -> Curve:
     """Create the artist for an expression (or for data points).
@@ -181,7 +165,7 @@ def curve_for(
         line_width=line_width,  # type: ignore[arg-type]
         label=label,
         parent=parent,
-        calculator=calculator,
+        program_source=program_source,
         points=points,
     )
 
@@ -218,15 +202,16 @@ class Curve(QObject):
         line_width: float = 1.5,
         label: str = "",
         parent: QObject | None = None,
-        calculator: Calculator | None = None,
+        program_source: ProgramSource | None = None,
         points: object = None,
     ) -> None:
         super().__init__(parent)
-        self._calculator = calculator if calculator is not None else _default_calculator()
+        self._program_source = program_source
         self._expression = ""
         self._last_valid_text = ""
         self._expr_cache: tuple[str, sp.Expr] | None = None
         self._program: Program | None = None
+        self._pending_program: Program | None = None
         self._color = _color(color)
         self._line_width = 1.5 if line_width is None else float(line_width)
         self._label = str(label)
@@ -236,43 +221,49 @@ class Curve(QObject):
         self._fragment = QUrl()
         self._compute = QUrl()
         self._generation = 0
-        self._synchronous = False
         self._points: tuple[tuple[float, ...], tuple[float, ...]] | None = None
         # Not parented: a job may outlive the curve; the signal object must stay valid for the
         # queued connection (Qt disconnects the receiver when the curve is destroyed).
         self._bake_signals = _BakeSignals()
         self._bake_signals.done.connect(self._on_bake_done, Qt.ConnectionType.QueuedConnection)
-        self._calculator.ready.connect(self._on_program)
-        self._calculator.failed.connect(self._on_program_failed)
         if points is not None:
             self._points = point_series(points)
             self._program = Program(text="", kind="data")
         else:
-            self._set_expression(expression, synchronous=True)
+            self._set_expression(expression)
 
     # ---------------------------------------------------------------- Expression
     def _get_expression(self) -> str:
         return self._expression
 
-    def _set_expression(self, source: str | sp.Basic, *, synchronous: bool = False) -> None:
-        """Ask the calculator for this expression's :class:`Program`.
-
-        The text is the identity; the parsed form and every generated source live in the
-        program. A process calculator answers later, so the curve keeps drawing its previous
-        program (and shaders) until then.
-        """
+    def _set_expression(self, source: str | sp.Basic) -> None:
+        """Resolve ``source`` through the configured :class:`ProgramSource`, synchronously."""
         text = source if isinstance(source, str) else str(source)
         if self._points is not None:
             self._points = None
+        if not text and self._program is None:
+            self._expression = ""
+            return
         if text == self._expression and self._program is not None and self._program.kind != "data":
             return
         self._generation += 1
         self._expression = text
-        self._synchronous = synchronous
         self.expressionChanged.emit()
-        self._calculator.request(
-            text, self._force_implicit or None, token=(id(self), self._generation)
-        )
+        self._request(text)
+
+    def _request(self, text: str) -> None:
+        source = self._program_source
+        if source is None:
+            raise ProgramSourceMissingError(
+                "no ProgramSource configured: construct Plot(program_source=...) or call "
+                "add_program() — see qmlmathplot.calc.SymPyProgramSource"
+            )
+        try:
+            program = source.program(text, implicit=self._force_implicit or None)
+        except Exception as exc:  # noqa: BLE001 - reported on the curve, never raised to QML
+            self._fail(f"{type(exc).__name__}: {exc}")
+            return
+        self._apply_program(program)
 
     # Annotate the value type (PySide6 idiom): Property is a descriptor, so without the
     # annotation a type checker only sees the Property object and flags every read and write.
@@ -281,26 +272,6 @@ class Curve(QObject):
     expression: str | sp.Basic = Property("QVariant", _get_expression, _set_expression,
                                           notify=expressionChanged)
 
-    def _get_expr(self) -> sp.Expr:
-        """Deprecated sympy view of the *last working* expression (sympy on demand).
-
-        The model itself never needs it; only the compatibility layer and the tests do. A
-        failing edit leaves the previous expression in place, exactly like the previous
-        shaders stay on screen.
-        """
-        import sympy as sp
-
-        if self._points is not None:
-            raise ValueError("a points curve has no expression")
-        text = self._last_valid_text or self._expression
-        if self._expr_cache is not None and self._expr_cache[0] == text:
-            return self._expr_cache[1]
-        expr = sp.sympify(text, locals={"x": sp.Symbol("x"), "y": sp.Symbol("y")})
-        expr = expr.lhs - expr.rhs if isinstance(expr, sp.Eq) else expr
-        self._expr_cache = (text, expr)
-        return expr
-
-    expr: sp.Expr = Property("QVariant", _get_expr, notify=exprChanged)
 
     # ------------------------------------------------------------------ Style
     def _get_color(self) -> QColor:
@@ -378,6 +349,11 @@ class Curve(QObject):
         return self._points
 
     @property
+    def program(self) -> Program | None:
+        """The program being drawn (``None`` before the first successful one)."""
+        return self._program
+
+    @property
     def mathSource(self) -> str:
         """The program's scalar Python source (empty until a program arrives)."""
         if self._program is None or self._program.math is None:
@@ -403,58 +379,58 @@ class Curve(QObject):
             return self._program.implicit
         return self._force_implicit
 
-    def _use_calculator(self, calculator: Calculator) -> None:
-        """Switch to another calculator and re-request the current expression."""
-        if calculator is self._calculator:
-            return
-        try:
-            self._calculator.ready.disconnect(self._on_program)
-            self._calculator.failed.disconnect(self._on_program_failed)
-        except (RuntimeError, TypeError):
-            pass
-        self._calculator = calculator
-        calculator.ready.connect(self._on_program)
-        calculator.failed.connect(self._on_program_failed)
-        self._generation += 1
-        self._calculator.request(
-            self._expression, self._force_implicit or None, token=(id(self), self._generation)
-        )
+    def set_program_source(self, source: ProgramSource | None) -> None:
+        """Use another source and re-resolve the current expression."""
+        self._program_source = source
+        if self._points is None and self._expression:
+            self._generation += 1
+            self._request(self._expression)
 
-    def _on_program(self, token: object, program: object) -> None:
-        """Apply a calculator answer unless a newer assignment superseded it."""
+    def set_program(self, program: Program) -> None:
+        """Apply a program built elsewhere: no parsing, no SymPy, no process policy."""
         if not isinstance(program, Program):
-            return
-        if not (isinstance(token, tuple) and len(token) == 2
-                and token[0] == id(self) and token[1] == self._generation):
+            raise TypeError(f"set_program() takes a Program, got {type(program).__name__}")
+        self._points = None
+        self._generation += 1
+        if program.text and program.text != self._expression:
+            self._expression = program.text
+            self.expressionChanged.emit()
+        self._apply_program(program)
+
+    def _fail(self, message: str) -> None:
+        self._error = str(message)
+        self.errorChanged.emit()
+
+    def _apply_program(self, program: Program) -> None:
+        """Adopt a program and schedule its shaders (never on the GUI thread)."""
+        if program.kind == "data":
+            self._program = program
+            self._error = ""
+            self._finish_apply()
             return
         if program.error:
-            self._error = program.error
-            self.errorChanged.emit()
+            self._fail(program.error)
             return
-        self._program = program
+        self._pending_program = program
         self._error = ""
         sources = dict(program.glsl)
         if not sources:
             self._vertex = self._fragment = self._compute = QUrl()
-            self._apply_program()
+            self._finish_apply()
             return
-        if self._synchronous or not self.bake_async or QCoreApplication.instance() is None:
-            self._run_bake(self._generation, sources)
+        generation = self._generation
+        if not self.bake_async or QCoreApplication.instance() is None:
+            self._run_bake(generation, sources)          # scripts/headless have no UI thread
         else:
             QThreadPool.globalInstance().start(
-                _BakeJob(self._bake_signals, self._generation, sources)
+                _BakeJob(self._bake_signals, generation, sources)
             )
 
-    def _on_program_failed(self, token: object, message: object) -> None:
-        """Transport failure (worker died / timed out): keep the last drawing."""
-        if not (isinstance(token, tuple) and len(token) == 2
-                and token[0] == id(self) and token[1] == self._generation):
-            return
-        self._error = str(message)
-        self.errorChanged.emit()
-
-    def _apply_program(self) -> None:
-        # The drawn expression follows a *successful* apply; a failed bake keeps the old one.
+    def _finish_apply(self) -> None:
+        # The drawn program follows a *successful* apply; a failed bake keeps the old one.
+        if self._pending_program is not None:
+            self._program = self._pending_program
+            self._pending_program = None
         self._last_valid_text = self._expression
         self.exprChanged.emit()
         self.errorChanged.emit()
@@ -475,6 +451,7 @@ class Curve(QObject):
         if generation != self._generation:
             return
         if isinstance(result, Exception):
+            self._pending_program = None
             self._error = f"{type(result).__name__}: {result}"
             self.errorChanged.emit()
             return
@@ -482,7 +459,7 @@ class Curve(QObject):
         self._vertex = _url(baked.get("vertex"))
         self._fragment = _url(baked.get("fragment"))
         self._compute = _url(baked.get("compute"))
-        self._apply_program()
+        self._finish_apply()
 
 
 class ImplicitCurve(Curve):
@@ -500,6 +477,9 @@ class ImplicitCurve(Curve):
 class CurveListModel(QAbstractListModel):
     """The plot's curves, as a model the QRhi renderer and QML chrome read."""
 
+    #: Any curve's ``error`` changed (``Plot.plotError`` aggregates these).
+    curveErrorChanged = Signal()
+
     CurveRole = int(Qt.ItemDataRole.UserRole) + 1
     ExpressionRole = CurveRole + 1
     ColorRole = CurveRole + 2
@@ -509,6 +489,7 @@ class CurveListModel(QAbstractListModel):
     FragmentShaderRole = CurveRole + 6
     LabelRole = CurveRole + 7
     MathSourceRole = CurveRole + 8
+    ImplicitRole = CurveRole + 9
 
     _ROLES = {
         CurveRole: b"curve",
@@ -520,6 +501,7 @@ class CurveListModel(QAbstractListModel):
         FragmentShaderRole: b"fragmentShader",
         LabelRole: b"label",
         MathSourceRole: b"mathSource",
+        ImplicitRole: b"implicit",
     }
 
     def __init__(
@@ -527,22 +509,19 @@ class CurveListModel(QAbstractListModel):
         color_cycle: tuple[str, ...] = DEFAULT_COLOR_CYCLE,
         default_line_width: float = 1.5,
         parent: QObject | None = None,
-        calculator: Calculator | None = None,
-        points: object = None,
+        program_source: ProgramSource | None = None,
     ) -> None:
         super().__init__(parent)
         self._curves: list[Curve] = []
         self._cycle = [str(entry) for entry in color_cycle] or [DEFAULT_COLOR]
         self._default_line_width = float(default_line_width)
-        self._calculator = calculator
+        self._program_source = program_source
 
-    def set_calculator(self, calculator: Calculator | None) -> None:
-        """Switch every curve (existing and future) to another calculator."""
-        self._calculator = calculator
-        if calculator is None:
-            return
+    def set_program_source(self, source: ProgramSource | None) -> None:
+        """Switch every curve (existing and future) to another text->Program source."""
+        self._program_source = source
         for curve in self._curves:
-            curve._use_calculator(calculator)
+            curve.set_program_source(source)
 
     # ------------------------------------------------------------ model glue
     def roleNames(self) -> dict[int, bytes]:  # noqa: N802 (Qt naming)
@@ -573,6 +552,8 @@ class CurveListModel(QAbstractListModel):
             return curve.label
         if role == self.MathSourceRole:
             return curve.mathSource
+        if role == self.ImplicitRole:
+            return curve.implicit
         return None
 
     def _notify(self, curve: Curve, roles: tuple[int, ...]) -> None:
@@ -594,7 +575,10 @@ class CurveListModel(QAbstractListModel):
         )
         curve.visibleChanged.connect(lambda c=curve: self._notify(c, (self.VisibleRole,)))
         curve.labelChanged.connect(lambda c=curve: self._notify(c, (self.LabelRole,)))
-        curve.exprChanged.connect(lambda c=curve: self._notify(c, (self.MathSourceRole,)))
+        curve.exprChanged.connect(
+            lambda c=curve: self._notify(c, (self.MathSourceRole, self.ImplicitRole))
+        )
+        curve.errorChanged.connect(self.curveErrorChanged)
 
     # ---------------------------------------------------------------- public
     def _defaults(self, color: object, line_width: object) -> tuple[QColor, float]:
@@ -626,7 +610,7 @@ class CurveListModel(QAbstractListModel):
         default_color, default_width = self._defaults(color, line_width)
         return self._append(curve_for(expression, color=default_color, line_width=default_width,
                                       label=label, parent=self,
-                                      calculator=self._calculator))
+                                      program_source=self._program_source))
 
     @Slot("QVariant", "QVariant", "QVariant", "QVariant", str, result=QObject)
     @Slot("QVariant", "QVariant", result=QObject)
@@ -642,8 +626,17 @@ class CurveListModel(QAbstractListModel):
         default_color, default_width = self._defaults(color, line_width)
         return self._append(curve_for(
             "", color=default_color, line_width=default_width, label=label,
-            parent=self, calculator=self._calculator, points=(x, y),
+            parent=self, program_source=self._program_source, points=(x, y),
         ))
+
+    def add_program(self, program: Program, *, color: object = None,
+                    line_width: object = None, label: str = "") -> Curve:
+        """Append a curve from an already-built program (no parsing, no source needed)."""
+        default_color, default_width = self._defaults(color, line_width)
+        curve = curve_for("", color=default_color, line_width=default_width, label=label,
+                          parent=self, program_source=self._program_source)
+        curve.set_program(program)
+        return self._append(curve)
 
     @Slot("QVariant", "QVariant", "QVariant", str, result=QObject)
     @Slot("QVariant", result=QObject)
@@ -659,7 +652,7 @@ class CurveListModel(QAbstractListModel):
         default_color, default_width = self._defaults(color, line_width)
         return self._append(curve_for(expression, implicit=True, color=default_color,
                                       line_width=default_width, label=label, parent=self,
-                                      calculator=self._calculator))
+                                      program_source=self._program_source))
 
     @Slot(QObject)
     def remove_curve(self, curve: Curve) -> None:
@@ -690,3 +683,6 @@ class CurveListModel(QAbstractListModel):
 
     def __len__(self) -> int:
         return len(self._curves)
+
+    def __iter__(self):
+        return iter(self._curves)

@@ -865,7 +865,7 @@ wheels = [
 
 [[package]]
 name = "qmlmathplot"
-version = "0.6.0"
+version = "0.7.0"
 source = { editable = "." }
 dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://mirrors.ustc.edu.cn/pypi/simple" }, marker = "python_full_version < '3.12'" },

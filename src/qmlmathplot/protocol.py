@@ -19,9 +19,11 @@ import json
 import struct
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
-from typing import Any, Final
+from typing import Any, Final, Protocol
 
 __all__ = [
+    "ProgramSource",
+    "ProgramSourceMissingError",
     "SCHEMA",
     "Program",
     "decode_frames",
@@ -31,6 +33,16 @@ __all__ = [
     "request_payload",
     "response_payload",
 ]
+
+class ProgramSourceMissingError(RuntimeError):
+    """``add_curve`` needs a text->Program source and none was configured."""
+
+
+class ProgramSource(Protocol):
+    """Turns user text into a :class:`Program`; synchronous by contract, no process policy."""
+
+    def program(self, text: str, *, implicit: bool | None = None) -> Program: ...
+
 
 #: Bumped when a field changes meaning. Fields are only ever added.
 SCHEMA: Final = 2

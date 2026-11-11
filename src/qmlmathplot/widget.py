@@ -29,6 +29,7 @@ from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget
 
 from .curve import DEFAULT_COLOR, Curve
 from .plot import Plot
+from .protocol import ProgramSource
 from .view import qml_component_path, register_qml_types
 
 __all__ = ["MathPlotWidget"]
@@ -62,6 +63,7 @@ class MathPlotWidget(QWidget):
         curve_color: str | None = None,
         background_color: str | None = None,
         aspect: str | float = "auto",
+        program_source: ProgramSource | None = None,
     ) -> None:
         # Check before super().__init__(): constructing a QWidget without a
         # QApplication aborts inside Qt, so the friendly error would never be reached (note
@@ -88,7 +90,12 @@ class MathPlotWidget(QWidget):
         # that model instead of creating its own. ``expression=None`` means "do not add a
         # curve"; if the injected plot already has curves, the single-curve conveniences
         # target its first one.
-        self._plot = plot if plot is not None else Plot(self)
+        if plot is not None:
+            self._plot = plot
+        elif program_source is not None:
+            self._plot = Plot(self, program_source=program_source)
+        else:
+            self._plot = Plot(self)
         if background_color is not None:
             self._plot.background = background_color
         if line_width is not None:

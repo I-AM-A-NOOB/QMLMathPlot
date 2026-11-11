@@ -19,8 +19,8 @@ from __future__ import annotations
 
 import sympy as sp
 
-from .shaderbuild import render, shader_source
 from .interval import interval_glsl, interval_lib_for
+from .shaderbuild import render, shader_source
 
 __all__ = ["PATH_VERTEX", "PATH_FRAGMENT", "path_compute_source", "path_subsamples"]
 

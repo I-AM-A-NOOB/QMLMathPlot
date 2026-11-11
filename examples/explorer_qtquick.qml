@@ -135,6 +135,7 @@ ApplicationWindow {
         PlotView {
             id: view
             objectName: "plot"
+            plot: backendPlot
             SplitView.preferredWidth: 880
             SplitView.fillHeight: true
 

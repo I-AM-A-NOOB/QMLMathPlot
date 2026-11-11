@@ -14,9 +14,9 @@ from PySide6.QtCore import Property, QObject, Signal, Slot
 from PySide6.QtGui import QColor, QImage, QVector2D
 
 from .camera import Camera
-from .client import Calculator, InlineCalculator
 from .curve import DEFAULT_COLOR_CYCLE, Curve, CurveListModel
 from .overlay import Annotation, AnnotationListModel, Guide, GuideListModel
+from .protocol import Program, ProgramSource
 from .themes import names, resolve
 
 if TYPE_CHECKING:  # annotations only; the model never parses expressions itself
@@ -87,7 +87,8 @@ class Plot(QObject):
 
     cameraChanged = Signal()
     curvesChanged = Signal()
-    calculatorChanged = Signal()
+    programSourceChanged = Signal()
+    plotErrorChanged = Signal()
     viewChanged = Signal()
     aspectChanged = Signal()  # forwarded from the camera (the forwarded `aspect`)
     themeChanged = Signal()
@@ -134,13 +135,19 @@ class Plot(QObject):
     spineLeftChanged = Signal()
     spineRightChanged = Signal()
 
-    def __init__(self, parent: QObject | None = None) -> None:
+    def __init__(
+        self,
+        parent: QObject | None = None,
+        *,
+        program_source: ProgramSource | None = None,
+    ) -> None:
         super().__init__(parent)
         self._camera = Camera(self)
         self._theme = ""
-        self._calculator: Calculator = InlineCalculator(self)
+        self._program_source = program_source
         self._curves = CurveListModel(DEFAULT_COLOR_CYCLE, self.line_width, self,
-                                      calculator=self._calculator)
+                                      program_source=program_source)
+        self._curves.curveErrorChanged.connect(self._on_curve_error)
         self._annotations = AnnotationListModel(self)
         self._guides = GuideListModel(self)
         self._camera.viewChanged.connect(self.viewChanged)
@@ -158,17 +165,29 @@ class Plot(QObject):
     camera: Camera = Property(Camera, _get_camera, notify=cameraChanged)
 
     @property
-    def calculator(self) -> Calculator:
-        """Where expressions become programs; inject a process client for process isolation."""
-        return self._calculator
+    def program_source(self) -> ProgramSource | None:
+        """The text -> Program source; pass one explicitly (see ``qmlmathplot.calc``)."""
+        return self._program_source
 
-    @calculator.setter
-    def calculator(self, value: Calculator) -> None:
-        if value is self._calculator:
+    @program_source.setter
+    def program_source(self, source: ProgramSource | None) -> None:
+        if source is self._program_source:
             return
-        self._calculator = value
-        self._curves.set_calculator(value)
-        self.calculatorChanged.emit()
+        self._program_source = source
+        self._curves.set_program_source(source)
+        self.programSourceChanged.emit()
+
+    def _on_curve_error(self) -> None:
+        self.plotErrorChanged.emit()
+
+    def _get_plot_error(self) -> str:
+        for curve in self._curves:
+            if curve.error:
+                return curve.error
+        return ""
+
+    #: The first non-empty curve error (what a plot pane should show).
+    plotError: str = Property(str, _get_plot_error, notify=plotErrorChanged)
 
     def _get_curves(self) -> CurveListModel:
         return self._curves
@@ -333,6 +352,16 @@ class Plot(QObject):
         """
         return self._curves.add_curve(expression, color, line_width, label)
 
+    def add_program(
+        self,
+        program: Program,
+        color: object = None,
+        line_width: object = None,
+        label: str = "",
+    ) -> Curve:
+        """Add a curve from a program built elsewhere (no parsing, no source)."""
+        return self._curves.add_program(program, color=color, line_width=line_width, label=label)
+
     @Slot("QVariant", "QVariant", "QVariant", "QVariant", str, result=QObject)
     @Slot("QVariant", "QVariant", result=QObject)
     def add_points(
@@ -421,32 +450,6 @@ class Plot(QObject):
 
         return figure_for(
             self, xlim=xlim, ylim=ylim, samples=samples, adjustable=adjustable
-        )
-
-    def to_sympy(
-        self,
-        *,
-        xlim: object = None,
-        ylim: object = None,
-        samples: int = 2000,
-        adaptive: bool = False,
-    ) -> object:
-        """Hand this plot to ``sympy.plotting`` and return the Plot object it builds.
-
-        Through sympy this reaches any of sympy's plotting backends. The sampling is ours
-        (uniform, ``samples`` points) unless ``adaptive=True`` asks for sympy's own sampler; the
-        aliasing caveat of :meth:`to_matplotlib` applies either way, because an oscillating
-        function cannot be resolved by sampling at all. Measured on ``sin(1/x)`` over [-1, 1]:
-        sympy 1.14's adaptive sampler produced **289** points — *fewer* than the fixed 2000 —
-        emitted no warning, and drew the same block of vertical connectors, which is why the
-        fixed count is the default. Hidden curves are skipped, each curve keeps its colour, and a
-        passed ``ylim`` is honoured (sympy has no y-range of its own). Needs the optional
-        ``matplotlib`` extra.
-        """
-        from .mpl import sympy_plot_for
-
-        return sympy_plot_for(
-            self, xlim=xlim, ylim=ylim, samples=samples, adaptive=adaptive
         )
 
     @Slot(str)

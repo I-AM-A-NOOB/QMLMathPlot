@@ -126,3 +126,16 @@ def test_a_data_curve_is_drawn(app) -> None:
     view.close()
     assert lit > 200, f"the data polyline was not drawn ({lit} lit samples)"
 
+
+
+def test_compiled_programs_have_no_builtins() -> None:
+    program = build_program("sin(x)")
+    assert program.compile().__globals__["__builtins__"] == {}
+    assert program.compile(numpy=True).__globals__["__builtins__"] == {}
+
+
+def test_a_program_cannot_reach_builtins_even_if_it_mentions_them() -> None:
+    program = Program(text="x", kind="adaptive", math="def f(x):\n    return open('x')\n")
+    function = program.compile()
+    with pytest.raises(NameError):
+        function(0.0)

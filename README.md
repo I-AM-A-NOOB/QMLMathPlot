@@ -12,23 +12,30 @@ The state is a **camera on an infinite canvas**: a `Plot` holds a `Camera` (wher
 and a list of `Curve`s (what is drawn), and the QML component `PlotView` binds to it. Several
 panels are several `Plot`s in a Qt layout — there is no figure, no axes box and no page.
 
-## Breaking changes in 0.6
+## Breaking changes in 0.7
 
-- **The model no longer parses expressions.** A calculator turns text into a `Program`
-  (`qmlmathplot.protocol`) and the model consumes it; the UI process does not import sympy.
-  The in-process default (`InlineCalculator`) needs the `calc` extra
-  (`pip install qmlmathplot[calc]`); a host that isolates the calculator injects
-  `ProcessCalculator` — see `examples/process_calculator.py`.
-- `Curve` and `add_curve` are **asynchronous**: shaders arrive with the program. Wait for
-  `shadersChanged`, and read `curve.error` for a failing edit (the previous drawing stays).
-  `Curve.expr` is a deprecated, lazily imported sympy view.
+- **The core owns no process and no parser.** `Plot`/`Curve`/`PlotView` only know
+  `Program` (`qmlmathplot.protocol`): `kind`, GLSL, and `math`/`numpy` sources. Text is
+  resolved by a **`ProgramSource` you pass explicitly**:
+  ```python
+  from qmlmathplot.calc import SymPyProgramSource
+  plot = Plot(program_source=SymPyProgramSource())   # [calc] extra
+  ```
+  Without a source, `add_curve("sin(x)")` raises `ProgramSourceMissingError`;
+  `add_program()` and `add_points()` always work. `qmlmathplot.calc` (SymPy) and
+  `examples/process_calculator.py` (a process round trip) are optional front ends.
+- `add_curve` returns with the `Program` already resolved; **only the qsb bake is
+  asynchronous** (`curve.shadersChanged`; a failed edit keeps the previous program and
+  drawing). `Curve.expr` was removed; use `curve.program`.
 - Routing is `Program.kind`: `intervals` (compute shader), `adaptive` (CPU `CurvePlotter`),
-  `implicit` (level set). `add_curve("a*x")` reports the parameter error on the curve
-  instead of raising.
-- **Removed:** `Figure`, `Axes`, `FigureCanvasQt`, `qmlmathplot.pyplot`. `MathPlotWidget`
-  stays.
-- **QML:** `import QmlMathPlot 2.0`; `cpuRenderer: true` became `renderMode: "cpu"`
-  (`"auto"` / `"gpu"` / `"cpu"`).
+  `implicit` (level set), `data` (`add_points`). `add_curve("a*x")` reports the parameter
+  error on the curve (`plot.plotError` aggregates it).
+- **Removed:** `Figure`, `Axes`, `FigureCanvasQt`, `qmlmathplot.pyplot`, `Plot.to_sympy`,
+  `Curve.expr`, `Plot.calculator`, the process client in the core.
+- **QML:** `import QmlMathPlot 2.0`; `renderMode` is `"gpu"` (default) or `"cpu"` — there is
+  no runtime `"auto"` fallback. In `"cpu"` mode a level set shows “implicit curves need the
+  GPU renderer” instead of a blank area.
+- The matplotlib hand-off samples `Program.numpy`, so `[matplotlib]` no longer needs SymPy.
 
 ## Quick start
 
@@ -37,11 +44,12 @@ One line in a QtWidgets layout (least effort):
 ```python
 from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget
 from qmlmathplot import MathPlotWidget
+from qmlmathplot.calc import SymPyProgramSource
 
 app = QApplication([])
 window = QWidget()
 box = QVBoxLayout(window)
-plot = MathPlotWidget("sin(1/x)")        # drag to pan / wheel zooms anchored at the cursor
+plot = MathPlotWidget("sin(1/x)", program_source=SymPyProgramSource())
 box.addWidget(plot)
 window.show()
 app.exec()
@@ -52,10 +60,10 @@ axes through the origin with the tick labels riding them) — the default style 
 at construction, so `plot.theme = "default"` is the reset.
 
 `add_curve()` (and `Curve.expression`) take the expression as text; a sympy object is also
-accepted and converted to its canonical string once. The model never parses it: a calculator
-turns the text into a `Program` (`kind`, shader sources, `math`/`numpy` programs), so the UI
-process can stay sympy-free. `Curve.expr` still exists as a deprecated, lazily imported sympy
-view for the compatibility layer, and the matplotlib hand-off uses it.
+accepted and converted to its canonical string once. The model never parses it: the
+`ProgramSource` you injected turns the text into a `Program` (kind, shader sources,
+`math`/`numpy` programs), so the UI process can stay sympy-free. `curve.program` is the
+program being drawn.
 
 ```python
 curve = plot.add_curve("sin(x)")
@@ -103,11 +111,12 @@ from PySide6.QtCore import QUrl
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQuick import QQuickView
 from qmlmathplot import Plot, qml_component_path, register_qml_types
+from qmlmathplot.calc import SymPyProgramSource
 
 app = QGuiApplication([])
 register_qml_types()                       # registers Plot, Camera, Curve and PlotView
 
-plot = Plot()                              # the model (owned by the app)
+plot = Plot(program_source=SymPyProgramSource())   # the model (owned by the app)
 plot.add_curve("sin(1/x)")
 view = QQuickView()
 view.setSource(QUrl.fromLocalFile(qml_component_path()))
@@ -149,11 +158,11 @@ The model:
 
 | Object | Members |
 |---|---|
-| `Plot` | `camera`, `curves`, `annotations`, `guides`, `xlim`/`ylim`/`aspect` (forwarded), `add_curve()` / `add_implicit()` / `remove_curve()`, `annotate()` / `add_text()` / `add_hline()` / `add_vline()`, `set_xticks()` / `set_yticks()`, `available_themes`, and the style properties: `background`, `grid`, `grid_x`, `grid_y`, `grid_color`, `grid_width`, `grid_alpha`, `grid_style`, `axis_color`, `axis_width`, `axes_position`, `color_cycle`, `line_width`, `text_color`, `tick_color`, `tick_length`, `tick_width`, `tick_pad`, `ticks_top`, `ticks_right`, `minor_ticks`, `spine_top` / `spine_bottom` / `spine_left` / `spine_right`, `font_size`, `tick_font_size`, `title`, `xlabel`, `ylabel`, `title_color`, `title_font_size`, `title_bold`, `legend`, `legend_position`, `ticks_visible`, `theme` |
+| `Plot` | `camera`, `curves`, `annotations`, `guides`, `program_source`, `plotError` (read-only), `xlim`/`ylim`/`aspect` (forwarded), `add_curve()` / `add_program()` / `add_points()` / `add_implicit()` / `remove_curve()`, `to_matplotlib()` / `to_image()` / `savefig()`, `annotate()` / `add_text()` / `add_hline()` / `add_vline()`, `set_xticks()` / `set_yticks()`, `available_themes`, and the style properties: `background`, `grid`, `grid_x`, `grid_y`, `grid_color`, `grid_width`, `grid_alpha`, `grid_style`, `axis_color`, `axis_width`, `axes_position`, `color_cycle`, `line_width`, `text_color`, `tick_color`, `tick_length`, `tick_width`, `tick_pad`, `ticks_top`, `ticks_right`, `minor_ticks`, `spine_top` / `spine_bottom` / `spine_left` / `spine_right`, `font_size`, `tick_font_size`, `title`, `xlabel`, `ylabel`, `title_color`, `title_font_size`, `title_bold`, `legend`, `legend_position`, `ticks_visible`, `theme` |
 | `Camera` | `centre`, `zoom` (world units per logical pixel), `aspect`, `xlim`/`ylim` (derived), `ticks_x`/`ticks_y`, `zoomStep` / `panEnabled` / `zoomEnabled`, `animationDuration`, `input` (a `ViewInput`), slots `set_viewport(w, h)` / `zoom_by(delta, u, v, w, h)` / `zoom_at(factor, u, v, w, h)` / `pan_pixels(dx, dy)` / `animate_zoom(...)` / `animate_pan(dx, dy, ms)` / `stop_animation()` / `reset()` |
 | `ViewInput` | `keyboardEnabled`, `keyPanStep`, `keyPanRepeatInterval`, `panLeftShortcut` / `panRightShortcut` / `panUpShortcut` / `panDownShortcut` / `zoomInShortcut` / `zoomOutShortcut`, `matches(key, modifiers, shortcut)` |
-| `Curve` | `expression` (string or sympy expression), `expr` (the parsed expression, read-only), `implicit`, `color`, `lineWidth`, `visible`, `label`, `error` (read-only), the baked `vertexShader` / `fragmentShader` |
-| `CurveListModel` | the curves as a model (`curve`, `expression`, `color`, `lineWidth`, `visible`, `label`, `vertexShader`, `fragmentShader` roles) so the single QRhi pass can read each curve |
+| `Curve` | `expression`, `program` (read-only), `set_program()`, `implicit`, `mathSource`, `color`, `lineWidth`, `visible`, `label`, `error` (read-only), the baked `vertexShader` / `fragmentShader` / `computeShader` |
+| `CurveListModel` | the curves as a model (`curve`, `expression`, `color`, `lineWidth`, `visible`, `label`, `vertexShader`, `fragmentShader`, `mathSource`, `implicit` roles) so the single QRhi pass can read each curve |
 | `Annotation` | `text`, `xy` (world), `xytext` (pixel offset), `arrow`, `color`, `fontSize`, `visible` |
 | `Guide` | `kind` (`"h"`/`"v"`), `value`, `color`, `width`, `style`, `visible` |
 
@@ -422,34 +431,27 @@ plot.to_image()                                        # the live view, its own 
   drift from what the user sees. Rendering goes through an offscreen `QQuickWidget`, so the
   export needs a `QApplication` (a clear error is raised instead of a crash if there is none).
 
-### Vector output, matplotlib and sympy
+### Vector output and matplotlib
 
 `to_matplotlib()` hands the plot to matplotlib (one `Axes`) and `savefig(..., backend="matplotlib")`
-renders through it, so `.svg`/`.pdf` work; `to_sympy()` builds the same figure through
-`sympy.plotting`, which is what you want when the figure should live in sympy's world:
+renders through it, so `.svg`/`.pdf` work:
 
 ```python
 figure = plot.to_matplotlib(xlim=(-1, 1), ylim=(-1, 1))    # -> matplotlib.figure.Figure
 plot.savefig("out.svg", backend="matplotlib")              # vector, matplotlib's own savefig
-handle = plot.to_sympy(xlim=(-1, 1))
-handle.save("out.png")
 ```
 
 matplotlib is an **optional** extra (`pip install "qmlmathplot[matplotlib]"`); nothing in the
-package imports it until one of these is called, and the error names the extra. `sympy` itself is
-a hard dependency, so `to_sympy()` needs matplotlib only because its plotting backend does.
-Neither hand-off needs a Qt application: a `Plot` works in a plain script, which is what makes it
-usable next to a notebook or a matplotlib-only tool.
+package imports it until one of these is called, and the error names the extra. The sampling
+comes from each curve's `Program.numpy` source, so the hand-off needs no SymPy. Level sets are
+skipped (a polyline cannot represent one) and a plot of implicit curves only is empty there.
+Neither hand-off needs a Qt application: a `Plot` works in a plain script.
 
 **This is a second renderer, and a sampled one.** matplotlib draws polylines, so each curve is
 evaluated at `samples` points (default 2000) and an oscillating function such as `sin(1/x)`
-aliases — exactly what the Qt view avoids by evaluating the expression per pixel. SymPy does not
-solve it either, and its adaptive mode does not help: measured on `sin(1/x)` over [-1, 1],
-`sympy.plotting.plot(adaptive=True)` uses **289** points (fewer than a fixed 2000), emits no
-warning in sympy 1.14, and draws the same block of vertical connectors. The difference is how
-the two fail: a sampled renderer draws an artefact, the Qt view draws the envelope the data
-actually supports. (`to_sympy()` returns the object sympy made, so its own `adaptive` mode is
-available there.) Fonts and antialiasing are matplotlib's, not the Qt view's, so the two
+aliases — exactly what the Qt view avoids by evaluating the expression per pixel. The difference
+is how the two fail: a sampled renderer draws an artefact, the Qt view draws the envelope the
+data actually supports. Fonts and antialiasing are matplotlib's, not the Qt view's, so the two
 renderers cannot look identical, and the style mapping is partial: background, grid (on/off and
 colour/width/alpha/dash), per-curve colour and width, tick and text colours, font sizes, title,
 axis colour/width, the limits, the aspect with matplotlib's own `adjustable`, and
@@ -490,7 +492,7 @@ three import QtWidgets lazily, so a pure-QML host never loads it.
 | View | `src/qmlmathplot/qml/PlotView.qml` (+ `PlotCurves.qml`, `PlotFurniture.qml`, `PlotInput.qml`, `view.py`) | composition: model injection, camera mapping and keyboard focus; curves, furniture and pointer input live in the three child components (one `QQuickRhiItem` pass for all curves) |
 | Themes | `src/qmlmathplot/themes.py` + `themes/` | the vendored Matplotlib style sheets, resolved onto the `Plot`'s properties |
 | Export | `src/qmlmathplot/export.py` | `Plot.savefig()` / `to_image()`: the canvas region rendered offscreen at a pixel size (QtWidgets is imported lazily) |
-| Hand-off | `src/qmlmathplot/mpl.py` | `Plot.to_matplotlib()` / `to_sympy()` / `savefig(backend="matplotlib")`: a sampled second renderer for vector output (matplotlib is an optional extra, imported lazily) |
+| Hand-off | `src/qmlmathplot/mpl.py` | `Plot.to_matplotlib()` / `savefig(backend="matplotlib")`: a sampled second renderer for vector output (samples `Program.numpy`; matplotlib is an optional extra) |
 | Bake | `src/qmlmathplot/qsb.py` | GLSL → `.qsb` (PySide6 ships `qsb.exe`), cached by source hash |
 | Widget | `src/qmlmathplot/widget.py` | `MathPlotWidget`: QQuickWidget bridge, drops straight into QtWidgets layouts |
 | Entry | `src/qmlmathplot/app.py` | command line / standalone window (the `qmlmathplot` script, `examples/minimal.py`) |
@@ -592,7 +594,7 @@ uv run ruff check src tests examples   # bug-level lint (undefined names, unused
 - `test_handoff.py`: the matplotlib/sympy hand-off — the figure reflects the limits, aspect,
   `adjustable`, grid, title, spines at zero and per-curve style; the sampling is uniform and NaN
   outside the domain (so `log(x)` breaks); `savefig(backend="matplotlib")` writes real `.svg`,
-  `.pdf` and `.png`; `to_sympy().save()` writes a file and keeps per-curve colours; importing
+  `.pdf` and `.png`; each curve keeps its colour; importing
   `qmlmathplot` does not import matplotlib, and hiding matplotlib produces an error naming the
   extra.
 - `test_async_bake.py`: a later expression assignment bakes on the thread pool, a stale bake

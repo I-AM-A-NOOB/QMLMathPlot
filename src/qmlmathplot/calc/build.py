@@ -1,7 +1,7 @@
 """Text -> :class:`Program`. The only place in the package that needs sympy at runtime.
 
-Kept Qt-free on purpose: the same code runs in-process (:class:`qmlmathplot.client.
-InlineCalculator`) and inside the worker process (``python -m qmlmathplot.calc``). The
+Kept Qt-free on purpose: the same code backs :class:`SymPyProgramSource` in the UI process
+and the worker (``python -m qmlmathplot.calc``). The
 routing rules are the model's established ones: an equation or a free ``y`` is a level set,
 an expression the interval gate accepts is drawn by the compute path, everything else goes
 through the CPU plotter. Shader sources and Python sources are generated here so the model

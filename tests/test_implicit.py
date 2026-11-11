@@ -47,14 +47,14 @@ def test_eq_is_always_a_level_set() -> None:
     circle = model_.add_curve(sp.Eq(x**2 + y**2, 1))
     assert type(circle) is Curve                 # an ordinary curve can re-route later
     assert circle.implicit is True
-    assert circle.expr == x**2 + y**2 - 1
+    assert circle.program is not None and circle.program.kind == "implicit"
     assert circle.expression == "Eq(x**2 + y**2, 1)"
     assert not circle.error
     assert circle.fragmentShader.toString().endswith(".qsb")
 
     vertical = model_.add_curve(sp.Eq(x**2, 1))
     assert vertical.implicit is True and type(vertical) is Curve
-    assert vertical.expr == x**2 - 1
+    assert vertical.program is not None and vertical.program.kind == "implicit"
 
     forced = model_.add_implicit(sp.Eq(x**2 + y**2, 1))
     assert type(forced) is ImplicitCurve and forced.implicit
@@ -79,7 +79,7 @@ def test_assigning_an_expression_reroutes_the_same_curve() -> None:
 
     curve.expression = sp.Eq(x**2 + y**2, 1)
     assert curve.implicit is True
-    assert curve.expr == x**2 + y**2 - 1
+    assert curve.program is not None and curve.program.kind == "implicit"
     assert curve.expression.startswith("Eq(")
     assert curve.fragmentShader != one_d_shader
     curve.expression = "sin(x)"
@@ -113,13 +113,13 @@ def test_a_failed_expression_keeps_the_drawn_one() -> None:
     pseudo-conic centred at y = 1/2). A template that cannot render the expression reports it and
     keeps the curve that was drawn, while `expression` still shows what was typed."""
     curve = Curve("sin(x)")
-    drawn = curve.expr
+    drawn = curve.program
     curve.expression = "a*sin(x)"
     assert "substitute parameters first" in curve.error
-    assert curve.expression == "a*sin(x)" and curve.expr == drawn
+    assert curve.expression == "a*sin(x)" and curve.program is drawn
     assert curve.implicit is False, "the drawn curve is still the 1-D one"
     curve.expression = "log(x), 1"                        # unparsable
-    assert curve.error and curve.expr == drawn
+    assert curve.error and curve.program is drawn
 
 
 # ------------------------------------------------------------------------- shader text

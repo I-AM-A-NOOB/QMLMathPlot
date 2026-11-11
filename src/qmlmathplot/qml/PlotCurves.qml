@@ -7,7 +7,7 @@ Item {
     id: curvesRoot
 
     property Item view
-    property string renderMode: "auto"
+    property string renderMode: "gpu"
 
     CurveRhiItem {
         anchors.fill: parent

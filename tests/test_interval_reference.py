@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import math
 
+import ggb_oracle
 import pytest
 
-import ggb_oracle
 from qmlmathplot.interval_reference import (
     CONNECTED,
     EMPTY,

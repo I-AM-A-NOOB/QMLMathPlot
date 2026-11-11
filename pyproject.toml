@@ -1,6 +1,6 @@
 [project]
 name = "qmlmathplot"
-version = "0.6.0"
+version = "0.7.0"
 description = "Embeddable function plotter for Qt Quick / QtWidgets (implicit per-pixel drawing, MVVM)"
 readme = "README.md"
 license = "GPL-3.0-only"
@@ -52,4 +52,4 @@ line-length = 100
 [tool.ruff.lint]
 # Bug-level rules only: undefined names, unused imports, syntax/exception mistakes. Stylistic
 # families (import sorting, quoted annotations, …) are not enforced yet.
-select = ["F", "E9"]
+select = ["F", "E9", "I"]

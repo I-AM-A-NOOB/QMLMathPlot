@@ -21,7 +21,7 @@ from __future__ import annotations
 import mpmath as mp
 import sympy as sp
 
-from .ggb_path import Column, IINF, IntervalPath, IVal, PathPoint
+from .ggb_path import IINF, Column, IntervalPath, IVal, PathPoint
 
 __all__ = ["Column", "PathPoint", "IVal", "IntervalSampler", "IntervalPathReference"]
 

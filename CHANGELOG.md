@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.7.0 — unreleased
+
+### Breaking
+
+- **The core owns no process and no parser.** Text is resolved by an explicit, synchronous
+  `ProgramSource` (`Plot(program_source=SymPyProgramSource())`); without one,
+  `add_curve("...")` raises `ProgramSourceMissingError`. `add_program()` / `set_program()` and
+  `add_points()` work without a source. Removed: `qmlmathplot.client`, `Plot.calculator`,
+  `Curve.expr`, `Plot.to_sympy`.
+- Construction resolves the `Program` synchronously; **the first qsb bake is asynchronous**
+  (thread pool) as well as later ones. A failed bake keeps the previous program and shaders.
+- QML `renderMode` is `"gpu"` (default) or `"cpu"`; the runtime `"auto"` value is gone. In cpu
+  mode an implicit curve shows an explicit warning instead of a blank area.
+- `Program.compile` uses an explicit `__builtins__ = {}`; programs cannot reach builtins.
+- The matplotlib hand-off samples `Program.numpy`; the `matplotlib` extra no longer needs
+  sympy. Implicit curves are still skipped there.
+
+### Added
+
+- `qmlmathplot.calc.SymPyProgramSource` (`[calc]`) as the synchronous SymPy front end.
+- `Plot.add_program()` / `Curve.set_program()`; `Plot.plotError`; `Curve.program`.
+- `ProgramSource` / `ProgramSourceMissingError` in `qmlmathplot.protocol`.
+
+
 ## 0.6.0 — 2026-11-10
 
 ### Breaking

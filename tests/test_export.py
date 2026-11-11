@@ -415,7 +415,8 @@ def test_a_pure_qml_host_gets_a_clear_error() -> None:
         "from PySide6.QtGui import QGuiApplication\n"
         "app = QGuiApplication(sys.argv[:1])\n"
         "from qmlmathplot import Plot\n"
-        "plot = Plot()\n"
+        "from qmlmathplot.calc import SymPyProgramSource\n"
+        "plot = Plot(program_source=SymPyProgramSource())\n"
         "plot.add_curve('sin(x)')\n"
         "plot.to_image(width=64, height=64)\n"
     )

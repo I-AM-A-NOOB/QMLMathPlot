@@ -72,7 +72,13 @@ def main(argv: list[str] | None = None) -> int:
 
     # MVVM: the app side owns the model and injects it into the component (which also
     # brings its own when nothing is injected)
-    plot = Plot()
+    try:
+        from .calc import SymPyProgramSource
+    except ImportError:  # pragma: no cover - the CLI is a developer tool
+        print("the command line needs the calculator extra: pip install 'qmlmathplot[calc]'",
+              file=sys.stderr)
+        return 1
+    plot = Plot(program_source=SymPyProgramSource())
     plot.add_curve(args.expression)
     root.setProperty("plot", plot)
 

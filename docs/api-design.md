@@ -3,6 +3,12 @@
 Status: **decided**; supersedes the earlier `Figure`/`Axes` framing of this document: those
 exist to serve a *bounded canvas with subplots*, and QMLMathPlot has neither.
 
+**0.7 update:** the core consumes `Program` from an explicit, synchronous `ProgramSource`
+(`Plot(program_source=...)`) and owns no process and no text parser; `add_program()` and
+`add_points()` need no source. The `Figure`/`Axes`/`pyplot` facade and `Plot.to_sympy()` were
+removed in 0.6, and the matplotlib hand-off now samples `Program.numpy` (no SymPy). Sections
+that still describe the facade are historical.
+
 **Implemented** (see the build order): §2–§7 — `Plot` / `Camera` / `Curve` / `CurveListModel`,
 multiple curves, grid, axes, ticks, titles, the theme system (§7b) — and §9, the export
 including the matplotlib hand-off.
@@ -446,7 +452,6 @@ fig = plot.to_matplotlib()          # -> matplotlib.figure.Figure, one Axes, hea
                                     #    (Figure + FigureCanvasAgg: no pyplot, no GUI
                                     #     backend, so it works with no QApplication at all)
 plot.savefig("out.svg", backend="matplotlib")
-sp = plot.to_sympy()                # -> sympy.plotting.Plot
 ```
 
 **matplotlib is not a dependency.** It is an optional extra

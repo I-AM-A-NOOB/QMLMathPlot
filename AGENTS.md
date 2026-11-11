@@ -1494,3 +1494,28 @@ the full step budget in both directions plus both windows.
     - QML is `QmlMathPlot 2.0`; `cpuRenderer` became `renderMode` (`auto`/`gpu`/`cpu`).
     - Removed with 0.6: `figure.py`, `pyplot.py`, `canvas.py` (`Figure`/`Axes`/`pyplot`).
       `MathPlotWidget` stays.
+
+78. **0.7: the core owns no process and no parser; `ProgramSource` is explicit.** `Plot` /
+    `Curve` / `PlotView` only consume `Program` (`protocol.py`); text is resolved by a
+    **synchronous** source passed in (`Plot(program_source=SymPyProgramSource())` from
+    `qmlmathplot.calc`, or a host implementation). No source means `add_curve` raises
+    `ProgramSourceMissingError`; `add_program()` / `set_program()` and `add_points()` need no
+    source. `qmlmathplot.client`, `Plot.calculator`, `Curve.expr` and `Plot.to_sympy` are gone.
+
+    Behaviours that follow from it:
+    - construction resolves the program synchronously, but **the first qsb bake is on the
+      thread pool too** (headless scripts without `QCoreApplication` stay synchronous). The
+      test suite injects a `SymPyProgramSource` in `tests/conftest.py` (patching the
+      `program_source` default) so the 0.6 tests keep their synchronous setup; tests that
+      check the missing-source path pass `program_source=None` explicitly.
+    - a failed bake keeps the previous *program* as well as its shaders: the new program is
+      only adopted in `_finish_apply` (`_pending_program`).
+    - `Program.compile` runs with an explicit `__builtins__ = {}` (trust boundary); the
+      compiled function cannot reach `open`/`__import__`.
+    - `mpl.py` samples `Program.numpy` (`compile(numpy=True)`), so the matplotlib extra no
+      longer needs sympy; `to_sympy` was removed.
+    - QML `renderMode` is `"gpu"` (default) or `"cpu"`; there is no runtime `"auto"` probe.
+      In cpu mode, `CpuCurves.qml` shows "implicit curves need the GPU renderer" for level
+      sets instead of a silent blank (the delegate uses the new `implicit` role).
+    - The Quick explorer injects its `Plot` from Python via a context property: a
+      QML-created `Plot` has no text->Program source.

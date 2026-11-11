@@ -17,7 +17,8 @@ from PySide6.QtCore import QUrl
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 
-from qmlmathplot import register_qml_types
+from qmlmathplot import Plot, register_qml_types
+from qmlmathplot.calc import SymPyProgramSource
 
 
 def main() -> int:
@@ -25,6 +26,10 @@ def main() -> int:
     register_qml_types()
 
     engine = QQmlApplicationEngine()
+    # The model is owned by the app; a QML-created Plot has no text->Program source.
+    engine.rootContext().setContextProperty(
+        "backendPlot", Plot(program_source=SymPyProgramSource())
+    )
     engine.load(QUrl.fromLocalFile(str(Path(__file__).with_suffix(".qml"))))
     if not engine.rootObjects():
         print("failed to load explorer_qtquick.qml", file=sys.stderr)

@@ -19,12 +19,14 @@ def compile_function(
     source: str, name: str = "f", *, numpy: bool = False
 ) -> Callable[..., Any]:
     """Return the ``name`` function defined by ``source``."""
+    # Explicit empty builtins: the calculator is the trust boundary, and a compiled program
+    # must not reach ``open``/``__import__`` even if it somehow contained them.
     if numpy:
         import numpy as np
 
-        namespace: dict[str, Any] = {"numpy": np, "abs": abs}
+        namespace: dict[str, Any] = {"numpy": np, "abs": abs, "__builtins__": {}}
     else:
-        namespace = {"math": math, "abs": abs}
+        namespace = {"math": math, "abs": abs, "__builtins__": {}}
     exec(compile(source, "<program>", "exec"), namespace)  # noqa: S102 - our source
     function = namespace.get(name)
     if not callable(function):
