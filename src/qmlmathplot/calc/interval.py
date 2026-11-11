@@ -29,7 +29,7 @@ from typing import cast
 
 import sympy as sp
 
-from .shaderbuild import shader_source
+from ..shaderbuild import shader_source
 
 __all__ = [
     "INTERVAL_LIB",

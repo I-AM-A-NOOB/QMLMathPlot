@@ -11,7 +11,7 @@ import pytest
 import sympy as sp
 from PySide6.QtGui import QShader
 
-from qmlmathplot import model
+from qmlmathplot.calc import model
 from qmlmathplot.qsb import bake
 
 X = sp.Symbol("x")

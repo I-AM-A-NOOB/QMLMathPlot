@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from qmlmathplot.ggb_reference import IntervalPathReference, IntervalSampler
+from qmlmathplot.calc.ggb_reference import IntervalPathReference, IntervalSampler
 
 WIDTH, HEIGHT = 120, 60
 

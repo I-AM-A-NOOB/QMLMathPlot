@@ -11,7 +11,7 @@ import math
 import ggb_oracle
 import pytest
 
-from qmlmathplot.interval_reference import (
+from qmlmathplot.calc.interval_reference import (
     CONNECTED,
     EMPTY,
     INVERTED,

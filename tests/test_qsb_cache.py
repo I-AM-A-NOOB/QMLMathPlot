@@ -11,7 +11,7 @@ import pytest
 import sympy as sp
 
 import qmlmathplot.qsb as qsb
-from qmlmathplot import model
+from qmlmathplot.calc import model
 
 X = sp.Symbol("x")
 

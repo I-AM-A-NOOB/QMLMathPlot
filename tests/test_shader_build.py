@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 import sympy as sp
 
-from qmlmathplot.ggb_compute import path_compute_source
-from qmlmathplot.model import implicit_shader_sources
+from qmlmathplot.calc.ggb_compute import path_compute_source
+from qmlmathplot.calc.model import implicit_shader_sources
 from qmlmathplot.shaderbuild import render, shader_source
 
 SHADERS = (

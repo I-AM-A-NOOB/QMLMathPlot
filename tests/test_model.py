@@ -8,7 +8,8 @@ import pytest
 import sympy as sp
 from PySide6.QtCore import Qt
 
-from qmlmathplot import Camera, model, nice_ticks
+from qmlmathplot import Camera, nice_ticks
+from qmlmathplot.calc import model
 
 X = sp.Symbol("x")
 
@@ -370,7 +371,7 @@ def test_the_renderer_policy_is_capability_based_not_a_string_list():
     `1/x` and `sin(1/x)` are the cases the old `("tan(x)", "log(x)")` whitelist sent to the
     fragment fallback even though their interval topology is well defined.
     """
-    from qmlmathplot.interval import compute_supported as path_compute_supported
+    from qmlmathplot.calc.interval import compute_supported as path_compute_supported
 
     for expression in ("tan(x)", "tan(2*x)", "log(x)", "log(1+x)", "1/x", "sin(1/x)",
                        "x**2", "sin(x)", "x**(1/3)"):
@@ -385,7 +386,7 @@ def test_the_renderer_policy_is_capability_based_not_a_string_list():
 def test_the_interval_library_is_trimmed_to_the_functions_the_expression_uses():
     """Every compute shader used to embed the whole library; the trim keeps only the
     dependency closure, which matters for the D3D11 compile at pipeline creation."""
-    from qmlmathplot.interval import INTERVAL_LIB, interval_glsl, interval_lib_for
+    from qmlmathplot.calc.interval import INTERVAL_LIB, interval_glsl, interval_lib_for
 
     sine = interval_lib_for(interval_glsl(sp.sin(X)))
     square = interval_lib_for(interval_glsl(sp.Symbol("x") ** 2))
@@ -396,7 +397,7 @@ def test_the_interval_library_is_trimmed_to_the_functions_the_expression_uses():
 
 def test_compute_source_accepts_a_parsed_expression(monkeypatch):
     """`Curve` already parsed the expression; the RHI must not sympify the string again."""
-    from qmlmathplot.ggb_compute import path_compute_source
+    from qmlmathplot.calc.ggb_compute import path_compute_source
 
     calls: list[object] = []
     real = sp.sympify
@@ -414,7 +415,7 @@ def test_the_interval_gate_is_ggbs_single_variable_rule():
     """GGB rejects every expression with more than one x occurrence, whatever its poles."""
     x = sp.Symbol("x")
     mixed = -x**2 / 2 + x * sp.tan(x) - sp.log(1 / sp.cos(x) ** 2) / 2
-    from qmlmathplot.interval import compute_supported
+    from qmlmathplot.calc.interval import compute_supported
 
     assert not compute_supported(mixed)
     assert not compute_supported(x / sp.sqrt(x**2))

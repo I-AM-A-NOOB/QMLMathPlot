@@ -13,10 +13,10 @@ from __future__ import annotations
 import sympy as sp
 from sympy.printing.numpy import NumPyPrinter
 
-from ..ggb_compute import path_compute_source
-from ..interval import compute_supported
-from ..model import implicit_shader_sources
 from ..protocol import Program
+from .ggb_compute import path_compute_source
+from .interval import compute_supported
+from .model import implicit_shader_sources
 
 __all__ = ["build_program", "python_sources"]
 

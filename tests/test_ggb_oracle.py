@@ -65,8 +65,8 @@ def test_the_problem_expression_is_not_an_interval_function() -> None:
 
 
 def test_python_routing_matches_ggb_on_the_corpus() -> None:
-    from qmlmathplot.ggb_eligibility import supported as ggb_supported
-    from qmlmathplot.interval import compute_supported
+    from qmlmathplot.calc.ggb_eligibility import supported as ggb_supported
+    from qmlmathplot.calc.interval import compute_supported
 
     for name in ggb_oracle.names():
         data = ggb_oracle.load(name)

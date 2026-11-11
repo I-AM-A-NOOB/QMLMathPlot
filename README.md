@@ -470,7 +470,7 @@ backend is used**. The implementation sets `QSG_RHI_BACKEND` before
 
 ## Structure (model / view)
 
-The layers are strict about Qt. **`model.py` (expression → GLSL), `themes.py` (style-sheet
+The layers are strict about Qt. **`calc/` (expression → GLSL and math/numpy sources), `themes.py` (style-sheet
 conversion) and `mpl.py` (the sampled hand-off) import no Qt at all** — they are unit-testable
 without a `QApplication`. `Camera`, `Curve` and `Plot` are the **ViewModel**: `QObject`s whose
 `Property`es carry notify signals, which is precisely what the QML component binds to — and why
@@ -486,9 +486,9 @@ three import QtWidgets lazily, so a pure-QML host never loads it.
 | Input | `src/qmlmathplot/input.py` | `ViewInput`: keyboard switch, pan step, rebindable shortcuts, key matching |
 | Animation | `src/qmlmathplot/animation.py` | `CameraAnimator`: the one eased interpolator behind wheel/keyboard moves |
 | Curves | `src/qmlmathplot/curve.py` | `Curve` (requests a `Program`, bakes its GLSL on the thread pool, keeps the last drawing on failure) and `CurveListModel` |
-| Render | `src/qmlmathplot/rhi.py` + `ggb_compute.py` | `CurveRhiItem`: one `QQuickRhiItem` draws every curve in one pass; interval-supported 1-D curves run the GGB path state machine in a compute shader |
+| Render | `src/qmlmathplot/rhi.py` + `calc/ggb_compute.py` | `CurveRhiItem`: one `QQuickRhiItem` draws every curve in one pass; interval-supported 1-D curves run the GGB path state machine in a compute shader |
 | Path spec | `src/qmlmathplot/ggb_path.py` | The GGB path state machine (topology in, segments out), shared by the CPU sampler and the tests; no interval arithmetic |
-| Reference | `src/qmlmathplot/ggb_reference.py` | test oracle: CPU sampler (`mpmath.iv`) feeding the shared state machine |
+| Reference | `src/qmlmathplot/calc/ggb_reference.py` | test oracle: CPU sampler (`mpmath.iv`) feeding the shared state machine |
 | CPU fallback | `src/qmlmathplot/qml/CpuCurves.qml` + `pathcurve.py` | `view.renderMode = "cpu"`: one QPainterPath per curve when RHI is unavailable |
 | Plot | `src/qmlmathplot/plot.py` | `Plot`: the camera, the curves and the styling the view binds to |
 | View | `src/qmlmathplot/qml/PlotView.qml` (+ `PlotCurves.qml`, `PlotFurniture.qml`, `PlotInput.qml`, `view.py`) | composition: model injection, camera mapping and keyboard focus; curves, furniture and pointer input live in the three child components (one `QQuickRhiItem` pass for all curves) |
@@ -502,12 +502,12 @@ three import QtWidgets lazily, so a pure-QML host never loads it.
 
 ## Algorithm (GeoGebra's interval path on the GPU)
 
-The 1-D renderer is GeoGebra's column path, ported to the GPU. `ggb_compute.py` generates
+The 1-D renderer is GeoGebra's column path, ported to the GPU. `calc/ggb_compute.py` generates
 one compute shader per expression; one invocation walks the screen columns in order and
 emits the path into a vertex buffer. `ggb_path.py` is the host-testable specification of the
 same state machine (topology in, screen-space segments out).
 
-1. **One interval per column.** `FI(x0, x1)` (generated from sympy in `interval.py`, compiled
+1. **One interval per column.** `FI(x0, x1)` (generated from sympy in `calc/interval.py`, compiled
    to GLSL) returns a conservative y-enclosure with topology
    **empty / connected / inverted (two rays around a gap) / whole**.
 2. **Path state (`IntervalPath`).** A drawable column joins the previous one (`lastY`); an
@@ -537,7 +537,7 @@ same state machine (topology in, screen-space segments out).
    the GPU owns the stroke). Implicit curves always use their own level-set shader.
 
 Deliberate deviation: `exp(tan(x))` follows GGB's own wrapped-pole behaviour; no special
-fill compensates for it. The CPU sampler (`ggb_reference.py`, `mpmath.iv`) cannot express a
+fill compensates for it. The CPU sampler (`calc/ggb_reference.py`, `mpmath.iv`) cannot express a
 gap, so its pole columns are path breaks; it feeds the same `ggb_path` state machine. The
 deep-`log` view is handled by `drawNormalInfinity`'s on-screen test plus the whole-column
 rule.

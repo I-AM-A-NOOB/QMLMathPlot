@@ -1521,3 +1521,12 @@ the full step budget in both directions plus both windows.
       sets instead of a silent blank (the delegate uses the new `implicit` role).
     - The Quick explorer injects its `Plot` from Python via a context property: a
       QML-created `Plot` has no text->Program source.
+
+
+79. **0.7 moved every SymPy-importing module under `qmlmathplot/calc/`.** `model.py`,
+    `interval.py`, `ggb_compute.py`, `ggb_eligibility.py` and the two test oracles
+    (`ggb_reference.py`, `interval_reference.py`) now live there; `ggb_path.py` stays in the
+    core because it is pure Python and is the shared state-machine specification. The move is
+    import-path only: `calc/build.py` imports its siblings with `.name`, and the modules that
+    use `shaderbuild`/`ggb_path` import `..shaderbuild` / `..ggb_path`. Tests were updated to
+    `qmlmathplot.calc.*`. The core import chain is unchanged and still never loads sympy.

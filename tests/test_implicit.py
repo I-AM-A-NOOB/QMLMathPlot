@@ -17,7 +17,8 @@ from PySide6.QtCore import QEventLoop, QTimer, QUrl
 from PySide6.QtGui import QGuiApplication, QImage
 from PySide6.QtQuick import QQuickView
 
-from qmlmathplot import Plot, model, qml_component_path
+from qmlmathplot import Plot, qml_component_path
+from qmlmathplot.calc import model
 from qmlmathplot.curve import Curve, CurveListModel, ImplicitCurve, parsed
 
 WIDTH, HEIGHT = 600, 600                 # square, so a circle is round
