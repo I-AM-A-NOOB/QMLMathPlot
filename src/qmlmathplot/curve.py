@@ -184,6 +184,8 @@ class Curve(QObject):
     to ``expression`` both route themselves, and a text field can turn a function into a level
     set. A sympy ``Eq(lhs, rhs)`` is always a level set (``lhs - rhs = 0``), even when only ``x``
     is free. ``ImplicitCurve`` forces the level-set template regardless of the symbols.
+    Text is resolved by the ``ProgramSource`` passed in; a ``Program`` can also be applied
+    directly with :meth:`set_program` (no parsing, no SymPy).
     """
 
     #: Forced to the level-set template (see ``ImplicitCurve``).
@@ -611,7 +613,8 @@ class CurveListModel(QAbstractListModel):
     ) -> Curve:
         """Append the artist the expression needs: ``y = f(x)``, or the level set
         ``F(x, y) = 0`` when both symbols are free (see ``curve_for``). Colour and line width
-        default to the plot's cycle and width."""
+        default to the plot's cycle and width. Needs a ``program_source``; a missing one raises
+        ``ProgramSourceMissingError``."""
         default_color, default_width = self._defaults(color, line_width)
         return self._append(curve_for(expression, color=default_color, line_width=default_width,
                                       label=label, parent=self,

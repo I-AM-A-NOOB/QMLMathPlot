@@ -12,6 +12,16 @@ The state is a **camera on an infinite canvas**: a `Plot` holds a `Camera` (wher
 and a list of `Curve`s (what is drawn), and the QML component `PlotView` binds to it. Several
 panels are several `Plot`s in a Qt layout — there is no figure, no axes box and no page.
 
+## Documentation
+
+- [docs/index.md](docs/index.md) — documentation map.
+- [docs/architecture.md](docs/architecture.md) — layers, `Program`, threads, processes, renderers.
+- [docs/api.md](docs/api.md) — `Plot`, `Camera`, `Curve`, `PlotView`, export, annotations.
+- [docs/programs.md](docs/programs.md) — the `Program` wire format and writing a calculator/worker.
+- [docs/rendering.md](docs/rendering.md) — GPU vs CPU mode, software backends, limitations.
+- [docs/migration-0.7.md](docs/migration-0.7.md) — breaking changes from 0.5/0.6.
+- [docs/zh-CN.md](docs/zh-CN.md) — 中文说明.
+
 ## Breaking changes in 0.7
 
 - **The core owns no process and no parser.** `Plot`/`Curve`/`PlotView` only know

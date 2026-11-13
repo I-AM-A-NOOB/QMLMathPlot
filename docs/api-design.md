@@ -3,7 +3,9 @@
 Status: **decided**; supersedes the earlier `Figure`/`Axes` framing of this document: those
 exist to serve a *bounded canvas with subplots*, and QMLMathPlot has neither.
 
-**0.7 update:** the core consumes `Program` from an explicit, synchronous `ProgramSource`
+**0.7 update:** the current documentation is [index.md](index.md),
+[architecture.md](architecture.md) and [api.md](api.md); this page is the original design
+rationale. The 0.7 notes: the core consumes `Program` from an explicit, synchronous `ProgramSource`
 (`Plot(program_source=...)`) and owns no process and no text parser; `add_program()` and
 `add_points()` need no source. The `Figure`/`Axes`/`pyplot` facade and `Plot.to_sympy()` were
 removed in 0.6, and the matplotlib hand-off now samples `Program.numpy` (no SymPy). Sections

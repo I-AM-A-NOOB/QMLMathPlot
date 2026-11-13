@@ -364,9 +364,11 @@ class Plot(QObject):
 
         The artist follows the expression's free symbols: ``x`` (or none) is a 1-D curve
         ``y = f(x)``, ``x`` **and** ``y`` is an implicit curve — the level set ``F(x, y) = 0``,
-        so ``add_curve("x**2 + y**2 - 1")`` is a circle — and any other free symbol raises
-        ``ValueError`` (substitute parameters first). A sympy ``Eq(lhs, rhs)`` is normalized to
-        ``lhs - rhs`` and treated as a level set even when only ``x`` is free.
+        so ``add_curve("x**2 + y**2 - 1")`` is a circle. Any other free symbol is reported on
+        ``curve.error`` (substitute parameters first). A sympy ``Eq(lhs, rhs)`` is normalized
+        to ``lhs - rhs`` and treated as a level set even when only ``x`` is free. Requires a
+        ``program_source`` (``Plot(program_source=...)``); without one, add_curve raises
+        ``ProgramSourceMissingError``.
         """
         return self._curves.add_curve(expression, color, line_width, label)
 
