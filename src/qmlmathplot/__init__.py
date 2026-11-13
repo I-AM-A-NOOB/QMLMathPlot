@@ -9,11 +9,12 @@ QtWidgets layout in one line:
 
     from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget
     from qmlmathplot import MathPlotWidget
+    from qmlmathplot.calc import SymPyProgramSource
 
     app = QApplication([])
     window = QWidget()
     box = QVBoxLayout(window)
-    plot = MathPlotWidget("sin(1/x)")
+    plot = MathPlotWidget("sin(1/x)", program_source=SymPyProgramSource())
     box.addWidget(plot)
     window.show()
     app.exec()
@@ -27,25 +28,29 @@ Qt Quick (QML) — the component plus the model:
     from PySide6.QtQuick import QQuickView
     from PySide6.QtCore import QUrl
     from qmlmathplot import Plot, qml_component_path, register_qml_types
+    from qmlmathplot.calc import SymPyProgramSource
 
     app = QGuiApplication([])
     register_qml_types()
     view = QQuickView()
     view.setSource(QUrl.fromLocalFile(qml_component_path()))
-    view.rootObject().setProperty("plot", Plot())
+    view.rootObject().setProperty(
+        "plot", Plot(program_source=SymPyProgramSource())
+    )
     view.show()
     app.exec()
 
 Model, without Qt widgets:
 
-    plot = Plot()
+    plot = Plot(program_source=SymPyProgramSource())
     plot.xlim, plot.ylim = (-6.0, 6.0), (-2.0, 2.0)
-    curve = plot.add_curve("sin(1/x)", label="sin(1/x)")
-    curve.expression = "sin(2/x)"          # one signal -> re-bake -> the view swaps it
+    curve = plot.add_curve("sin(1/x)", label="sin(1/x)")   # the Program is ready here
+    curve.expression = "sin(2/x)"          # the shader bakes asynchronously
     plot.theme = "ggplot"                  # Matplotlib's style sheets, see qmlmathplot.themes
 
-Demos: ``examples/minimal.py``, ``examples/explorer_qtwidgets.py``,
-``examples/explorer_qtquick.py``. Design notes: ``docs/api-design.md``.
+Demos: ``examples/minimal.py``, ``examples/explorer_qtquick.py``,
+``examples/process_calculator.py``, ``examples/widget_minimal.py``.
+Design notes: ``docs/api-design.md``.
 """
 
 from typing import TYPE_CHECKING
