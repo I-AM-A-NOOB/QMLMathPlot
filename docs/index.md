@@ -15,6 +15,7 @@ infinite and camera-driven: a `Plot` owns a `Camera` (where you look) and a list
 | move code from 0.5 / 0.6 | [Migration to 0.7](migration-0.7.md) |
 | read the original design rationale | [API design (historical)](api-design.md) |
 | 阅读中文概览 | [中文说明](zh-CN.md) |
+| 维护者视角（文件/接口/GGB 分类/坑） | [维护者简报（中文）](briefing.zh-CN.md) |
 
 ## In one paragraph
 
