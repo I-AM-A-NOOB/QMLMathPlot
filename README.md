@@ -32,9 +32,12 @@ panels are several `Plot`s in a Qt layout — there is no figure, no axes box an
   error on the curve (`plot.plotError` aggregates it).
 - **Removed:** `Figure`, `Axes`, `FigureCanvasQt`, `qmlmathplot.pyplot`, `Plot.to_sympy`,
   `Curve.expr`, `Plot.calculator`, the process client in the core.
-- **QML:** `import QmlMathPlot 2.0`; `renderMode` is `"gpu"` (default) or `"cpu"` — there is
-  no runtime `"auto"` fallback. In `"cpu"` mode a level set shows “implicit curves need the
-  GPU renderer” instead of a blank area.
+- **Render mode:** `Plot.renderMode` is `"gpu"` (default, RHI shaders) or `"cpu"` (QPainter
+  paths for platforms without a usable RHI backend). There is no runtime `"auto"` probe; a
+  GPU-limited deployment sets `plot.renderMode = "cpu"` (or `MathPlotWidget(..., render_mode="cpu")`)
+  and starts Qt Quick with `QT_QUICK_BACKEND=software` (before `QGuiApplication`). In cpu mode
+  the RHI item is not even instantiated, and a level set shows “implicit curves need the GPU
+  renderer” instead of a blank area.
 - The matplotlib hand-off samples `Program.numpy`, so `[matplotlib]` no longer needs SymPy.
 
 ## Quick start
@@ -489,7 +492,7 @@ three import QtWidgets lazily, so a pure-QML host never loads it.
 | Render | `src/qmlmathplot/rhi.py` + `calc/ggb_compute.py` | `CurveRhiItem`: one `QQuickRhiItem` draws every curve in one pass; interval-supported 1-D curves run the GGB path state machine in a compute shader |
 | Path spec | `src/qmlmathplot/ggb_path.py` | The GGB path state machine (topology in, segments out), shared by the CPU sampler and the tests; no interval arithmetic |
 | Reference | `src/qmlmathplot/calc/ggb_reference.py` | test oracle: CPU sampler (`mpmath.iv`) feeding the shared state machine |
-| CPU fallback | `src/qmlmathplot/qml/CpuCurves.qml` + `pathcurve.py` | `view.renderMode = "cpu"`: one QPainterPath per curve when RHI is unavailable |
+| CPU fallback | `src/qmlmathplot/qml/CpuCurves.qml` + `pathcurve.py` | `plot.renderMode = "cpu"`: one QPainterPath per curve when RHI is unavailable (Qt Quick software backend) |
 | Plot | `src/qmlmathplot/plot.py` | `Plot`: the camera, the curves and the styling the view binds to |
 | View | `src/qmlmathplot/qml/PlotView.qml` (+ `PlotCurves.qml`, `PlotFurniture.qml`, `PlotInput.qml`, `view.py`) | composition: model injection, camera mapping and keyboard focus; curves, furniture and pointer input live in the three child components (one `QQuickRhiItem` pass for all curves) |
 | Themes | `src/qmlmathplot/themes.py` + `themes/` | the vendored Matplotlib style sheets, resolved onto the `Plot`'s properties |

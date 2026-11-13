@@ -153,6 +153,10 @@ for i in range(150):
     plot.camera.zoom_by(120.0 if i % 2 else -120.0, 0.5, 0.5, 900.0, 600.0)
     app.processEvents()
 print("EXHAUSTED" if bad else "OK")
+# Tear the QML tree down while the window is alive: destroying the RhiItem through the
+# Loader during interpreter shutdown raced the scene-graph thread (0xC0000005).
+view.setSource(QUrl())
+app.processEvents()
 view.close()
 """
     env = os.environ.copy()

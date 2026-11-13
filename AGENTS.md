@@ -1530,3 +1530,14 @@ the full step budget in both directions plus both windows.
     import-path only: `calc/build.py` imports its siblings with `.name`, and the modules that
     use `shaderbuild`/`ggb_path` import `..shaderbuild` / `..ggb_path`. Tests were updated to
     `qmlmathplot.calc.*`. The core import chain is unchanged and still never loads sympy.
+
+
+80. **CPU mode is a first-class platform target, not just an error fallback.** For machines
+    without a usable RHI backend the host sets `Plot.renderMode = "cpu"` (or
+    `MathPlotWidget(..., render_mode="cpu")`, or `qmlmathplot --software`) and starts Qt Quick
+    with `QT_QUICK_BACKEND=software` (before `QGuiApplication`). `PlotCurves.qml` puts the RHI
+    item behind a `Loader` that is inactive in cpu mode: verifying with the software backend
+    showed `No QRhi found for window … QQuickRhiItem will not be functional` when the item was
+    merely `visible: false`, and none after the Loader change. CPU mode still needs the
+    remaining coverage (data curves, numpy-only programs, implicit) before it can replace the
+    GPU renderer for every curve; those gaps are tracked in the audit list.

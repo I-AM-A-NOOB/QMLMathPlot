@@ -190,3 +190,15 @@ def test_assigning_a_theme_applies_it_again() -> None:
     plot.theme = "default"
     assert plot.background == QColor("white")
     assert seen == [1, 1], "the theme signal must fire once per change of name"
+
+
+def test_render_mode_defaults_to_gpu_and_validates() -> None:
+    plot = Plot()
+    assert plot.renderMode == "gpu"
+    seen: list[str] = []
+    plot.renderModeChanged.connect(lambda: seen.append(plot.renderMode))
+    plot.renderMode = "cpu"
+    assert plot.renderMode == "cpu" and seen == ["cpu"]
+    with pytest.raises(ValueError, match="renderMode"):
+        plot.renderMode = "auto"
+    assert plot.renderMode == "cpu", "an invalid mode must not change the current one"

@@ -89,6 +89,7 @@ class Plot(QObject):
     curvesChanged = Signal()
     programSourceChanged = Signal()
     plotErrorChanged = Signal()
+    renderModeChanged = Signal()
     viewChanged = Signal()
     aspectChanged = Signal()  # forwarded from the camera (the forwarded `aspect`)
     themeChanged = Signal()
@@ -144,6 +145,7 @@ class Plot(QObject):
         super().__init__(parent)
         self._camera = Camera(self)
         self._theme = ""
+        self._render_mode = "gpu"
         self._program_source = program_source
         self._curves = CurveListModel(DEFAULT_COLOR_CYCLE, self.line_width, self,
                                       program_source=program_source)
@@ -163,6 +165,22 @@ class Plot(QObject):
         return self._camera
 
     camera: Camera = Property(Camera, _get_camera, notify=cameraChanged)
+
+    def _get_render_mode(self) -> str:
+        return self._render_mode
+
+    def _set_render_mode(self, value: object) -> None:
+        mode = str(value)
+        if mode not in ("gpu", "cpu"):
+            raise ValueError(f'renderMode must be "gpu" or "cpu", got {value!r}')
+        if mode == self._render_mode:
+            return
+        self._render_mode = mode
+        self.renderModeChanged.emit()
+
+    #: "gpu" (RHI) or "cpu" (QPainter paths, for platforms without a usable RHI backend).
+    renderMode: str = Property(str, _get_render_mode, _set_render_mode,
+                               notify=renderModeChanged)
 
     @property
     def program_source(self) -> ProgramSource | None:

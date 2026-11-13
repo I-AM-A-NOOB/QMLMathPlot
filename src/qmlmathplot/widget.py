@@ -64,6 +64,7 @@ class MathPlotWidget(QWidget):
         background_color: str | None = None,
         aspect: str | float = "auto",
         program_source: ProgramSource | None = None,
+        render_mode: str = "gpu",
     ) -> None:
         # Check before super().__init__(): constructing a QWidget without a
         # QApplication aborts inside Qt, so the friendly error would never be reached (note
@@ -96,6 +97,7 @@ class MathPlotWidget(QWidget):
             self._plot = Plot(self, program_source=program_source)
         else:
             self._plot = Plot(self)
+        self._plot.renderMode = render_mode
         if background_color is not None:
             self._plot.background = background_color
         if line_width is not None:

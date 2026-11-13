@@ -40,6 +40,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help=f"expression in sympy syntax (default {DEFAULT_EXPRESSION})")
     parser.add_argument("--backend", choices=BACKENDS, default=None,
                         help="RHI backend for Qt Quick; Qt's default when not specified")
+    parser.add_argument("--render-mode", choices=("gpu", "cpu"), default="gpu",
+                        help="curve renderer: RHI shaders or QPainter paths (default gpu)")
+    parser.add_argument("--software", action="store_true",
+                        help="use Qt Quick's software scene-graph backend (implies --render-mode cpu)")
     parser.add_argument("--width", type=int, default=900, help="window width (default 900)")
     parser.add_argument("--height", type=int, default=600, help="window height (default 600)")
     return parser
@@ -48,7 +52,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(sys.argv[1:] if argv is None else argv)
 
-    if args.backend is not None:
+    if args.software:
+        # Must be set before QGuiApplication (Qt reads the backend during platform init).
+        os.environ["QT_QUICK_BACKEND"] = "software"
+        args.render_mode = "cpu"
+    elif args.backend is not None:
         # An explicitly given backend wins over the environment: the command line overrides all
         os.environ["QSG_RHI_BACKEND"] = args.backend
 
@@ -79,6 +87,7 @@ def main(argv: list[str] | None = None) -> int:
               file=sys.stderr)
         return 1
     plot = Plot(program_source=SymPyProgramSource())
+    plot.renderMode = args.render_mode
     plot.add_curve(args.expression)
     root.setProperty("plot", plot)
 

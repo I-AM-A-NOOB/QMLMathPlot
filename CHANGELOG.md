@@ -22,6 +22,10 @@
 
 ### Added
 
+- `Plot.renderMode` (`"gpu"` / `"cpu"`): a Python host can select the QPainter path before the
+  window shows; `MathPlotWidget(..., render_mode=...)` and `qmlmathplot --software` expose it.
+  The RHI item is created through a `Loader` and is absent in cpu mode, so Qt Quick's software
+  scene graph (`QT_QUICK_BACKEND=software`) works without "no QRhi" warnings.
 - `qmlmathplot.calc.SymPyProgramSource` (`[calc]`) as the synchronous SymPy front end.
 - `Plot.add_program()` / `Curve.set_program()`; `Plot.plotError`; `Curve.program`.
 - `ProgramSource` / `ProgramSourceMissingError` in `qmlmathplot.protocol`.

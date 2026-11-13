@@ -77,14 +77,23 @@ python examples/process_calculator.py --check-isolation
 
 ## 4. 渲染模式
 
-`PlotView.renderMode`：
+`Plot.renderMode`（模型属性，QML 的 `PlotView.renderMode` 跟随它）：
 
 | 值 | 行为 |
 |---|---|
 | `"gpu"`（默认） | RHI：compute / fragment / CPU 路径顶点 + 共享笔画管线 |
-| `"cpu"` | 每条 1-D 曲线一个 `QPainterPath`（`CurvePlotter` 几何）；隐函数显示明确提示 “implicit curves need the GPU renderer” |
+| `"cpu"` | 每条 1-D 曲线一个 `QPainterPath`（`CurvePlotter` 几何）；RHI item 根本不会被创建；隐函数显示明确提示 “implicit curves need the GPU renderer” |
 
-没有运行时 `"auto"` 探测：是否使用 GPU 由宿主决定。
+没有运行时 `"auto"` 探测。GPU 受限平台的做法：
+
+```python
+plot.renderMode = "cpu"          # 或 MathPlotWidget(..., render_mode="cpu")
+# 启动前：QT_QUICK_BACKEND=software（必须在 QGuiApplication 之前设置）
+```
+
+命令行：`qmlmathplot --software "sin(x)"`（等价于软件场景图 + `--render-mode cpu`）。
+CPU 模式由 GUI 线程绘制，单曲线一次相机变化约 1–7 ms；它是为无可用 RHI 的平台准备的
+一级运行模式，而不仅是异常回退。
 
 ## 5. `examples/explorer_qtquick.py` 设计说明
 

@@ -102,3 +102,107 @@ def test_implicit_curves_say_they_need_the_gpu(app: QGuiApplication) -> None:
     view.close()
     assert warning > 0, "the implicit curve did not show the GPU-renderer warning"
     assert curve == 0, "CPU mode must not draw an implicit curve"
+
+
+def test_the_plot_render_mode_selects_the_cpu_backend(app: QGuiApplication) -> None:
+    """The mode is a model property, so a Python host selects it before the window shows."""
+    view = QQuickView()
+    view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
+    view.resize(WIDTH, HEIGHT)
+    view.setSource(QUrl.fromLocalFile(qml_component_path()))
+    root = view.rootObject()
+    plot = Plot()
+    plot.renderMode = "cpu"
+    plot.add_curve("tan(x)")
+    root.setProperty("plot", plot)
+    view.show()
+    for _ in range(200):
+        app.processEvents()
+        if view.isExposed():
+            break
+    else:
+        pytest.skip("no usable display/GPU scenegraph")
+    camera = plot.camera
+    camera.set_viewport(float(WIDTH), float(HEIGHT))
+    camera.xlim = (-6.0, 6.0)
+    camera.ylim = (-2.0, 2.0)
+    for _ in range(20):
+        app.processEvents()
+    result = root.grabToImage()
+    loop = QEventLoop()
+    result.ready.connect(loop.quit)
+    QTimer.singleShot(10_000, loop.quit)
+    loop.exec()
+    image: QImage = result.image()
+    lit = sum(
+        1
+        for y in range(image.height())
+        for x in range(image.width())
+        if image.pixelColor(x, y).blue() > 100 and image.pixelColor(x, y).red() < 120
+    )
+    view.close()
+    assert lit > 1000, "the model-level renderMode did not switch to QPainter"
+
+
+def test_cpu_mode_runs_on_the_software_scene_graph() -> None:
+    """The platform case: no RHI at all. Qt Quick's software backend + QPainter curves."""
+    import os
+    import subprocess
+    import sys
+    import textwrap
+
+    script = textwrap.dedent(
+        """
+        import sys
+        from PySide6.QtCore import QEventLoop, QTimer, QUrl
+        from PySide6.QtGui import QGuiApplication
+        from PySide6.QtQuick import QQuickView
+        from qmlmathplot import Plot, qml_component_path, register_qml_types
+        from qmlmathplot.calc import SymPyProgramSource
+
+        app = QGuiApplication(sys.argv[:1])
+        register_qml_types()
+        plot = Plot(program_source=SymPyProgramSource())
+        plot.grid = False
+        plot.ticks_visible = False
+        plot.renderMode = "cpu"
+        plot.add_curve("sin(x)")
+        view = QQuickView()
+        view.setSource(QUrl.fromLocalFile(qml_component_path()))
+        root = view.rootObject()
+        root.setProperty("plot", plot)
+        view.resize(600, 400)
+        view.show()
+        for _ in range(300):
+            app.processEvents()
+            if view.isExposed():
+                break
+        for _ in range(50):
+            app.processEvents()
+        result = root.grabToImage()
+        loop = QEventLoop()
+        result.ready.connect(loop.quit)
+        QTimer.singleShot(5000, loop.quit)
+        loop.exec()
+        image = result.image()
+        lit = sum(
+            1
+            for y in range(0, image.height(), 2)
+            for x in range(0, image.width(), 2)
+            if (255 - image.pixelColor(x, y).red())
+            + (255 - image.pixelColor(x, y).green())
+            + (255 - image.pixelColor(x, y).blue()) > 60
+        )
+        print("lit", lit)
+        """
+    )
+    env = os.environ.copy()
+    env["QT_QUICK_BACKEND"] = "software"
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, env=env, timeout=180
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    assert "QQuickRhiItem" not in output, f"CPU mode instantiated the RHI item:\n{output}"
+    lit = int(output.split("lit")[-1].strip().splitlines()[0])
+    assert lit > 100, output
