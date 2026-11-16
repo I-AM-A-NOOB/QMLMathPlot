@@ -35,6 +35,30 @@ Metrics: `WorkingSetSize`, **`PagefileUsage` (commit)**, `PeakPagefileUsage`; li
 | 0 curves, CPU, 8 cycles | 98 → 142 by cycle 4, then flat | 1 item, 0 RHI |
 | 2 curves, GPU, 8 cycles, `processEvents`-only harness | 276 → 352, still growing | **invalid**: deferred deletes not processed |
 
+
+### Host-pattern measurement (Symplify's PlotPane shape)
+
+The host wraps the `PlotView` in `layer.enabled: true` + `OpacityMask` and lets RinUI
+replace the page (and the view) on every navigation. Re-running the real event loop with
+that shape, two curves:
+
+| Pattern | Commit over 20 rebuilds | Peak commit |
+|---|---|---|
+| layer + `OpacityMask` around the Loader | 310 → 374 MiB (still stepping) | 393 MiB |
+| plain Loader, no layer | 275 → 350 by cycle 7, then flat | 372 MiB |
+
+So the layer adds roughly 20 MiB and some continued churn; the rest is the one-time RHI
+warm-up. Both patterns are flat in **item counts** after unload.
+
+### Attempted persistent view (reverted)
+
+A `PlotHost` context object + one `PlotView` in `MainWindow`, reparented into the page's
+placeholder, was implemented and smoke-tested: with a plot, the host and view were both
+live at the same 524×836 geometry and the page rebuild did not create a second view.
+However, the reparented view **crashed on shutdown** (0xC0000005) in the probe; the changes
+were reverted, not shipped. A persistent view needs a proper page-destruction/reparent
+lifecycle and shutdown test before it is safe. Do not resurrect the quick version.
+
 The plateau is the one-time warm-up (QRhi/driver pipelines and buffers, QML compiles, Canvas
 textures). It is not proportional to the number of page rebuilds after warm-up. The earlier
 "17 MiB/activation" was the invalid harness's deferred-delete backlog.
