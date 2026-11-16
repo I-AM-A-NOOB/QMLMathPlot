@@ -27,9 +27,10 @@ def main() -> int:
 
     engine = QQmlApplicationEngine()
     # The model is owned by the app; a QML-created Plot has no text->Program source.
-    engine.rootContext().setContextProperty(
-        "backendPlot", Plot(program_source=SymPyProgramSource())
-    )
+    # Keep the Python owner alive: setContextProperty stores a pointer, not a strong
+    # reference, so an inline Plot() can be collected before the QML tree binds it.
+    plot = Plot(program_source=SymPyProgramSource())
+    engine.rootContext().setContextProperty("backendPlot", plot)
     engine.load(QUrl.fromLocalFile(str(Path(__file__).with_suffix(".qml"))))
     if not engine.rootObjects():
         print("failed to load explorer_qtquick.qml", file=sys.stderr)

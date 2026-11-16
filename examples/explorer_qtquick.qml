@@ -94,6 +94,22 @@ ApplicationWindow {
                     window.logLine("aspect -> " + currentText);
                 }
             }
+            ComboBox {
+                id: msaaBox
+                objectName: "msaaBox"
+                textRole: "text"
+                valueRole: "value"
+                model: [
+                    { text: "MSAA 8x", value: 8 },
+                    { text: "MSAA 4x", value: 4 },
+                    { text: "MSAA 2x", value: 2 },
+                    { text: "MSAA 1x (off)", value: 1 }
+                ]
+                onActivated: {
+                    view.plot.sampleCount = currentValue;
+                    window.logLine("MSAA -> " + currentValue + "x");
+                }
+            }
             SpinBox {
                 id: themeBox
                 objectName: "themeBox"

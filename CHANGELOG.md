@@ -10,10 +10,17 @@
   1× 254.3.
 
 ### Changed
+- The Qt Quick explorer has an **MSAA selector** (8×/4×/2×/1×) wired to
+  `plot.sampleCount`, so the render-target memory/quality trade-off is visible in the demo.
 - The GPU `CurveRhiItem` is unloaded when the plot has no curves, releasing its render
   target and device resources; `remove_curve` releases that curve's pipeline and vertex
   buffers. Renderer caches (pipelines, path buffers, CPU vertex buffers, CPU vertex capture)
   now have explicit byte budgets instead of a fixed entry count.
+
+### Fixed
+- The Qt Quick explorer kept `backendPlot` only as an inline temporary; `setContextProperty`
+  stores a pointer, so the model could be collected before QML bound it. The launcher now
+  keeps the `Plot` alive for the engine's lifetime.
 
 ## 0.7.0 — 2026-11-13
 
