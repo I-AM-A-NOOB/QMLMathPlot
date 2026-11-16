@@ -45,6 +45,8 @@ class MathPlotWidget(QWidget):
     :param curve_color: curve color (``#rrggbb``); None keeps the plot's own default
     :param background_color: background color (``#rrggbb``); None keeps the plot's own default
     :param aspect: ``"auto"`` (default) or the ratio of the y scale to the x scale
+    :param sample_count: MSAA samples for the GPU render target (1, 2, 4 or 8); None keeps
+        the plot's default (4)
 
     The signals ``expressionChanged`` / ``errorChanged`` stay in sync with the first curve; a
     non-empty ``error`` means the expression failed to parse (the last working drawing is kept).
@@ -65,6 +67,7 @@ class MathPlotWidget(QWidget):
         aspect: str | float = "auto",
         program_source: ProgramSource | None = None,
         render_mode: str = "gpu",
+        sample_count: int | None = None,
     ) -> None:
         # Check before super().__init__(): constructing a QWidget without a
         # QApplication aborts inside Qt, so the friendly error would never be reached (note
@@ -98,6 +101,8 @@ class MathPlotWidget(QWidget):
         else:
             self._plot = Plot(self)
         self._plot.renderMode = render_mode
+        if sample_count is not None:
+            self._plot.sampleCount = sample_count
         if background_color is not None:
             self._plot.background = background_color
         if line_width is not None:

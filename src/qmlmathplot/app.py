@@ -42,6 +42,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="RHI backend for Qt Quick; Qt's default when not specified")
     parser.add_argument("--render-mode", choices=("gpu", "cpu"), default="gpu",
                         help="curve renderer: RHI shaders or QPainter paths (default gpu)")
+    parser.add_argument("--msaa", type=int, choices=(1, 2, 4, 8), default=4,
+                        help="MSAA samples for the RHI target (default 4)")
     parser.add_argument("--software", action="store_true",
                         help="use Qt Quick's software scene-graph backend (implies --render-mode cpu)")
     parser.add_argument("--width", type=int, default=900, help="window width (default 900)")
@@ -88,6 +90,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     plot = Plot(program_source=SymPyProgramSource())
     plot.renderMode = args.render_mode
+    if args.render_mode == "gpu":
+        plot.sampleCount = args.msaa
     plot.add_curve(args.expression)
     root.setProperty("plot", plot)
 

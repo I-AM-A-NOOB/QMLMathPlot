@@ -14,6 +14,8 @@
   while the layer is enabled / has guides). A default `PlotView` now keeps none of their
   full-pane textures; measured commit at 900×700: **101.8 MiB** without layers vs **163.6
   MiB** with all three (≈62 MiB for the unused set).
+- `MathPlotWidget(..., sample_count=…)` and `qmlmathplot --msaa {1,2,4,8}` expose the MSAA
+  level (default 4) outside the QML explorer.
 - The Qt Quick explorer has an **MSAA selector** (8×/4×/2×/1×) wired to
   `plot.sampleCount`, so the render-target memory/quality trade-off is visible in the demo.
 - The GPU `CurveRhiItem` is unloaded when the plot has no curves, releasing its render

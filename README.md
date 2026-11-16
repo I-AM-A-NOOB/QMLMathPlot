@@ -99,6 +99,7 @@ Standalone window / command line:
 ```
 uv run qmlmathplot "sin(1/x)"                    # equivalent to python examples/minimal.py …
 uv run qmlmathplot --backend d3d11 "sin(1/x)"    # force a specific backend
+uv run qmlmathplot --msaa 2 "sin(1/x)"          # smaller MSAA target
 python examples/widget_minimal.py               # QtWidgets host
 python examples/process_calculator.py           # calculator in its own process
 ```

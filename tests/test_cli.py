@@ -19,3 +19,4 @@ def test_python_dash_m_runs_the_entry_point() -> None:
     assert done.returncode == 0, done.stderr
     assert "usage" in done.stdout.lower(), done.stdout
     assert "--backend" in done.stdout
+    assert "--msaa" in done.stdout

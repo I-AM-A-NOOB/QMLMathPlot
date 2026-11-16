@@ -32,6 +32,14 @@ pytestmark = pytest.mark.gui
 BACKGROUND = (0xFF, 0xFF, 0xFF)  # the plot background (white: matplotlib's default)
 
 
+def test_sample_count_is_configurable(app) -> None:
+    plot = MathPlotWidget("sin(x)", sample_count=2)
+    try:
+        assert plot.plot.sampleCount == 2
+    finally:
+        plot.deleteLater()
+
+
 def _quick(plot: MathPlotWidget) -> QQuickWidget:
     """The QQuickWidget inside MathPlotWidget (findChild's return type is nullable)."""
     quick = plot.findChild(QQuickWidget)

@@ -202,7 +202,8 @@ Methods: `add_curve`, `add_program`, `add_points`, `add_implicit`, `remove_curve
 ```python
 MathPlotWidget(expression="sin(x)", parent=None, *,
                plot=None, line_width=None, curve_color=None, background_color=None,
-               aspect="auto", program_source=None, render_mode="gpu")
+               aspect="auto", program_source=None, render_mode="gpu",
+               sample_count=None)
 ```
 
 Requires a `QApplication`. With `program_source=None` and a text expression, the
@@ -235,7 +236,8 @@ never adds a curve by itself.
 
 ```
 qmlmathplot [expression] [--backend d3d11|d3d12|vulkan|metal|opengl|null]
-            [--render-mode gpu|cpu] [--software] [--width N] [--height N]
+            [--render-mode gpu|cpu] [--msaa {1,2,4,8}] [--software]
+            [--width N] [--height N]
 ```
 
 `--software` sets `QT_QUICK_BACKEND=software` before the application starts and implies

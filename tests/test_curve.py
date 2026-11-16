@@ -163,8 +163,9 @@ def test_model_reports_changes_with_the_right_roles() -> None:
     curve.visible = False
     assert report[-1] == [model.VisibleRole]
 
-    # a removed curve stops reporting (the signal connection outlives the row)
+    # a removed curve stops reporting and is detached from the model's ownership
     model.remove_curve(curve)
+    assert curve.parent() is None
     before = len(report)
     curve.visible = True
     assert len(report) == before

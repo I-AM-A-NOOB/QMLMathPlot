@@ -9,7 +9,8 @@
 
 The QML component mirrors the model (`PlotView.renderMode: plot.renderMode`). A host can set
 it in Python, pass `render_mode=` to `MathPlotWidget`, or use `qmlmathplot --render-mode` /
-`--software`.
+`--software`. MSAA is selectable with `MathPlotWidget(..., sample_count=2)` or
+`qmlmathplot --msaa {1,2,4,8}` (default 4).
 
 There is **no runtime `"auto"` probe**. The backend is a deployment decision: Qt reads
 `QSG_RHI_BACKEND` / `QT_QUICK_BACKEND` during platform initialisation, before

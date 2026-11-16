@@ -524,6 +524,7 @@ class CurveListModel(QAbstractListModel):
         self._cycle = [str(entry) for entry in color_cycle] or [DEFAULT_COLOR]
         self._default_line_width = float(default_line_width)
         self._program_source = program_source
+        self._watchers: dict[Curve, list[tuple[object, object]]] = {}
 
     def set_program_source(self, source: ProgramSource | None) -> None:
         """Switch every curve (existing and future) to another text->Program source."""
@@ -578,21 +579,29 @@ class CurveListModel(QAbstractListModel):
         self.dataChanged.emit(index, index, list(roles))
 
     def _watch(self, curve: Curve) -> None:
-        curve.expressionChanged.connect(
-            lambda c=curve: self._notify(c, (self.ExpressionRole,))
-        )
-        curve.shadersChanged.connect(
-            lambda c=curve: self._notify(c, (self.VertexShaderRole, self.FragmentShaderRole))
-        )
-        curve.styleChanged.connect(
-            lambda c=curve: self._notify(c, (self.ColorRole, self.LineWidthRole))
-        )
-        curve.visibleChanged.connect(lambda c=curve: self._notify(c, (self.VisibleRole,)))
-        curve.labelChanged.connect(lambda c=curve: self._notify(c, (self.LabelRole,)))
-        curve.exprChanged.connect(
-            lambda c=curve: self._notify(c, (self.MathSourceRole, self.ImplicitRole))
-        )
-        curve.errorChanged.connect(self.curveErrorChanged)
+        connections: list[tuple[object, object]] = [
+            (curve.expressionChanged,
+             lambda c=curve: self._notify(c, (self.ExpressionRole,))),
+            (curve.shadersChanged,
+             lambda c=curve: self._notify(c, (self.VertexShaderRole, self.FragmentShaderRole))),
+            (curve.styleChanged,
+             lambda c=curve: self._notify(c, (self.ColorRole, self.LineWidthRole))),
+            (curve.visibleChanged, lambda c=curve: self._notify(c, (self.VisibleRole,))),
+            (curve.labelChanged, lambda c=curve: self._notify(c, (self.LabelRole,))),
+            (curve.exprChanged,
+             lambda c=curve: self._notify(c, (self.MathSourceRole, self.ImplicitRole))),
+            (curve.errorChanged, self.curveErrorChanged),
+        ]
+        for signal, slot in connections:
+            signal.connect(slot)  # type: ignore[attr-defined]
+        self._watchers[curve] = connections
+
+    def _unwatch(self, curve: Curve) -> None:
+        for signal, slot in self._watchers.pop(curve, []):
+            try:
+                signal.disconnect(slot)  # type: ignore[attr-defined]
+            except (RuntimeError, TypeError):
+                pass
 
     # ---------------------------------------------------------------- public
     def _defaults(self, color: object, line_width: object) -> tuple[QColor, float]:
@@ -678,6 +687,10 @@ class CurveListModel(QAbstractListModel):
         self.beginRemoveRows(QModelIndex(), row, row)
         del self._curves[row]
         self.endRemoveRows()
+        # The model no longer owns it: a caller that dropped its reference can free the
+        # curve (and its program/shaders) instead of it lingering as a child of the model.
+        self._unwatch(curve)
+        curve.setParent(None)
         self.countChanged.emit()
 
     @Slot(int, result=QObject)
