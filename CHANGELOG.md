@@ -10,6 +10,10 @@
   1× 254.3.
 
 ### Changed
+- The grid, minor-tick and guide Canvas layers are created **lazily** (a `Loader` active only
+  while the layer is enabled / has guides). A default `PlotView` now keeps none of their
+  full-pane textures; measured commit at 900×700: **101.8 MiB** without layers vs **163.6
+  MiB** with all three (≈62 MiB for the unused set).
 - The Qt Quick explorer has an **MSAA selector** (8×/4×/2×/1×) wired to
   `plot.sampleCount`, so the render-target memory/quality trade-off is visible in the demo.
 - The GPU `CurveRhiItem` is unloaded when the plot has no curves, releasing its render

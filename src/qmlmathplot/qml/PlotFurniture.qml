@@ -51,56 +51,63 @@ Item {
     // Grid: one line per tick, straight from the camera's tick values. Repainted when the
     // view moves (positions) or the grid style changes — the tick *values* are cached by the
     // camera and only rebuild the models when they change.
-    Canvas {
-        id: gridCanvas
+    // Lazy: an unused layer must not keep a full-pane Canvas texture alive.
+    Loader {
         anchors.fill: parent
-        visible: furnitureRoot.plot.grid
+        active: furnitureRoot.plot ? furnitureRoot.plot.grid : false
+        sourceComponent: Component {
+        Canvas {
+            id: gridCanvas
+            anchors.fill: parent
+            visible: furnitureRoot.plot.grid
 
-        onPaint: {
-            const ctx = getContext("2d");
-            ctx.clearRect(0, 0, width, height);
-            ctx.lineWidth = furnitureRoot._deviceWidth(furnitureRoot.plot.grid_width);
-            ctx.strokeStyle = furnitureRoot.plot.grid_color;
-            ctx.globalAlpha = furnitureRoot.plot.grid_alpha;
-            ctx.setLineDash(furnitureRoot._gridDash(furnitureRoot.plot.grid_style));
-            ctx.beginPath();
-            if (furnitureRoot.plot.grid_x) {
-                for (const tick of furnitureRoot.effectiveTicksX) {
-                    const px = furnitureRoot._snapLine(
-                        furnitureRoot.view.mapToScreen(tick[0], 0).x, ctx.lineWidth);
-                    ctx.moveTo(px, 0);
-                    ctx.lineTo(px, height);
+            onPaint: {
+                const ctx = getContext("2d");
+                ctx.clearRect(0, 0, width, height);
+                ctx.lineWidth = furnitureRoot._deviceWidth(furnitureRoot.plot.grid_width);
+                ctx.strokeStyle = furnitureRoot.plot.grid_color;
+                ctx.globalAlpha = furnitureRoot.plot.grid_alpha;
+                ctx.setLineDash(furnitureRoot._gridDash(furnitureRoot.plot.grid_style));
+                ctx.beginPath();
+                if (furnitureRoot.plot.grid_x) {
+                    for (const tick of furnitureRoot.effectiveTicksX) {
+                        const px = furnitureRoot._snapLine(
+                            furnitureRoot.view.mapToScreen(tick[0], 0).x, ctx.lineWidth);
+                        ctx.moveTo(px, 0);
+                        ctx.lineTo(px, height);
+                    }
                 }
-            }
-            if (furnitureRoot.plot.grid_y) {
-                for (const tick of furnitureRoot.effectiveTicksY) {
-                    const py = furnitureRoot._snapLine(
-                        furnitureRoot.view.mapToScreen(0, tick[0]).y, ctx.lineWidth);
-                    ctx.moveTo(0, py);
-                    ctx.lineTo(width, py);
+                if (furnitureRoot.plot.grid_y) {
+                    for (const tick of furnitureRoot.effectiveTicksY) {
+                        const py = furnitureRoot._snapLine(
+                            furnitureRoot.view.mapToScreen(0, tick[0]).y, ctx.lineWidth);
+                        ctx.moveTo(0, py);
+                        ctx.lineTo(width, py);
+                    }
                 }
+                ctx.stroke();
             }
-            ctx.stroke();
-        }
 
-        onWidthChanged: requestPaint()
-        onHeightChanged: requestPaint()
+            onWidthChanged: requestPaint()
+            onHeightChanged: requestPaint()
 
-        Connections {
-            target: furnitureRoot.plot.camera
-            function onViewChanged() { gridCanvas.requestPaint(); }
+            Connections {
+                target: furnitureRoot.plot.camera
+                function onViewChanged() { gridCanvas.requestPaint(); }
+            }
+            Connections {
+                target: furnitureRoot.plot
+                function onGridChanged() { gridCanvas.requestPaint(); }
+                function onGridColorChanged() { gridCanvas.requestPaint(); }
+                function onGridWidthChanged() { gridCanvas.requestPaint(); }
+                function onGridAlphaChanged() { gridCanvas.requestPaint(); }
+                function onGridStyleChanged() { gridCanvas.requestPaint(); }
+                function onGridXChanged() { gridCanvas.requestPaint(); }
+                function onGridYChanged() { gridCanvas.requestPaint(); }
+                function onXticksChanged() { gridCanvas.requestPaint(); }
+                function onYticksChanged() { gridCanvas.requestPaint(); }
+            }
         }
-        Connections {
-            target: furnitureRoot.plot
-            function onGridChanged() { gridCanvas.requestPaint(); }
-            function onGridColorChanged() { gridCanvas.requestPaint(); }
-            function onGridWidthChanged() { gridCanvas.requestPaint(); }
-            function onGridAlphaChanged() { gridCanvas.requestPaint(); }
-            function onGridStyleChanged() { gridCanvas.requestPaint(); }
-            function onGridXChanged() { gridCanvas.requestPaint(); }
-            function onGridYChanged() { gridCanvas.requestPaint(); }
-            function onXticksChanged() { gridCanvas.requestPaint(); }
-            function onYticksChanged() { gridCanvas.requestPaint(); }
         }
     }
 
@@ -273,52 +280,58 @@ Item {
                 }
             }
         }
-        Canvas {
-            id: minorCanvas
+        Loader {
             anchors.fill: parent
-            visible: furnitureRoot.plot.minor_ticks
+            active: furnitureRoot.plot ? furnitureRoot.plot.minor_ticks : false
+            sourceComponent: Component {
+            Canvas {
+                id: minorCanvas
+                anchors.fill: parent
+                visible: furnitureRoot.plot.minor_ticks
 
-            onPaint: {
-                const ctx = getContext("2d");
-                ctx.clearRect(0, 0, width, height);
-                if (!furnitureRoot.plot.minor_ticks)
-                    return;
-                ctx.strokeStyle = furnitureRoot.plot.tick_color;
-                ctx.lineWidth = furnitureRoot._deviceWidth(furnitureRoot.plot.tick_width);
-                const length = furnitureRoot.plot.tick_length * 0.6;
-                ctx.beginPath();
-                for (const value of furnitureRoot._minorTicks(furnitureRoot.effectiveTicksX)) {
-                    const px = furnitureRoot._snapLine(
-                        furnitureRoot.view.mapToScreen(value, 0).x, ctx.lineWidth);
-                    const py = furniture.xAxisY;
-                    ctx.moveTo(px, py);
-                    ctx.lineTo(px, py - length);
+                onPaint: {
+                    const ctx = getContext("2d");
+                    ctx.clearRect(0, 0, width, height);
+                    if (!furnitureRoot.plot.minor_ticks)
+                        return;
+                    ctx.strokeStyle = furnitureRoot.plot.tick_color;
+                    ctx.lineWidth = furnitureRoot._deviceWidth(furnitureRoot.plot.tick_width);
+                    const length = furnitureRoot.plot.tick_length * 0.6;
+                    ctx.beginPath();
+                    for (const value of furnitureRoot._minorTicks(furnitureRoot.effectiveTicksX)) {
+                        const px = furnitureRoot._snapLine(
+                            furnitureRoot.view.mapToScreen(value, 0).x, ctx.lineWidth);
+                        const py = furniture.xAxisY;
+                        ctx.moveTo(px, py);
+                        ctx.lineTo(px, py - length);
+                    }
+                    for (const value of furnitureRoot._minorTicks(furnitureRoot.effectiveTicksY)) {
+                        const py = furnitureRoot._snapLine(
+                            furnitureRoot.view.mapToScreen(0, value).y, ctx.lineWidth);
+                        const px = furniture.yAxisX;
+                        ctx.moveTo(px, py);
+                        ctx.lineTo(px + length, py);
+                    }
+                    ctx.stroke();
                 }
-                for (const value of furnitureRoot._minorTicks(furnitureRoot.effectiveTicksY)) {
-                    const py = furnitureRoot._snapLine(
-                        furnitureRoot.view.mapToScreen(0, value).y, ctx.lineWidth);
-                    const px = furniture.yAxisX;
-                    ctx.moveTo(px, py);
-                    ctx.lineTo(px + length, py);
+
+                onWidthChanged: requestPaint()
+                onHeightChanged: requestPaint()
+
+                Connections {
+                    target: furnitureRoot.plot.camera
+                    function onViewChanged() { minorCanvas.requestPaint(); }
                 }
-                ctx.stroke();
+                Connections {
+                    target: furnitureRoot.plot
+                    function onXticksChanged() { minorCanvas.requestPaint(); }
+                    function onYticksChanged() { minorCanvas.requestPaint(); }
+                    function onMinorTicksChanged() { minorCanvas.requestPaint(); }
+                    function onTickColorChanged() { minorCanvas.requestPaint(); }
+                    function onTickLengthChanged() { minorCanvas.requestPaint(); }
+                    function onTickWidthChanged() { minorCanvas.requestPaint(); }
+                }
             }
-
-            onWidthChanged: requestPaint()
-            onHeightChanged: requestPaint()
-
-            Connections {
-                target: furnitureRoot.plot.camera
-                function onViewChanged() { minorCanvas.requestPaint(); }
-            }
-            Connections {
-                target: furnitureRoot.plot
-                function onXticksChanged() { minorCanvas.requestPaint(); }
-                function onYticksChanged() { minorCanvas.requestPaint(); }
-                function onMinorTicksChanged() { minorCanvas.requestPaint(); }
-                function onTickColorChanged() { minorCanvas.requestPaint(); }
-                function onTickLengthChanged() { minorCanvas.requestPaint(); }
-                function onTickWidthChanged() { minorCanvas.requestPaint(); }
             }
         }
     }

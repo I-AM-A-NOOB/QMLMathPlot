@@ -39,6 +39,17 @@ def test_guides_are_model_objects() -> None:
     assert plot.guides.rowCount() == 0
 
 
+def test_guide_count_is_reactive() -> None:
+    plot = Plot()
+    seen: list[int] = []
+    plot.guides.countChanged.connect(lambda: seen.append(plot.guides.count))
+    first = plot.add_hline(0.0)
+    plot.add_vline(1.0)
+    plot.remove_guide(first)
+    plot.clear_guides()
+    assert seen == [1, 2, 1, 0]
+
+
 def test_legend_and_tick_properties() -> None:
     plot = Plot()
     assert plot.legend is False

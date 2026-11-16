@@ -1,9 +1,10 @@
 # Memory plan: corrected conclusion
 
-Status: **no library code change**. The earlier plan was based on a flawed cycle harness; the
-real event-loop measurements show **no per-activation leak** in `PlotView`. The remaining
-work is host-side lifecycle (keep one view alive, warm up, remove the extra layer). Working
-tree is clean; HEAD is the 0.7.0 release plus this docs commit.
+Status: the per-activation leak was disproved (see below). Library fixes have since landed:
+4× default MSAA, release of RHI resources on curve deletion/empty plots, byte-budgeted
+renderer caches, and lazily created furniture Canvases. The remaining high-value work is
+host-side lifecycle (keep one view alive, warm up, remove the extra layer), plus the
+Symplify-only SVG cache policy.
 
 ## 1. What was retracted, and why
 

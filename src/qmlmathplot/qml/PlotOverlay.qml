@@ -31,49 +31,56 @@ Item {
     }
 
     // Guides are painted as one Canvas so dashed styles look the same as the grid's.
-    Canvas {
-        id: guideCanvas
+    // Lazy: no guides means no full-pane guide texture.
+    Loader {
         anchors.fill: parent
+        active: overlayRoot.plot ? overlayRoot.plot.guides.count > 0 : false
+        sourceComponent: Component {
+        Canvas {
+            id: guideCanvas
+            anchors.fill: parent
 
-        onPaint: {
-            const ctx = getContext("2d");
-            ctx.clearRect(0, 0, width, height);
-            for (let i = 0; i < overlayRoot.plot.guides.rowCount(); ++i) {
-                const guide = overlayRoot.plot.guides.at(i);
-                if (!guide.visible)
-                    continue;
-                ctx.strokeStyle = guide.color;
-                ctx.lineWidth = overlayRoot._deviceWidth(guide.width);
-                ctx.setLineDash(overlayRoot._dash(guide.style));
-                ctx.beginPath();
-                if (guide.kind === "h") {
-                    const py = overlayRoot._snapLine(
-                        overlayRoot.view.mapToScreen(0, guide.value).y, ctx.lineWidth);
-                    ctx.moveTo(0, py);
-                    ctx.lineTo(width, py);
-                } else {
-                    const px = overlayRoot._snapLine(
-                        overlayRoot.view.mapToScreen(guide.value, 0).x, ctx.lineWidth);
-                    ctx.moveTo(px, 0);
-                    ctx.lineTo(px, height);
+            onPaint: {
+                const ctx = getContext("2d");
+                ctx.clearRect(0, 0, width, height);
+                for (let i = 0; i < overlayRoot.plot.guides.rowCount(); ++i) {
+                    const guide = overlayRoot.plot.guides.at(i);
+                    if (!guide.visible)
+                        continue;
+                    ctx.strokeStyle = guide.color;
+                    ctx.lineWidth = overlayRoot._deviceWidth(guide.width);
+                    ctx.setLineDash(overlayRoot._dash(guide.style));
+                    ctx.beginPath();
+                    if (guide.kind === "h") {
+                        const py = overlayRoot._snapLine(
+                            overlayRoot.view.mapToScreen(0, guide.value).y, ctx.lineWidth);
+                        ctx.moveTo(0, py);
+                        ctx.lineTo(width, py);
+                    } else {
+                        const px = overlayRoot._snapLine(
+                            overlayRoot.view.mapToScreen(guide.value, 0).x, ctx.lineWidth);
+                        ctx.moveTo(px, 0);
+                        ctx.lineTo(px, height);
+                    }
+                    ctx.stroke();
                 }
-                ctx.stroke();
+            }
+
+            onWidthChanged: requestPaint()
+            onHeightChanged: requestPaint()
+
+            Connections {
+                target: overlayRoot.plot.camera
+                function onViewChanged() { guideCanvas.requestPaint(); }
+            }
+            Connections {
+                target: overlayRoot.plot.guides
+                function onDataChanged() { guideCanvas.requestPaint(); }
+                function onRowsInserted() { guideCanvas.requestPaint(); }
+                function onRowsRemoved() { guideCanvas.requestPaint(); }
+                function onModelReset() { guideCanvas.requestPaint(); }
             }
         }
-
-        onWidthChanged: requestPaint()
-        onHeightChanged: requestPaint()
-
-        Connections {
-            target: overlayRoot.plot.camera
-            function onViewChanged() { guideCanvas.requestPaint(); }
-        }
-        Connections {
-            target: overlayRoot.plot.guides
-            function onDataChanged() { guideCanvas.requestPaint(); }
-            function onRowsInserted() { guideCanvas.requestPaint(); }
-            function onRowsRemoved() { guideCanvas.requestPaint(); }
-            function onModelReset() { guideCanvas.requestPaint(); }
         }
     }
 

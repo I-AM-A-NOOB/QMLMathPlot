@@ -338,6 +338,8 @@ class AnnotationListModel(QAbstractListModel):
 class GuideListModel(QAbstractListModel):
     """The horizontal/vertical guides of one plot."""
 
+    countChanged = Signal()
+
     GuideRole = int(Qt.ItemDataRole.UserRole) + 1
     KindRole = GuideRole + 1
     ValueRole = GuideRole + 2
@@ -365,6 +367,12 @@ class GuideListModel(QAbstractListModel):
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: N802
         return 0 if parent.isValid() else len(self._items)
+
+    def _get_count(self) -> int:
+        return len(self._items)
+
+    #: Reactive row count for QML (the guide Canvas is only created when non-empty).
+    count: int = Property(int, _get_count, notify=countChanged)
 
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> object:
         if not index.isValid() or not 0 <= index.row() < len(self._items):
@@ -399,6 +407,7 @@ class GuideListModel(QAbstractListModel):
         self._items.append(item)
         item.setParent(self)
         self.endInsertRows()
+        self.countChanged.emit()
         item.changed.connect(lambda item=item: self._notify(item))
         return item
 
@@ -409,6 +418,7 @@ class GuideListModel(QAbstractListModel):
                 self.beginRemoveRows(QModelIndex(), row, row)
                 del self._items[row]
                 self.endRemoveRows()
+                self.countChanged.emit()
                 return
 
     def clear(self) -> None:
@@ -417,6 +427,7 @@ class GuideListModel(QAbstractListModel):
         self.beginRemoveRows(QModelIndex(), 0, len(self._items) - 1)
         self._items.clear()
         self.endRemoveRows()
+        self.countChanged.emit()
 
     @Slot(int, result=QObject)
     def at(self, row: int) -> Guide:
