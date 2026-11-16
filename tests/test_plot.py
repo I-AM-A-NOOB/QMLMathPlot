@@ -215,15 +215,15 @@ def test_render_mode_defaults_to_gpu_and_validates() -> None:
     assert plot.renderMode == "cpu", "an invalid mode must not change the current one"
 
 
-def test_sample_count_defaults_to_8_and_validates() -> None:
+def test_sample_count_defaults_to_4_and_validates() -> None:
     plot = Plot()
-    assert plot.sampleCount == 8
+    assert plot.sampleCount == 4
     seen: list[int] = []
     plot.sampleCountChanged.connect(lambda: seen.append(plot.sampleCount))
-    plot.sampleCount = 4
-    plot.sampleCount = 4
-    assert plot.sampleCount == 4 and seen == [4]
+    plot.sampleCount = 2
+    plot.sampleCount = 2
+    assert plot.sampleCount == 2 and seen == [2]
     for invalid in (0, 3, 16):
         with pytest.raises(ValueError, match="sampleCount"):
             plot.sampleCount = invalid
-    assert plot.sampleCount == 4
+    assert plot.sampleCount == 2

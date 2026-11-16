@@ -481,7 +481,7 @@ class CurveRhiItem(QQuickRhiItem):
         self._cpu_cache: dict[tuple, tuple[bytes, int]] = {}
         self._cpu_cache_bytes = 0
         self.setAlphaBlending(True)
-        self.setSampleCount(8)
+        self.setSampleCount(4)
         self.widthChanged.connect(self._refresh)
         self.heightChanged.connect(self._refresh)
 

@@ -30,9 +30,9 @@ The compute and CPU-path producers share the stroke pipeline (vertex layout, wid
 round joins, MSAA), so their visual weight is the same even though the geometry source
 differs.
 
-`Plot.sampleCount` sets the RHI target's MSAA level (default 8; 4/2/1 are accepted). The
+`Plot.sampleCount` sets the RHI target's MSAA level (default 4; 8/2/1 are accepted). The
 multisample colour/depth buffers are the largest per-view RHI allocation, so a host that
-needs a lower peak can set `plot.sampleCount = 4` (or lower) before the first frame; changing
+needs the higher edge quality can set `plot.sampleCount = 8`, or 2/1 for a lower peak, before the first frame; changing
 it later recreates the pipelines. Measured (900×700, two curves, D3D11, peak commit):
 8× **358.8 MiB**, 4× **301.9 MiB**, 2× **276.7 MiB**, 1× **254.3 MiB**. With no curves the
 GPU item and its render target are unloaded entirely (`PlotCurves.qml` keeps the `Loader` inactive), and removing a curve

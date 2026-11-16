@@ -184,11 +184,11 @@ class Plot(QObject):
                                notify=renderModeChanged)
 
     def _get_sample_count(self) -> int:
-        return int(getattr(self, "_sample_count", 8))
+        return int(getattr(self, "_sample_count", 4))
 
     def _set_sample_count(self, value: object) -> None:
-        # MSAA level of the RHI render target. 8x is the quality default; 4/2/1 trade edge
-        # quality for a proportionally smaller multisample target (the peak-memory knob).
+        # MSAA level of the RHI render target. 4x is the default (visually indistinguishable
+        # from 8x here, with half the multisample memory); 8x/2x/1x remain available.
         samples = int(value)  # type: ignore[arg-type]
         if samples not in (1, 2, 4, 8):
             raise ValueError(f"sampleCount must be 1, 2, 4 or 8, got {samples!r}")
@@ -197,7 +197,7 @@ class Plot(QObject):
         self._sample_count = samples
         self.sampleCountChanged.emit()
 
-    #: MSAA sample count of the RHI target (1, 2, 4 or 8). 8 by default.
+    #: MSAA sample count of the RHI target (1, 2, 4 or 8). 4 by default.
     sampleCount: int = Property(int, _get_sample_count, _set_sample_count,
                                 notify=sampleCountChanged)
 

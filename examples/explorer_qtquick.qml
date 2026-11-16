@@ -99,6 +99,11 @@ ApplicationWindow {
                 objectName: "msaaBox"
                 textRole: "text"
                 valueRole: "value"
+                // Mirror the model default (4x) without hard-coding the combo selection.
+                currentIndex: {
+                    const index = view.plot ? [8, 4, 2, 1].indexOf(view.plot.sampleCount) : -1;
+                    return index < 0 ? 1 : index;
+                }
                 model: [
                     { text: "MSAA 8x", value: 8 },
                     { text: "MSAA 4x", value: 4 },
