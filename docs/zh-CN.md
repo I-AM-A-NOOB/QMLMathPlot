@@ -1,6 +1,6 @@
-# QMLMathPlot 0.7 中文文档
+# QMLMathPlot 0.7.1 中文文档
 
-对应版本 0.7.0。英文详细文档见 [Architecture](architecture.md)、[API](api.md)、
+对应版本 0.7.1。英文详细文档见 [Architecture](architecture.md)、[API](api.md)、
 [Programs](programs.md)、[Rendering](rendering.md)、[Migration](migration-0.7.md)。
 
 ## 1. 架构：核心只认 `Program`

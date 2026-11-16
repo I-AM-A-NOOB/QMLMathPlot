@@ -1,7 +1,7 @@
 # QMLMathPlot 维护者简报（中文）
 
 > 面向作者自己的内部文档，不是用户手册。用户文档见 `docs/index.md`；工程陷阱的原始记录见
-> `AGENTS.md`。版本基线：0.7.0（unreleased）。
+> `AGENTS.md`。版本基线：0.7.1（2026-11-16）。
 
 ## 0. 一分钟版本
 
@@ -17,7 +17,7 @@
 - `renderMode="gpu"`（RHI）或 `"cpu"`（QPainter，给无 RHI 平台；软件场景图
   `QT_QUICK_BACKEND=software`）。CPU 模式目前只完整覆盖 1-D；implicit 明确提示，
   data / numpy-only 源尚未绘制。
-- 测试基线：277 passed、3 xfailed（oracle 已知差异）；`ruff`（F/E9/I）全绿。
+- 测试基线：286 passed、3 xfailed（oracle 已知差异）；`ruff`（F/E9/I）全绿。
 
 ## 1. 文件逐个作用
 
@@ -31,7 +31,7 @@
 | `docs/` | 用户文档 + 本简报 + 历史设计文档 |
 | `tools/ggb_oracle/` | 用真实 GeoGebra 生成 oracle fixture 的 Java 探针 |
 | `AGENTS.md` | 历史踩坑记录（编号条目，改渲染前先读） |
-| `CHANGELOG.md` | 版本变更（0.7.0 目前 unreleased） |
+| `CHANGELOG.md` | 版本变更（0.7.1 已发布） |
 | `pyproject.toml` | 版本、依赖、extras、pytest/ruff 配置 |
 | `uv.lock` | uv 锁文件（镜像 URL 会随本机 uv 配置变化） |
 
@@ -301,9 +301,9 @@ uv run ruff check src tests examples       # F/E9/I
 
 ## 7. 发布与打包
 
-- 版本在 `pyproject.toml`；0.7.0 目前 unreleased。
+- 版本在 `pyproject.toml`；0.7.1（2026-11-16）已发布。
 - extras：`[calc]`=sympy；`[matplotlib]`/`[mpl]`=matplotlib。核心依赖 PySide6 + numpy。
-- 发布：填 CHANGELOG 日期 → push → `git tag v0.7.0` → push tag；GitHub Actions
+- 发布：填 CHANGELOG 日期 → push → `git tag v0.7.1` → push tag；GitHub Actions
   `Publish to PyPI` 构建并在 tag 时发布。本机 `github.com:443` 不通，`origin` 已改为
   `ssh://git@ssh.github.com:443/...`（deploy key；不想保留时 `gh repo deploy-key delete`）。
 

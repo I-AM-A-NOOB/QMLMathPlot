@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.1 — 2026-11-16
 
 ### Added
 - **`Plot.sampleCount`** (1, 2, 4 or 8; default 4): MSAA level of the RHI render target.
