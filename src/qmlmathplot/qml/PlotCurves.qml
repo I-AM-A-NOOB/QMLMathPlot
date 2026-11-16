@@ -16,6 +16,7 @@ Item {
         CurveRhiItem {
             anchors.fill: parent
             curves: curvesRoot.view.plot.curves
+            sampleCount: curvesRoot.view.plot.sampleCount
             camera: Qt.vector4d(curvesRoot.view.plot.camera.centre.x,
                                 curvesRoot.view.plot.camera.centre.y,
                                 curvesRoot.view.plot.camera.scale_x,
@@ -24,7 +25,9 @@ Item {
     }
     Loader {
         anchors.fill: parent
+        // No curves -> no RHI item/render target at all (Plot.clear releases them).
         active: curvesRoot.renderMode !== "cpu"
+                && curvesRoot.view.plot.curves.count > 0
         sourceComponent: gpuCurvesComponent
     }
 

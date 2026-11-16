@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **`Plot.sampleCount`** (1, 2, 4 or 8; default 8): MSAA level of the RHI render target.
+  Lower values shrink the largest per-view GPU allocation; the host can pick 4/2/1 for a
+  lower peak. Changing it invalidates and recreates the sample-count-dependent pipelines.
+  Measured (900×700, two curves, D3D11, peak commit): 8× 358.8 MiB, 4× 301.9, 2× 276.7,
+  1× 254.3.
+
+### Changed
+- The GPU `CurveRhiItem` is unloaded when the plot has no curves, releasing its render
+  target and device resources; `remove_curve` releases that curve's pipeline and vertex
+  buffers. Renderer caches (pipelines, path buffers, CPU vertex buffers, CPU vertex capture)
+  now have explicit byte budgets instead of a fixed entry count.
+
 ## 0.7.0 — 2026-11-13
 
 ### Breaking

@@ -486,6 +486,7 @@ class CurveListModel(QAbstractListModel):
 
     #: Any curve's ``error`` changed (``Plot.plotError`` aggregates these).
     curveErrorChanged = Signal()
+    countChanged = Signal()
 
     CurveRole = int(Qt.ItemDataRole.UserRole) + 1
     ExpressionRole = CurveRole + 1
@@ -536,6 +537,12 @@ class CurveListModel(QAbstractListModel):
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: N802
         return 0 if parent.isValid() else len(self._curves)
+
+    def _get_count(self) -> int:
+        return len(self._curves)
+
+    #: Reactive row count for QML (`rowCount()` is a method and bindings do not track it).
+    count: int = Property(int, _get_count, notify=countChanged)
 
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> object:
         if not index.isValid() or not 0 <= index.row() < len(self._curves):
@@ -599,6 +606,7 @@ class CurveListModel(QAbstractListModel):
         self.beginInsertRows(QModelIndex(), row, row)
         self._curves.append(curve)
         self.endInsertRows()
+        self.countChanged.emit()
         self._watch(curve)
         return curve
 
@@ -670,6 +678,7 @@ class CurveListModel(QAbstractListModel):
         self.beginRemoveRows(QModelIndex(), row, row)
         del self._curves[row]
         self.endRemoveRows()
+        self.countChanged.emit()
 
     @Slot(int, result=QObject)
     def at(self, row: int) -> Curve:

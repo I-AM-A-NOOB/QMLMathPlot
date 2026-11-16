@@ -30,6 +30,16 @@ The compute and CPU-path producers share the stroke pipeline (vertex layout, wid
 round joins, MSAA), so their visual weight is the same even though the geometry source
 differs.
 
+`Plot.sampleCount` sets the RHI target's MSAA level (default 8; 4/2/1 are accepted). The
+multisample colour/depth buffers are the largest per-view RHI allocation, so a host that
+needs a lower peak can set `plot.sampleCount = 4` (or lower) before the first frame; changing
+it later recreates the pipelines. Measured (900×700, two curves, D3D11, peak commit):
+8× **358.8 MiB**, 4× **301.9 MiB**, 2× **276.7 MiB**, 1× **254.3 MiB**. With no curves the
+GPU item and its render target are unloaded entirely (`PlotCurves.qml` keeps the `Loader` inactive), and removing a curve
+releases its pipeline, path/CPU vertex buffers and captured CPU vertices. Per-renderer caches
+are bounded by byte budgets (≈16 MiB of pipelines by estimate, 24 MiB path buffers, 24 MiB
+CPU vertex buffers, plus 32 MiB of CPU vertex capture).
+
 Costs (measured on the development machine, 900×600, including `grabToImage` readback):
 `sin(1/x)` ≈ 13–14 ms, `tan(x)` ≈ 12 ms per grab; the first frame of a new compute
 expression additionally creates the QRhi pipeline (≈0.3–1.2 s, a QRhi limitation — the

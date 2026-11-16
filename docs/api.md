@@ -60,6 +60,7 @@ Plot(parent=None, *, program_source: ProgramSource | None = None)
 |---|---|---|
 | `program_source` | `ProgramSource or None` | plain Python property; setting it re-resolves existing text curves |
 | `renderMode` | `"gpu"` / `"cpu"` | curve renderer; invalid values raise `ValueError` |
+| `sampleCount` | `1`, `2`, `4` or `8` (default `8`) | MSAA samples of the RHI target; lower values trade edge quality for a smaller multisample buffer |
 | `plotError` | `str` (read-only) | first non-empty curve error |
 | `camera` | `Camera` | where you look |
 | `curves` | `CurveListModel` | the curves |

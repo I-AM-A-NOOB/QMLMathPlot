@@ -90,6 +90,7 @@ class Plot(QObject):
     programSourceChanged = Signal()
     plotErrorChanged = Signal()
     renderModeChanged = Signal()
+    sampleCountChanged = Signal()
     viewChanged = Signal()
     aspectChanged = Signal()  # forwarded from the camera (the forwarded `aspect`)
     themeChanged = Signal()
@@ -181,6 +182,24 @@ class Plot(QObject):
     #: "gpu" (RHI) or "cpu" (QPainter paths, for platforms without a usable RHI backend).
     renderMode: str = Property(str, _get_render_mode, _set_render_mode,
                                notify=renderModeChanged)
+
+    def _get_sample_count(self) -> int:
+        return int(getattr(self, "_sample_count", 8))
+
+    def _set_sample_count(self, value: object) -> None:
+        # MSAA level of the RHI render target. 8x is the quality default; 4/2/1 trade edge
+        # quality for a proportionally smaller multisample target (the peak-memory knob).
+        samples = int(value)  # type: ignore[arg-type]
+        if samples not in (1, 2, 4, 8):
+            raise ValueError(f"sampleCount must be 1, 2, 4 or 8, got {samples!r}")
+        if samples == self._get_sample_count():
+            return
+        self._sample_count = samples
+        self.sampleCountChanged.emit()
+
+    #: MSAA sample count of the RHI target (1, 2, 4 or 8). 8 by default.
+    sampleCount: int = Property(int, _get_sample_count, _set_sample_count,
+                                notify=sampleCountChanged)
 
     @property
     def program_source(self) -> ProgramSource | None:

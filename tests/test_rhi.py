@@ -55,8 +55,7 @@ def _render(app: QGuiApplication, plot: Plot) -> tuple[QQuickView, object, Curve
     camera.set_viewport(float(WIDTH), float(HEIGHT))
     camera.xlim = (-6.0, 6.0)
     camera.ylim = (-2.0, 2.0)
-    item = root.findChild(CurveRhiItem)
-    assert item is not None
+    item = root.findChild(CurveRhiItem)  # None for an empty plot (the Loader is inactive)
     return view, root, item, _grab(app, root)
 
 
@@ -109,9 +108,29 @@ def test_a_curve_added_after_exposure_is_drawn(app: QGuiApplication) -> None:
     plot = Plot()
     view, root, item, image = _render(app, plot)
     try:
+        assert item is None, "an empty plot must not keep an RHI item/render target"
         assert _count(image, BLUE) < 100
-        plot.add_curve("sin(x)", color="#1f77b4")
+        curve = plot.add_curve("sin(x)", color="#1f77b4")
         image = _grab(app, root)
+        assert _count(image, BLUE) > 1000
+        item = root.findChild(CurveRhiItem)
+        assert item is not None
+        plot.remove_curve(curve)
+        _grab(app, root)
+        assert root.findChild(CurveRhiItem) is None
+    finally:
+        view.close()
+
+
+@pytest.mark.parametrize("samples", [1, 4])
+def test_sample_count_is_configurable(app: QGuiApplication, samples: int) -> None:
+    plot = Plot()
+    plot.sampleCount = samples
+    plot.add_curve("sin(x)", color="#1f77b4")
+    view, root, item, image = _render(app, plot)
+    try:
+        assert item is not None
+        assert item.sampleCount() == samples
         assert _count(image, BLUE) > 1000
     finally:
         view.close()
@@ -172,3 +191,28 @@ view.close()
     )
     assert result.returncode == 0, result.stderr
     assert "OK" in result.stdout, result.stdout + result.stderr
+
+def test_sample_count_can_change_after_exposure(app: QGuiApplication) -> None:
+    plot = Plot()
+    plot.add_curve("sin(x)", color="#1f77b4")
+    view, root, item, image = _render(app, plot)
+    try:
+        assert item is not None
+        plot.sampleCount = 2
+        image = _grab(app, root)
+        assert item.sampleCount() == 2
+        assert _count(image, BLUE) > 1000
+    finally:
+        view.close()
+
+
+def test_the_cpu_vertex_capture_has_a_byte_budget(app: QGuiApplication) -> None:
+    item = CurveRhiItem()
+    try:
+        for index in range(8):
+            item._cache_put((index,), b"x" * (8 * 1024 * 1024), 1)
+        assert item._cpu_cache_bytes <= 32 * 1024 * 1024
+        assert len(item._cpu_cache) <= 4
+    finally:
+        item.deleteLater()
+

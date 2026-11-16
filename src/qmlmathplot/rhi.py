@@ -43,6 +43,14 @@ __all__ = ["CurveRhiItem"]
 
 _UNIFORM_SIZE = 128
 
+# Cache budgets. Path/CPU vertex buffers are exact bytes; pipeline sizes are not exposed by
+# QRhi, so pipelines use a conservative estimate and a byte budget as well.
+_ESTIMATED_PIPELINE_BYTES = 2 * 1024 * 1024
+_MAX_PIPELINE_CACHE_BYTES = 16 * 1024 * 1024
+_MAX_PATH_BUFFER_BYTES = 24 * 1024 * 1024
+_MAX_CPU_BUFFER_BYTES = 24 * 1024 * 1024
+_MAX_CPU_CACHE_BYTES = 32 * 1024 * 1024
+
 _VERTEX_SOURCE = """#version 440
 layout(location = 0) out vec2 vUV;
 void main() {
@@ -81,11 +89,107 @@ class _Renderer(QQuickRhiItemRenderer):
         self._curves: list[tuple] = []
         self._camera = QVector4D(0.0, 0.0, 1.0, 1.0)
         self._size = (1.0, 1.0)
+        self._sample_count = 0
 
     def initialize(self, cb) -> None:  # noqa: ARG002 - Qt API
         self._vertex = _qshader(QUrl.fromLocalFile(str(bake(_VERTEX_SOURCE, "vert"))))
         self._path_fragment = _qshader(
             QUrl.fromLocalFile(str(bake(PATH_FRAGMENT, "frag"))))
+
+    @staticmethod
+    def _destroy(resource) -> None:
+        if resource is None:
+            return
+        try:
+            resource.destroy()
+        except (AttributeError, RuntimeError):
+            pass
+
+    def _clear_graphics_pipelines(self) -> None:
+        for pipeline in self._pipelines.values():
+            self._destroy(pipeline)
+        self._pipelines.clear()
+        self._destroy(self._path_vertex_pipeline)
+        self._path_vertex_pipeline = None
+        for pipeline in self._path_compute_pipelines.values():
+            self._destroy(pipeline)
+        self._path_compute_pipelines.clear()
+        for srb in self._path_compute_srbs.values():
+            self._destroy(srb)
+        self._path_compute_srbs.clear()
+
+    def _trim_pipelines(self, active: set[str]) -> None:
+        while len(self._pipelines) * _ESTIMATED_PIPELINE_BYTES > _MAX_PIPELINE_CACHE_BYTES:
+            for key in list(self._pipelines):
+                if key[0] in active:
+                    continue
+                self._destroy(self._pipelines.pop(key))
+                break
+            else:
+                return
+
+    def _trim_path_buffers(self, active: set[str]) -> None:
+        while sum(self._path_buffer_sizes.values()) > _MAX_PATH_BUFFER_BYTES:
+            for key in list(self._path_buffers):
+                if key in active:
+                    continue
+                self._destroy(self._path_buffers.pop(key))
+                self._path_buffer_sizes.pop(key, None)
+                self._destroy(self._path_compute_srbs.pop(key, None))
+                self._destroy(self._path_compute_pipelines.pop(key, None))
+                break
+            else:
+                return
+
+    def _trim_cpu_buffers(self, active: set[int]) -> None:
+        total = sum(len(entry[2]) for entry in self._cpu_buffers.values())
+        while total > _MAX_CPU_BUFFER_BYTES:
+            for row in list(self._cpu_buffers):
+                if row in active:
+                    continue
+                self._destroy(self._cpu_buffers.pop(row)[0])
+                total = sum(len(entry[2]) for entry in self._cpu_buffers.values())
+                break
+            else:
+                return
+
+    def _prune(self, curves: list[tuple]) -> None:
+        active_pipes = {spec[0].toString() for spec in curves if spec[3] is None}
+        active_paths = {spec[4].toString() for spec in curves if spec[3] == "compute"}
+        active_cpu = {row for row, spec in enumerate(curves) if spec[3] in ("cpu", "data")}
+        for key in list(self._pipelines):
+            if key[0] not in active_pipes:
+                self._destroy(self._pipelines.pop(key))
+        for key in list(self._path_buffers):
+            if key not in active_paths:
+                self._destroy(self._path_buffers.pop(key))
+                self._path_buffer_sizes.pop(key, None)
+                self._destroy(self._path_compute_srbs.pop(key, None))
+                self._destroy(self._path_compute_pipelines.pop(key, None))
+        for row in list(self._cpu_buffers):
+            if row not in active_cpu:
+                self._destroy(self._cpu_buffers.pop(row)[0])
+        for row in list(self._last_uniforms):
+            if row >= len(curves):
+                del self._last_uniforms[row]
+        self._trim_path_buffers(active_paths)
+        self._trim_cpu_buffers(active_cpu)
+        if not curves:
+            self._clear_graphics_pipelines()
+            self._destroy(self._ubuf)
+            self._ubuf = None
+            self._destroy(self._srb)
+            self._srb = None
+            self._stride = 0
+            self._capacity = 0
+            self._last_uniforms.clear()
+        elif self._capacity > max(8, 2 * len(curves)) and self._srb is not None:
+            self._destroy(self._ubuf)
+            self._ubuf = None
+            self._destroy(self._srb)
+            self._srb = None
+            self._capacity = 0
+            self._last_uniforms.clear()
 
     def _uniforms_for(self, count: int) -> None:
         """One uniform buffer, one binding object, one dynamic offset per curve."""
@@ -113,12 +217,10 @@ class _Renderer(QQuickRhiItemRenderer):
     def _pipeline(self, spec, srb) -> QRhiGraphicsPipeline | None:
         fragment = spec[0]
         key = (fragment.toString(),)
-        pipe = self._pipelines.get(key)
+        pipe = self._pipelines.pop(key, None)
         if pipe is not None:
+            self._pipelines[key] = pipe  # LRU: a hit moves the pipeline to the end
             return pipe
-        if len(self._pipelines) >= 32:
-            # A live expression edit creates a new .qsb; keep the cache bounded across edits.
-            self._pipelines.clear()
         try:
             fs = _qshader(fragment)
         except (OSError, ValueError):
@@ -146,6 +248,7 @@ class _Renderer(QQuickRhiItemRenderer):
         if not pipe.create():
             return None
         self._pipelines[key] = pipe
+        self._trim_pipelines({s[0].toString() for s in self._curves if s[3] is None})
         return pipe
 
     def _ensure_path_pipeline(self) -> None:
@@ -193,6 +296,8 @@ class _Renderer(QQuickRhiItemRenderer):
         size = cols * 18 * 8 * 4
         buf = self._path_buffers.get(key)
         if buf is None or self._path_buffer_sizes.get(key) != size:
+            if buf is not None:
+                self._destroy(buf)
             buf = self.rhi().newBuffer(
                 QRhiBuffer.Static,
                 QRhiBuffer.StorageBuffer | QRhiBuffer.VertexBuffer,
@@ -201,8 +306,8 @@ class _Renderer(QQuickRhiItemRenderer):
                 raise RuntimeError("cannot create the path vertex buffer")
             self._path_buffers[key] = buf
             self._path_buffer_sizes[key] = size
-            self._path_compute_pipelines.pop(key, None)
-            self._path_compute_srbs.pop(key, None)
+            self._destroy(self._path_compute_pipelines.pop(key, None))
+            self._destroy(self._path_compute_srbs.pop(key, None))
         pipe = self._path_compute_pipelines.get(key)
         if pipe is None:
             shader = _qshader(shader_url)
@@ -222,6 +327,7 @@ class _Renderer(QQuickRhiItemRenderer):
                 raise RuntimeError("cannot create the path compute pipeline")
             self._path_compute_pipelines[key] = pipe
             self._path_compute_srbs[key] = srb
+        self._trim_path_buffers({s[4].toString() for s in self._curves if s[3] == "compute"})
         return buf, pipe, self._path_compute_srbs[key], cols
 
     def _cpu_buffer(self, row: int, spec) -> tuple[QRhiBuffer | None, int]:
@@ -232,6 +338,8 @@ class _Renderer(QQuickRhiItemRenderer):
         old = self._cpu_buffers.get(row)
         if old is not None and old[0] and old[2] == vertices:
             return old[0], old[1]
+        if old is not None:
+            self._destroy(old[0])
         used = self._pending
         if used is None:
             return None, 0
@@ -240,12 +348,20 @@ class _Renderer(QQuickRhiItemRenderer):
             return None, 0
         used.uploadStaticBuffer(buf, vertices)
         self._cpu_buffers[row] = (buf, count, vertices)
+        self._trim_cpu_buffers({i for i, s in enumerate(self._curves) if s[3] in ("cpu", "data")})
         return buf, count
 
     def synchronize(self, item: "CurveRhiItem") -> None:
         self._camera = QVector4D(item.camera)
         self._size = (max(1.0, item.width()), max(1.0, item.height()))
-        self._curves = list(item._snapshot)
+        sample_count = int(item.sampleCount())
+        if sample_count != self._sample_count:
+            # Pipelines carry the target's sample count; a new target needs new pipelines.
+            self._clear_graphics_pipelines()
+            self._sample_count = sample_count
+        curves = list(item._snapshot)
+        self._prune(curves)
+        self._curves = curves
 
     def _uniforms(self, spec) -> bytes:
         data = bytearray(_UNIFORM_SIZE)
@@ -363,6 +479,7 @@ class CurveRhiItem(QQuickRhiItem):
         self._renderer = None
         self._pending = None
         self._cpu_cache: dict[tuple, tuple[bytes, int]] = {}
+        self._cpu_cache_bytes = 0
         self.setAlphaBlending(True)
         self.setSampleCount(8)
         self.widthChanged.connect(self._refresh)
@@ -412,9 +529,7 @@ class CurveRhiItem(QQuickRhiItem):
         vertices, count = stroke_vertices(
             operations, view, (width, height), curve.lineWidth,
             (color.redF(), color.greenF(), color.blueF(), color.alphaF()))
-        self._cpu_cache[key] = (vertices, count)
-        if len(self._cpu_cache) > 64:
-            self._cpu_cache.clear()
+        self._cache_put(key, vertices, count)
         return vertices, count
 
     def _points_vertices(self, curve, camera: QVector4D, width: float, height: float):
@@ -437,15 +552,34 @@ class CurveRhiItem(QQuickRhiItem):
         vertices, count = stroke_vertices(
             points_operations(points), view, (width, height), curve.lineWidth,
             (color.redF(), color.greenF(), color.blueF(), color.alphaF()))
-        self._cpu_cache[key] = (vertices, count)
-        if len(self._cpu_cache) > 64:
-            self._cpu_cache.clear()
+        self._cache_put(key, vertices, count)
         return vertices, count
+
+    def _cache_put(self, key: tuple, vertices: bytes, count: int) -> None:
+        old = self._cpu_cache.pop(key, None)
+        if old is not None:
+            self._cpu_cache_bytes -= len(old[0])
+        self._cpu_cache[key] = (vertices, count)
+        self._cpu_cache_bytes += len(vertices)
+        while self._cpu_cache_bytes > _MAX_CPU_CACHE_BYTES and len(self._cpu_cache) > 1:
+            oldest = next(iter(self._cpu_cache))
+            _old_vertices, _old_count = self._cpu_cache.pop(oldest)
+            self._cpu_cache_bytes -= len(_old_vertices)
+
+    def _prune_cpu_cache(self, active: set[int]) -> None:
+        for key in list(self._cpu_cache):
+            if key[0] not in active:
+                _vertices, _count = self._cpu_cache.pop(key)
+                self._cpu_cache_bytes -= len(_vertices)
 
     def _refresh(self) -> None:
         """Snapshot the model on the GUI thread; the renderer must not touch it."""
         self._snapshot = []
         model = self._curves_model
+        active_ids: set[int] = set()
+        if model is not None:
+            active_ids = {id(model.at(row)) for row in range(model.rowCount())}
+        self._prune_cpu_cache(active_ids)
         camera = self._camera
         width = max(1.0, self.width())
         height = max(1.0, self.height())

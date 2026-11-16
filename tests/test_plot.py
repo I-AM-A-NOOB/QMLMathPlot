@@ -46,6 +46,17 @@ def test_plot_owns_its_camera_and_curve_model() -> None:
     assert plot.curves.parent() is plot
 
 
+def test_curve_count_is_a_reactive_property() -> None:
+    plot = Plot()
+    seen: list[int] = []
+    plot.curves.countChanged.connect(lambda: seen.append(plot.curves.count))
+    first = plot.add_curve("sin(x)")
+    plot.add_curve("cos(x)")
+    plot.remove_curve(first)
+    assert plot.curves.count == 1
+    assert seen == [1, 2, 1]
+
+
 def test_add_and_remove_curve_are_forwarded() -> None:
     plot = Plot()
     plot.color_cycle = ["#ff0000", "#00ff00"]
@@ -202,3 +213,17 @@ def test_render_mode_defaults_to_gpu_and_validates() -> None:
     with pytest.raises(ValueError, match="renderMode"):
         plot.renderMode = "auto"
     assert plot.renderMode == "cpu", "an invalid mode must not change the current one"
+
+
+def test_sample_count_defaults_to_8_and_validates() -> None:
+    plot = Plot()
+    assert plot.sampleCount == 8
+    seen: list[int] = []
+    plot.sampleCountChanged.connect(lambda: seen.append(plot.sampleCount))
+    plot.sampleCount = 4
+    plot.sampleCount = 4
+    assert plot.sampleCount == 4 and seen == [4]
+    for invalid in (0, 3, 16):
+        with pytest.raises(ValueError, match="sampleCount"):
+            plot.sampleCount = invalid
+    assert plot.sampleCount == 4
