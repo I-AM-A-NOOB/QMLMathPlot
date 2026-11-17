@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- Endpoint x/y tick labels keep the `tick_pad`/axis inset instead of clamping to the bare
+  item edge, and `PlotView` clips its scene (`clip: true`), so a host's square 1px frame no
+  longer shows antialiased label overflow.
+
 ## 0.7.1 — 2026-11-16
 
 ### Added

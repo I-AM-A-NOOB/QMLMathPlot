@@ -712,3 +712,64 @@ def test_the_problem_expression_is_drawn_by_the_cpu_curve_plotter(
     image, _ = _render_plot(app, "-x**2/2 + x*tan(x) - log(cos(x)**(-2))/2",
                             xlim=(-6.0, 6.0), ylim=(-2.0, 2.0))
     assert _curve_count(image) > 100, "the CPU CurvePlotter path did not reach the item"
+
+def test_endpoint_tick_labels_keep_an_inset_and_are_clipped(app: QGuiApplication) -> None:
+    """Endpoint labels must keep the tick-pad inset; the plot must clip at its frame.
+
+    The delegate items are not exposed through Repeater.itemAt/findChildren in this PySide/Qt
+    combination, so the check is on the rendered label band: the first and last few device
+    columns below the x axis must stay background.
+    """
+    view = QQuickView()
+    view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
+    view.resize(452, 300)
+    view.setSource(QUrl.fromLocalFile(qml_component_path()))
+    assert view.status() is QQuickView.Status.Ready, [e.toString() for e in view.errors()]
+    root = view.rootObject()
+    plot = Plot()
+    plot.ticks_visible = True
+    plot.title = ""
+    plot.xlabel = ""
+    plot.ylabel = ""
+    root.setProperty("plot", plot)
+    view.show()
+    for _ in range(200):
+        app.processEvents()
+        if view.isExposed():
+            break
+    else:
+        pytest.skip("no usable display/GPU scenegraph")
+
+    try:
+        camera = plot.camera
+        camera.set_viewport(452.0, 300.0)
+        camera.xlim = (-6.0, 6.0)
+        camera.ylim = (-2.0, 2.0)
+        for _ in range(30):
+            app.processEvents()
+        result = root.grabToImage()
+        loop = QEventLoop()
+        result.ready.connect(loop.quit)
+        QTimer.singleShot(10_000, loop.quit)
+        loop.exec()
+        image = result.image()
+        dpr = image.width() / 452.0
+        inset = max(1.0, plot.tick_pad, plot.axis_width)
+        axis_y = 150.0  # symmetric ylim: world y=0 is the vertical centre
+        top = int((axis_y + plot.tick_length + plot.tick_pad) * dpr) + 2
+        bottom = min(image.height(), top + int(plot.tick_font_size * dpr) + 4)
+        assert root.property("clip") is True
+
+        # Labels exist in the band, and the edge columns are free of them.
+        assert any(_dark(image, x, y) for y in range(top, bottom)
+                   for x in range(image.width())), "x tick labels were not drawn"
+        guard = max(1, int(inset * dpr) - 1)
+        assert not any(_dark(image, x, y) for y in range(top, bottom)
+                       for x in range(guard)), "left endpoint label touches the frame"
+        assert not any(_dark(image, x, y) for y in range(top, bottom)
+                       for x in range(image.width() - guard, image.width())), \
+            "right endpoint label touches the frame"
+    finally:
+        view.setSource(QUrl())
+        app.processEvents()
+        view.close()

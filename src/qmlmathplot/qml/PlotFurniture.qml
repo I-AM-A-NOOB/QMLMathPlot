@@ -11,6 +11,9 @@ Item {
 
     readonly property var plot: view.plot
     readonly property real _dpr: Screen.devicePixelRatio > 0 ? Screen.devicePixelRatio : 1
+    // Keep endpoint labels off the item edge (and off the 1px card border a host may draw
+    // around us). tick_pad is the natural inset; the axis stroke is the minimum.
+    readonly property real _edgeInset: plot ? Math.max(1, plot.tick_pad, plot.axis_width) : 1
 
     function _deviceWidth(logicalWidth) {
         return Math.max(1, Math.round(logicalWidth * _dpr)) / _dpr;
@@ -224,12 +227,15 @@ Item {
                     color: furnitureRoot.plot.text_color
                     font.pixelSize: furnitureRoot.plot.tick_font_size
                     // centred on the tick, but never half off the item
-                    x: Math.max(-parent.x, Math.min(-Math.round(width / 2),
-                                                    furniture.width - width - parent.x))
+                    x: Math.max(furnitureRoot._edgeInset - parent.x,
+                                Math.min(-Math.round(width / 2),
+                                         furniture.width - width
+                                         - furnitureRoot._edgeInset - parent.x))
                     y: Math.max(0, Math.min(furniture.xAxisY
                                             + furnitureRoot.plot.tick_length
                                             + furnitureRoot.plot.tick_pad,
-                                            furniture.height - height))
+                                            furniture.height - height
+                                            - furnitureRoot._edgeInset))
                 }
             }
         }
@@ -269,14 +275,16 @@ Item {
                     text: modelData[1]
                     color: furnitureRoot.plot.text_color
                     font.pixelSize: furnitureRoot.plot.tick_font_size
-                    x: Math.max(furnitureRoot.plot.tick_pad,
+                    x: Math.max(furnitureRoot._edgeInset,
                                 Math.min(furniture.yAxisX - width
-                                         - furnitureRoot.plot.tick_pad,
+                                         - furnitureRoot._edgeInset,
                                          furniture.width - width
-                                         - furnitureRoot.plot.tick_pad))
+                                         - furnitureRoot._edgeInset))
                     // centred on the tick, but never half off the item
-                    y: Math.max(-parent.y, Math.min(-Math.round(height / 2),
-                                                    furniture.height - height - parent.y))
+                    y: Math.max(furnitureRoot._edgeInset - parent.y,
+                                Math.min(-Math.round(height / 2),
+                                         furniture.height - height
+                                         - furnitureRoot._edgeInset - parent.y))
                 }
             }
         }

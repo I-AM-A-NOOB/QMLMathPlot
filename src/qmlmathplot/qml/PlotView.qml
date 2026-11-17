@@ -14,6 +14,9 @@ Item {
 
     implicitWidth: 800
     implicitHeight: 600
+    // A host may frame the plot with a rounded card; do not let a clamped label, the legend
+    // or a stroke bleed past that frame.
+    clip: true
 
     // Keyboard navigation is opt-in by focus: a click, Tab or a host focusing the QQuickWidget
     // makes this the active item, and the keys are handled only then, so a host's shortcuts
