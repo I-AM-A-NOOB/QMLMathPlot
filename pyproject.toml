@@ -1,6 +1,6 @@
 [project]
 name = "qmlmathplot"
-version = "0.7.1"
+version = "0.7.2"
 description = "Embeddable function plotter for Qt Quick / QtWidgets (implicit per-pixel drawing, MVVM)"
 readme = "README.md"
 license = "GPL-3.0-only"

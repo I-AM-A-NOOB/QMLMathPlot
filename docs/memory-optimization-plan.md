@@ -150,7 +150,7 @@ manufactures a linear leak.
 ## 7. Handoff prompt (paste into a new session)
 
 ```
-You are working in D:/Projects/QMLMathPlot (QMLMathPlot 0.7.1). Read
+You are working in D:/Projects/QMLMathPlot (QMLMathPlot 0.7.2). Read
 docs/memory-optimization-plan.md; the earlier Canvas/Connections leak diagnosis was retracted.
 The real event-loop measurements show no per-activation leak in PlotView: memory plateaus
 after a one-time warm-up, and live QQuickItem/CurveRhiItem counts return to baseline after

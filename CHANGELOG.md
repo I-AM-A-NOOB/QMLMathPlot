@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.2 — 2026-11-18
 
 ### Fixed
 - Endpoint x/y tick labels keep the `tick_pad`/axis inset instead of clamping to the bare
